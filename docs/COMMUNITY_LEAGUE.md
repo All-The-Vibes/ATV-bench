@@ -10,7 +10,8 @@ both models 6/6 rejected the hosted Approach B on strategy; it had no owner.
    harness edited (e.g. `main.py` for Battlesnake) + a **harness fingerprint**.
 2. `atv-bench submit` opens a **PR** to this repo carrying the bot + fingerprint JSON.
    The contributor never reports their own win/loss (forgeable) — only the artifact.
-3. A **GitHub Action** runs on merge:
+3. A **GitHub Action** runs when a maintainer adds the `run-match` label to the PR
+   (the label is the trust boundary gating untrusted bot execution):
    - **match job (untrusted):** executes the bot in the CodeClash Docker arena against
      the stored roster with fixed seeds. Runs with `permissions: {}`, no `GITHUB_TOKEN`,
      no Pages token, egress blocked, resource caps, non-root read-only container. Writes

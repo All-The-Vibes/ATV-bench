@@ -63,14 +63,15 @@ the sandbox enforces it again before execution.
 
 ### Manual PR fallback
 
-If `gh` isn't available or the automated flow fails, open the PR by hand: fork
-`All-The-Vibes/ATV-bench` and add two files under `league/submissions/<your-identity>/`:
+If `gh` isn't available or the automated flow fails, open the PR by hand. Run
+`atv-bench submit ./main.py --game battlesnake --dry-run --identity <you> --out submission.json`
+to produce the record, then fork `All-The-Vibes/ATV-bench` and add exactly two files:
 
-- `main.py` — your bot (a single text file ≤ 256 KiB).
-- `<your-identity>.json` — the submission record produced by
-  `atv-bench submit --dry-run` (identity, game, bot_sha256, bot_filename, pr_url,
-  logs_url, fingerprint). This is the exact shape the league store ingests
-  (`LeagueStore.add_submission`); do not hand-edit the fingerprint.
+- `league/submissions/<your-identity>/main.py` — your bot (single text file ≤ 256 KiB).
+- `league/submissions/<your-identity>.json` — the `submission.json` from `--dry-run`
+  (identity, game, bot_sha256, bot_filename, pr_url, logs_url, fingerprint). This is the
+  exact flat shape the league store ingests (`LeagueStore.add_submission` reads
+  `league/submissions/*.json`); do not hand-edit the fingerprint.
 
 Then open a PR. A maintainer reviews it and adds the `run-match` label to trigger the
 match job. (The label is the trust boundary that gates untrusted bot execution, so only

@@ -188,7 +188,7 @@ function renderError(msg, sha) {
 }
 
 function render(doc) {
-  staleEl.innerHTML = `<span class="dot"></span> Last updated ${esc(fmtTs(doc.updated_at))} · rebuilt on merge`;
+  staleEl.innerHTML = `<span class="dot"></span> Last updated ${esc(fmtTs(doc.updated_at))} · rebuilt after each match`;
   const rows = (doc.rows || []).slice().sort((a, b) => a.rank - b.rank);
   if (rows.length === 0) { root.innerHTML = renderEmpty(); return; }
   // The builder already ranks stable rows above low-confidence/unrated ones, so we

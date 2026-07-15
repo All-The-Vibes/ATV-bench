@@ -57,3 +57,29 @@ def test_cli_has_expected_commands():
     assert result.exit_code == 0
     for cmd in ("fingerprint", "submit"):
         assert cmd in result.output
+
+
+def test_submit_dry_run_emits_submission_json(tmp_path):
+    """R3 (both reviewers): CONTRIBUTING promises submit --dry-run emits the submission
+    JSON, but it only printed preflight text. --dry-run must write a store-ingestable
+    record so the manual-PR fallback is real."""
+    import json as _json
+    home = tmp_path / ".claude"
+    (home / "skills" / "gstack").mkdir(parents=True)
+    (home / "settings.json").write_text(_json.dumps({"model": "claude-opus-4-8"}))
+    bot = tmp_path / "main.py"
+    bot.write_text("def move(s):\n    return 'up'\n")
+    out_json = tmp_path / "submission.json"
+    result = runner.invoke(app, [
+        "submit", str(bot), "--game", "battlesnake", "--dry-run",
+        "--home", str(home), "--identity", "octocat", "--out", str(out_json),
+    ])
+    assert result.exit_code == 0, result.output
+    assert out_json.exists(), "dry-run must write the submission JSON"
+    rec = _json.loads(out_json.read_text())
+    # store-ingestable shape
+    from atv_bench.store import LeagueStore
+    store = LeagueStore(str(tmp_path / "league"))
+    store.add_submission(rec)  # must not raise
+    assert rec["identity"] == "octocat"
+    assert rec["bot_filename"] == "main.py"

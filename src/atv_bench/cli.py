@@ -89,13 +89,21 @@ def fingerprint(
 def submit(
     bot: Path = typer.Argument(None, help="Path to the harness-built bot file (e.g. main.py)."),
     game: str = typer.Option("battlesnake", "--game", help="Arena the bot targets."),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Run preflight + show the plan; no PR."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Run preflight + emit the submission JSON; no PR."),
     home: Path = typer.Option(None, "--home", help="Harness config root (default ~/.claude)."),
+    identity: str = typer.Option("", "--identity", help="Your GitHub login (submission attribution)."),
+    out: Path = typer.Option(None, "--out", help="Write the submission JSON here (default ./submission.json)."),
 ) -> None:
-    """Open a PR carrying your bot + harness fingerprint to the league repo."""
-    # v1: preflight uses a stub runner that reports 'not wired' for the gh-touching
-    # checks so `--dry-run` is usable without network. The real runner lands with the
-    # gh integration; the contract + reporting are tested now.
+    """Open a PR carrying your bot + harness fingerprint to the league repo.
+
+    On --dry-run this runs preflight AND writes the store-ingestable submission record
+    (identity, game, bot_sha256, bot_filename, pr_url, logs_url, fingerprint) so the
+    manual-PR fallback documented in CONTRIBUTING is real, not aspirational.
+    """
+    from atv_bench.submit import build_submission
+
+    # preflight uses a stub runner (the gh-touching live path is a separate, honestly
+    # unwired step); the contract + reporting are exercised now.
     def _stub_runner(check):
         return False, "not wired in this build (dry-run stub)"
 
@@ -106,15 +114,31 @@ def submit(
         typer.echo(f"  {mark} {r['id']}: {r['description']}")
         if not r["ok"] and "fix" in r:
             typer.echo(f"      Fix: {r['fix']}")
-    typer.echo("")
-    typer.echo("Submission status trail:")
+
+    # Build the submission record from the real bot + probed fingerprint.
+    if bot is not None:
+        manifest = fp.probe_claude_code(home or _default_home()).manifest
+        who = identity or "your-github-login"
+        try:
+            record = build_submission(
+                bot_path=str(bot), fingerprint=manifest, identity=who, game=game,
+            )
+        except Exception as e:  # AtvError (leak/shape) — surface, don't crash
+            typer.echo(f"\nCannot build submission: {e}")
+            raise typer.Exit(1)
+        out_path = out or Path("submission.json")
+        out_path.write_text(json.dumps(record, indent=2, sort_keys=True))
+        typer.echo(f"\nWrote submission record: {out_path}")
+
+    typer.echo("\nSubmission status trail:")
     for step in submission_status_trail(is_first_time=True):
         typer.echo(f"  {step}")
     if dry_run:
-        typer.echo("\n(--dry-run: no PR opened)")
+        typer.echo("\n(--dry-run: no PR opened. Commit the bot + submission.json under "
+                   "league/submissions/ and open a PR — see CONTRIBUTING.md#manual-pr-fallback.)")
         return
-    typer.echo("\nLive submit is not wired in this build; use --dry-run or open a PR "
-               "manually (see docs/CONTRIBUTING.md#manual-pr-fallback).")
+    typer.echo("\nLive PR automation is not wired in this build; use --dry-run then open a "
+               "PR manually (see CONTRIBUTING.md#manual-pr-fallback).")
 
 
 @app.command(name="validate-harness")

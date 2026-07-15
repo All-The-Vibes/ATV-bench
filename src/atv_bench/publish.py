@@ -28,12 +28,19 @@ _EPOCH = "1970-01-01T00:00:00Z"
 _DEFAULT_STORE = "league"
 
 
+def _require_nonempty_str(data: dict[str, Any], key: str) -> None:
+    v = data.get(key)
+    if not isinstance(v, str) or not v.strip():
+        raise ValueError(f"{key} must be a non-empty string, got {v!r}")
+
+
 def validate_artifact(path: str) -> dict[str, Any]:
     """Validate a match-result artifact — FAIL-CLOSED at the trust boundary.
 
     An untrusted bot's run produced this. We reject anything that isn't one of the
-    known result shapes BEFORE it can reach the store or the ELO engine (a deferred
-    raise inside the trusted job is a DOS/poison surface).
+    known result shapes with correctly-TYPED fields BEFORE it can reach the store or
+    the ELO engine. A non-string match_id/player would otherwise be committed and then
+    crash the trusted recompute with a TypeError (poison-the-trusted-job).
     """
     try:
         data = json.loads(Path(path).read_text())
@@ -48,6 +55,9 @@ def validate_artifact(path: str) -> dict[str, Any]:
         missing = _OK_REQUIRED_KEYS - set(data)
         if missing:
             raise ValueError(f"ok result missing keys {sorted(missing)}")
+        _require_nonempty_str(data, "player_a")
+        _require_nonempty_str(data, "player_b")
+        _require_nonempty_str(data, "match_id")
         outcome = data["outcome"]
         if outcome not in {o.value for o in Outcome}:
             raise ValueError(f"invalid outcome {outcome!r}")
@@ -55,14 +65,16 @@ def validate_artifact(path: str) -> dict[str, Any]:
             reason = data.get("forfeit_reason")
             if reason not in {r.value for r in ForfeitReason}:
                 raise ValueError(f"forfeit outcome requires a valid forfeit_reason, got {reason!r}")
-        for p in ("player_a", "player_b"):
-            if not isinstance(data[p], str) or not data[p]:
-                raise ValueError(f"{p} must be a non-empty string")
+        if "seed" in data and not isinstance(data["seed"], int):
+            raise ValueError(f"seed must be an integer, got {data['seed']!r}")
     elif status in ("crash", "invalid_output"):
         missing = _CRASH_REQUIRED_KEYS - set(data)
         if missing:
             raise ValueError(f"{status} record missing keys {sorted(missing)} "
                              "(loser+opponent needed to score the forfeit)")
+        _require_nonempty_str(data, "loser")
+        _require_nonempty_str(data, "opponent")
+        _require_nonempty_str(data, "match_id")
     return data
 
 
@@ -103,15 +115,36 @@ def ingest_result(path: str, *, store_dir: str = _DEFAULT_STORE) -> bool:
     return True
 
 
+def _normalize_utc_z(ts: str) -> str:
+    """Normalize an ISO-8601 timestamp to the schema's required `...Z` UTC form.
+
+    git %cI emits a numeric offset (e.g. 2026-07-15T15:36:06-05:00, or +00:00 on a
+    UTC runner). The leaderboard schema requires a `Z` suffix, so build_site must
+    convert; otherwise validate_leaderboard raises on every real publish run.
+    """
+    from datetime import datetime, timezone
+    s = ts.strip()
+    if s.endswith("Z") and "+" not in s:
+        return s
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        dt = dt.astimezone(timezone.utc)
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        # unparseable -> fall back to epoch (schema-valid, obviously-stale)
+        return _EPOCH
+
+
 def build_site(out_dir: str, *, store_dir: str = _DEFAULT_STORE, updated_at: str = _EPOCH) -> Path:
     """Render the static leaderboard site from the committed store.
 
     The board is computed from the store (submissions + match history). An empty
-    store yields a schema-valid empty board (legitimate: no entrants yet).
+    store yields a schema-valid empty board (legitimate: no entrants yet). The
+    timestamp is normalized to UTC `Z` so a git-commit-time input validates.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    doc = build_leaderboard_from_store(store_dir, updated_at=updated_at)
+    doc = build_leaderboard_from_store(store_dir, updated_at=_normalize_utc_z(updated_at))
     validate_leaderboard(doc)
     (out / "leaderboard.json").write_text(json.dumps(doc, indent=2))
     view = Path(__file__).parent.parent.parent / "leaderboard" / "view" / "index.html"

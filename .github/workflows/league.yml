@@ -53,15 +53,20 @@ jobs:
           path: pr-src
 
       - name: Extract the bot file into the sandbox mount dir
+        env:
+          SUBMITTER: ${{ github.event.pull_request.user.login || 'submitter' }}
+          OPPONENT: byok-anchor
+          MATCH_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           mkdir -p submission
-          # Copy only the single bot file the submission adds (submissions/<id>/main.py
-          # or a top-level main.py). Refuse anything that is not a plain small file.
-          BOT="$(find pr-src -maxdepth 3 -name 'main.py' -type f | head -n1)"
-          if [ -z "$BOT" ]; then echo '{"status":"crash"}' > match-result.json; echo "no bot file"; exit 0; fi
-          # size guard (<=256 KiB) before it is ever mounted
+          CRASH=$(printf '{"status":"crash","loser":"%s","opponent":"%s","match_id":"%s"}' \
+            "$SUBMITTER" "$OPPONENT" "$MATCH_ID")
+          # The bot lives at league/submissions/<identity>/main.py (depth 4 under
+          # pr-src/). Copy only that single file. Refuse anything not a plain small file.
+          BOT="$(find pr-src/league/submissions -maxdepth 2 -name 'main.py' -type f 2>/dev/null | head -n1)"
+          if [ -z "$BOT" ]; then echo "$CRASH" > match-result.json; echo "no bot file"; exit 0; fi
           SZ=$(wc -c < "$BOT")
-          if [ "$SZ" -gt 262144 ]; then echo '{"status":"crash"}' > match-result.json; echo "bot too large"; exit 0; fi
+          if [ "$SZ" -gt 262144 ]; then echo "$CRASH" > match-result.json; echo "bot too large"; exit 0; fi
           cp "$BOT" submission/main.py
 
       - name: Run bot in a locked-down sandbox container
@@ -172,16 +177,26 @@ jobs:
           PYTHONPATH: src
         run: python -m atv_bench.publish validate ./artifacts/match-result.json
 
-      - name: Ingest result into the committed match history
+      - name: Ingest result into the match history (validated fail-closed first)
         env:
           PYTHONPATH: src
         run: python -m atv_bench.publish ingest ./artifacts/match-result.json --store league
 
+      - name: Recompute ELO from full history + build static board
+        env:
+          PYTHONPATH: src
+        run: |
+          # Build (which validates the whole board) BEFORE committing the store, so a
+          # poison/invalid artifact fails here and is never persisted to the branch.
+          python -m atv_bench.publish build \
+            --out ./site --store league \
+            --updated-at "$(git show -s --format=%cI HEAD)"
+
       - name: Persist match history back to the default branch (durable store)
         run: |
-          # The recompute-from-history claim needs history to actually persist. Commit
-          # the appended match back to the trusted default branch. Safe: this runs only
-          # in the trusted publish job on the default branch, never touches bot code.
+          # Runs only after a successful build. Commit the appended match back to the
+          # trusted default branch so recompute-from-history actually persists. Safe:
+          # trusted publish job, default branch, never touches bot code.
           if git diff --quiet -- league/; then
             echo "no store change to commit"
           else
@@ -191,14 +206,6 @@ jobs:
             git commit -m "league: record match ${{ github.run_id }} [skip ci]"
             git push origin HEAD:${{ github.event.repository.default_branch }}
           fi
-
-      - name: Recompute ELO from full history + build static board
-        env:
-          PYTHONPATH: src
-        run: |
-          python -m atv_bench.publish build \
-            --out ./site --store league \
-            --updated-at "$(git show -s --format=%cI HEAD)"
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

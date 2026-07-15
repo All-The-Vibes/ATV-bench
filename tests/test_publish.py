@@ -79,6 +79,40 @@ def test_validate_artifact_rejects_missing_players(tmp_path):
         validate_artifact(str(p))
 
 
+@pytest.mark.parametrize("poison", [
+    {"status": "ok", "player_a": "alice", "player_b": "bob", "outcome": "a_wins", "match_id": {"x": 1}},
+    {"status": "ok", "player_a": "alice", "player_b": "bob", "outcome": "a_wins", "match_id": ""},
+    {"status": "ok", "player_a": ["a"], "player_b": "bob", "outcome": "a_wins", "match_id": "m"},
+    {"status": "ok", "player_a": "alice", "player_b": 5, "outcome": "a_wins", "match_id": "m"},
+    {"status": "crash", "loser": "", "opponent": "", "match_id": ""},
+    {"status": "crash", "loser": {"x": 1}, "opponent": "alice", "match_id": "m"},
+    {"status": "invalid_output", "loser": "bob", "opponent": "alice", "match_id": None},
+])
+def test_validate_artifact_rejects_poison_types(tmp_path, poison):
+    """R3 (both reviewers, reproduced): a non-string/blank match_id or player from an
+    untrusted bot must be rejected at the boundary — else it is committed to the store
+    and crashes the trusted ELO recompute with a TypeError (poison-the-trusted-job)."""
+    p = tmp_path / "r.json"
+    p.write_text(json.dumps(poison))
+    with pytest.raises(ValueError):
+        validate_artifact(str(p))
+
+
+def test_poison_artifact_never_reaches_store(tmp_path):
+    store = LeagueStore(str(tmp_path / "league"))
+    store.add_submission(_sub("alice"))
+    store.add_submission(_sub("bob"))
+    art = tmp_path / "poison.json"
+    art.write_text(json.dumps({"status": "ok", "player_a": "alice", "player_b": "bob",
+                               "outcome": "a_wins", "match_id": {"x": 1}}))
+    with pytest.raises(ValueError):
+        ingest_result(str(art), store_dir=str(tmp_path / "league"))
+    assert store.load_matches() == []  # nothing persisted
+    # and the board still builds fine (no poison committed)
+    doc = build_leaderboard_from_store(str(tmp_path / "league"), updated_at="2026-07-15T18:00:00Z")
+    assert len(doc["rows"]) == 2
+
+
 # --- crash scored as forfeit, never dropped (R2-Fix B) ---
 
 def test_crash_artifact_scored_as_forfeit(tmp_path):
@@ -127,6 +161,25 @@ def test_build_site_from_store_is_not_empty(tmp_path):
     doc = json.loads((out / "leaderboard.json").read_text())
     assert doc["rows"]
     assert doc["updated_at"] != "1970-01-01T00:00:00Z"
+
+
+@pytest.mark.parametrize("git_ts", [
+    "2026-07-15T15:36:06-05:00",   # git %cI local offset
+    "2026-07-15T20:36:06+00:00",   # git %cI on a UTC runner
+    "2026-07-15T20:36:06Z",        # already-Z
+])
+def test_build_site_normalizes_git_timestamp_to_schema(tmp_path, git_ts):
+    """R3 (Reviewer A, reproduced): git %cI emits a +00:00 offset, but the schema
+    requires a Z suffix — build_site must normalize so validate_leaderboard doesn't
+    raise on every real publish run."""
+    store = LeagueStore(str(tmp_path / "league"))
+    store.add_submission(_sub("alice"))
+    store.add_submission(_sub("bob"))
+    store.append_match(_ok())
+    out = build_site(str(tmp_path / "site"), store_dir=str(tmp_path / "league"),
+                     updated_at=git_ts)  # must NOT raise
+    doc = json.loads((out / "leaderboard.json").read_text())
+    assert doc["updated_at"].endswith("Z")
 
 
 def test_ingest_ok_result_appends(tmp_path):
