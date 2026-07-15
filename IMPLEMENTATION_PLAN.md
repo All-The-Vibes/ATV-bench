@@ -1,3 +1,4 @@
+<!-- /autoplan restore point: ~/.gstack/projects/atv-bench/master-autoplan-restore-20260715-103015.md -->
 # ATV-bench — Implementation Plan (locked)
 
 Source design: `~/.gstack/projects/atv-bench/sschofield-main-design-20260715-013403.md`
@@ -18,7 +19,7 @@ Spikes: `spikes/SPIKE_REPORT.md` (both PASS). Branch: master. Date: 2026-07-15.
 | Game arenas | `arenas/battlesnake`, `arenas/lightcycles` (+Dockerfiles) | reuse as-is |
 | Match engine | `arenas/arena.py` `CodeArena.run_round` (model-agnostic) | reuse untouched |
 | Edit seam | `agents/player.py` `Player.run()`, `agents/get_agent()` | register 3 adapters |
-| ELO / standings | `cli/rank.py`, `analysis/matrix.py`, `analysis/metrics` | reuse; read its output |
+| ELO / standings | `analysis/matrix.py`, `analysis/metrics`, `RoundStats` | compute ELO from low-level match results (NOT rank.py text) |
 | Web viewer / replay | `viewer/app.py`, `replay/serve.py` | reuse; add leaderboard view |
 | Adapter contract | `src/atv_bench/adapters/contract.py` (DONE, tested) | reuse |
 | Decoupling core | `spikes/spike_codeclash_decoupling.py::HarnessPlayerCore` (DONE) | promote to src/ |
@@ -44,7 +45,7 @@ Spikes: `spikes/SPIKE_REPORT.md` (both PASS). Branch: master. Date: 2026-07-15.
         │ AdapterResult(model tag)               │ logs + RoundStats
         ▼                                         ▼
  ┌─────────────────────┐        ┌────────────────────────────────────┐
- │ atv_bench.leaderboard│◀──────│ CodeClash rank.py (ELO/win-rate)    │
+ │ atv_bench.leaderboard│◀──────│ ELO from RoundStats (not rank.py)   │
  │  + model tagging     │        └────────────────────────────────────┘
  │  → leaderboard.json  │                        │
  │  + recs.md (heuristic)│                       ▼
@@ -64,33 +65,28 @@ or a thin `atv_bench.integration.register()` that extends the dict):
 ```
 `HarnessPlayer.run()` → `HarnessPlayerCore.edit_turn()` (already built + tested).
 
-## Network isolation: Portkey gateway (LOCKED, v1) — supersedes `--network none`
+## Network isolation: Portkey LLM-gateway (LOCKED, v1) — corrected
 
-`--network none` was WRONG (Codex #1): the harness needs network to reach its
-model. Corrected design: harness containers join an internal Docker network
-(`atv-net`) with **no default egress**; their only reachable host is a **Portkey
-gateway** (reuses CodeClash's existing `model_class: portkey`). Harness CLIs route
-model calls via `HTTPS_PROXY=http://portkey-gw:8787`.
+`--network none` was WRONG (harness needs network to reach its model) AND a plain
+forward proxy is ALSO wrong: as `HTTPS_PROXY`, Portkey sees only `CONNECT host:443`
++ TLS ciphertext — it CANNOT read the model name or prompt (autoplan Codex+eng,
+CRITICAL). Corrected design:
 
-```
-harness-runner (--network atv-net, no direct internet)
-   HTTPS_PROXY → portkey-gw ──▶ allowlisted: api.anthropic.com / Copilot / BYOK
-                              └▶ everything else: DROP
-```
-
-One choke point retires four risks:
-- **Isolation** — opponent-code / arbitrary-web fetches blocked; inference flows.
-- **#8 model tag** — gateway sees real model per call → authoritative tagging (not
-  CLI-output parsing).
-- **#9 prompt fairness** — gateway logs the *effective* prompt each harness sent →
-  fairness auditable, not just "identical goal string".
-- **#10 rate limits** — centralized retry/backoff.
-
-Verify each CLI honors `HTTPS_PROXY` (claude/copilot do via standard env); BYOK +
-Copilot inference reachable through Portkey provider routing. Config-mount caveat
-(Codex #3): mount config **read-write to a per-run COPY**, not ro to the user's real
-dir — CLIs write session/lock/token-refresh files. Copy-in, throwaway, so the real
-config is never mutated and reproducibility holds.
+- Harness containers join an **`internal: true`** Docker network (no NAT egress) whose
+  only reachable host is a **dual-homed Portkey gateway** running as an **LLM gateway
+  (API base-URL), not a forward proxy**. Each harness's provider base-URL env points at
+  Portkey (e.g. `ANTHROPIC_BASE_URL`, `COPILOT_PROVIDER_BASE_URL`). Only harnesses that
+  support base-URL override get gateway-level model/prompt capture.
+- **Per-harness capture caveat (LOCKED):** claude-code may NOT expose a clean base-URL
+  override. For any harness that can't route through the gateway API, we fall back to
+  **CLI-output parsing** for the model tag (contract already parses `modelUsage`) and
+  drop the "authoritative gateway prompt capture" claim for that harness. Model/prompt
+  capture is **best-effort per harness**, not a universal guarantee.
+- Egress mechanism is explicit owned work (Codex): `internal: true` network + gateway
+  is the only allowed route; a test runs `curl https://example.com` from inside the
+  harness container and asserts FAIL while the gateway host succeeds. CodeClash's own
+  `internet_control.py` iptables covers only the GAME container, not our sibling runner
+  — we build + test this ourselves.
 
 ## Harness execution: containerized runner (LOCKED, v1)
 
@@ -101,26 +97,41 @@ harness being benchmarked. Anti-cheat restored via `--network none` during edit.
 ```
 HarnessPlayerCore.edit_turn()  (host orchestrator)
   1. materialize bot → /tmp/atv-run-<uuid>/repo (git init + commit)
-  2. docker run --rm --network atv-net \
-       -e HTTPS_PROXY=http://portkey-gw:8787 \
+  2. docker run --rm --name atv-<uuid> --network atv-net-internal \
+       -e ANTHROPIC_BASE_URL=http://portkey-gw:8787 (LLM gateway, not proxy) \
        atv-bench/harness-runner:<harness> \
        -v /tmp/atv-run-<uuid>/repo:/work:rw \
-       --mount type=bind,src=/tmp/atv-run-<uuid>/cfg,dst=/root/.claude  (COPY of real cfg, rw)
-       -e ANTHROPIC_API_KEY / COPILOT_*  (auth via env, never baked)
+       --mount type=bind,src=/tmp/atv-run-<uuid>/cfg,dst=/root/.claude  (SCRUBBED profile copy, rw)
+       -e ANTHROPIC_API_KEY / COPILOT_*  (auth via env)
        -e ATV_GOAL="<identical goal>"  \
        entrypoint: cd /work && <headless CLI invocation>
+  3. host reads edit via SNAPSHOT diff: git diff <init_sha>..HEAD + staged + untracked
+     (NOT plain `git diff` — CodeClash/CLIs commit; see edit-detection fix below)
+  4. write diff into the CodeClash game container (existing copy path)
+     try/finally: force-remove atv-<uuid> container + rmtree temp dir on any exit
   3. host reads `git diff` from the shared /work mount → AdapterResult
   4. write diff into the CodeClash game container (existing copy path)
 ```
 
-- One `--rm` container per edit turn. Per-harness base image with CLI preinstalled.
-- Config via per-run **COPY** of the user's real config (`~/.claude`, `~/.copilot`,
-  skills/MCP dirs), mounted rw so CLIs can write session/lock/token files (Codex #3);
-  copy is thrown away after the turn → real config never mutated, reproducibility holds.
-- Egress isolation via Portkey gateway (above), not `--network none`.
-- Auth by env var only. Contract unchanged: still returns `AdapterResult`; only the
-  transport swaps (subprocess → `docker run`). Tested `HarnessPlayerCore` stays; we
-  swap `adapter.run`'s transport behind the same interface.
+- One `--rm` container per edit turn (deterministic `--name atv-<uuid>`; try/finally
+  force-remove + temp-dir rmtree on crash; startup sweep of stale `atv-*`). Per-harness
+  base image with CLI preinstalled.
+- Config via a per-run **SCRUBBED PROFILE** copy (Codex+eng CRITICAL): copy only auth +
+  model settings; **strip `mcpServers`, `hooks`, and non-essential skills** before mount
+  — else the harness imports ambient MCP tools/hooks that execute code, egress outside
+  the gateway, and make "identical goal" fairness meaningless. Test asserts the copied
+  profile contains no MCP/hook entries. Copy discarded after turn (real config untouched).
+- Egress isolation via internal Docker network + Portkey LLM-gateway (above).
+- **Edit detection = SNAPSHOT, not `git diff`** (Codex+eng CRITICAL): CodeClash's
+  `post_run_hook` commits, and CLIs may `git add`/`commit`; plain `git diff` (worktree
+  vs HEAD) then reads empty → false NO_EDIT/forfeit. Capture base tree SHA at seed, then
+  detect `git diff <base>..HEAD` + staged + `--porcelain` untracked. Fix lives in
+  `contract.git_diff` + `HarnessPlayerCore.edit_turn` (drop the `edited != original`
+  gate). Add a test where the fake adapter commits.
+- Auth by env var where the CLI supports it; where claude-code uses subscription/session
+  tokens, document that a real token enters the sandbox and rely on the network DROP.
+- Contract unchanged in shape: still returns `AdapterResult`; transport swaps
+  (subprocess → `docker run`).
 
 ### Declarative harness manifest (LOCKED)
 Per-harness matrix lives in one YAML (`harnesses/<name>.yaml`), read by
@@ -128,8 +139,8 @@ Per-harness matrix lives in one YAML (`harnesses/<name>.yaml`), read by
 ```yaml
 name: claude-code
 image: atv-bench/harness-runner:claude-code
-mounts:
-  - {src: "~/.claude", dst: "/root/.claude", ro: true}
+profile_include: [auth, model_settings]   # scrubbed: NO mcpServers/hooks
+base_url_env: ANTHROPIC_BASE_URL          # gateway routing (empty if unsupported)
 auth_env: [ANTHROPIC_API_KEY]
 invoke: 'claude -p "$ATV_GOAL" --permission-mode acceptEdits --output-format json'
 ```
@@ -142,18 +153,23 @@ Existing (DONE): `test_contract.py` (4), `test_spike_codeclash_decoupling.py` (4
 live spikes (2). 8 hermetic + 2 live green.
 
 New coverage required:
-- **runner (real-container tests):** actual `docker run` in the suite — assert
-  config mount is genuinely **read-only** (write attempt fails), `--network none`
-  really blocks egress, no auth baked in image, edit turn produces a real diff.
-  Slower + gated (needs Docker + prebuilt images + auth secrets in CI; not on every
-  push — a dedicated `integration` CI job). Chosen over argv-only for isolation
-  fidelity (mounts/network are security-critical).
-- **integration.register (unit):** `get_agent` returns `HarnessPlayer` for the 3 keys.
+- **runner (argv unit tests, EVERY push):** assert the constructed `docker run` argv —
+  `--network atv-net-internal` present, scrubbed-profile mount, base-URL env set, NO
+  literal `-e ANTHROPIC_API_KEY=<value>` baked, invoke string correct. Fast tripwire so
+  a mount-mode/network/secret regression can't land on main between gated runs.
+- **runner (real-container tests, GATED job):** actual `docker run` — config mount
+  behaves, egress DROP verified (`curl https://example.com` fails, gateway host
+  succeeds), scrubbed profile has no MCP/hooks, snapshot edit detection catches a
+  committed edit. Needs Docker + images + secrets; dedicated `integration` CI job.
+- **integration.register (unit):** `get_agent` returns `HarnessPlayer` for the 3 keys;
+  asserts ATV drives the tournament IN-PROCESS (register() only works in-process — hard
+  architectural constraint, no CLI-subprocess path).
 - **config.build_config (unit):** valid pvp YAML; **identical goal prompt to both
   players** (thesis fairness — CRITICAL test).
-- **elo (unit):** win/loss/draw math; byok pinned 1500; forfeit=loss+flagged.
-- **leaderboard (unit):** row carries underlying model + comparison_mode; same-model
-  vs model+harness labeling correct.
+- **elo (unit):** win/loss/draw math; byok pinned 1500; forfeit=loss+flagged with a
+  reason enum (TIMEOUT|INVALID_DIFF|NO_OP|MODEL_UNREACHABLE|AUTH_FAILED|CRASH).
+- **leaderboard (unit):** row keyed `(game, harness, model)`; game is a required facet;
+  same-model and model+harness rows never mixed in one ranked table.
 - **recs (unit):** heuristic fires on forfeit / timeout / missing-survival-edit.
 - **cli (E2E, gated):** `run → elo → leaderboard` on a stubbed 1-round match.
 
@@ -190,9 +206,10 @@ CI: fast hermetic job (unit + `-m "not live"`) on every push; `integration` job
 ## Performance (locked)
 - **Bounded concurrent edit turns.** ELO run = ~10 matches × ~15 rounds × 2
   harnesses; each edit turn = container + real LLM call (~23s observed). Serial =
-  hours (breaks the wedge). Run edit turns concurrently with a bounded worker pool
-  (`ATV_MAX_CONCURRENCY`, default ~ min(8, cores)); reuse CodeClash's sim thread
-  pool for the compete phase. Cap prevents Docker fork-bomb + LLM rate-limit trips.
+  hours (breaks the wedge). Run edit turns concurrently with a bounded worker pool at
+  the **cross-match** scheduling layer (our orchestrator), NOT the 2-agent edit phase
+  (CodeClash already pools that — don't double-nest). `ATV_MAX_CONCURRENCY` default
+  **3** for live agent CLIs; configurable. Cap prevents Docker fork-bomb + rate-limit trips.
 - Watch: each `--rm` container is cold-start overhead; keep base images small.
 
 ## Outside-voice (Codex) resolutions
@@ -219,15 +236,25 @@ CI: fast hermetic job (unit + `-m "not live"`) on every push; `integration` job
   Phase 1 proves the benchmark loop end-to-end on the host path (already spiked);
   Phase 2 swaps in the containerized Portkey runner. Value proven before hardening.
 
-## Phasing (locked)
-- **Phase 1 — prove the loop (host):** byok adapter, register(), config builder,
-  players core (done), ELO from match results, leaderboard.json, CLI `run`. Runs a
-  real battlesnake match host-side, emits an ELO number + leaderboard. Ships the wedge.
-- **Phase 2 — isolation + real harness:** containerized Portkey runner, harness
-  manifests + 3 images, config-copy, model/prompt capture, real-container security
-  tests. Turns the number into a trustworthy number.
-- **Phase 3 — surface:** leaderboard view on the reused viewer, recs.md, lightcycles
-  (Tron) as game #2, static export, bounded concurrency tuning.
+## Phasing (locked, autoplan-revised)
+- **Phase 1 — prove the loop (host) + on-ramp:** byok adapter, register() (in-process),
+  config builder, players core, ELO from match results, leaderboard.json, CLI `run`.
+  PLUS `atv-bench run --demo` (canned match → ELO in <60s, zero Docker/Portkey/auth —
+  the documented first step) and `atv-bench doctor` (preflight: Docker up? images? gateway?
+  auth env?). DX on-ramp so the tool survives the setup cliff.
+- **Phase 1.5 — variance gate (BOTH MODELS, GATES Phase 2):** A/A self-play control —
+  run the SAME harness against itself, measure ELO spread. If self-play variance >= the
+  gap between two real harnesses, the benchmark is noise: STOP and fix (more matches,
+  seed control, or narrow the claim) before funding containerization. Report the
+  signal-to-noise ratio. This is the credibility gate.
+- **Phase 2 — isolation + real harness:** containerized runner (internal net + Portkey
+  LLM-gateway), harness manifests + 3 images, scrubbed-profile copy, snapshot edit
+  detection, model/prompt capture (best-effort per harness), argv + real-container
+  security tests, `validate-harness` + Dockerfile.harness-template (real contribution path).
+- **Phase 3 — surface:** leaderboard view (row-key `(game, harness, model)`, game as
+  required facet, same-model / cross-stack segmented into separate sections — never
+  mixed in one ranked column, flagged + low-N rows visibly marked) on the reused viewer;
+  recs.md; lightcycles (Tron) game #2; static export; concurrency tuning.
 
 ## NOT in scope (v1)
 - Custom dashboard subsystem — reuse viewer (Step 0 decision).
@@ -266,18 +293,36 @@ alongside each lane. Conflict flag: T6 and T13 both touch `runner.py` — sequen
 - **config copy** — copy fails / partial → harness runs with broken config, looks like
   a harness loss. Guard: verify copy integrity before run; flag on failure.
 
+## Decision Audit Trail (autoplan)
+
+| # | Phase | Decision | Class | Principle | Rationale |
+|---|-------|----------|-------|-----------|-----------|
+| 1 | Eng | Delete all `--network none`; internal net + Portkey LLM-gateway | Mechanical | P1 | Both models CRITICAL: harness needs network; forward proxy can't read TLS |
+| 2 | Eng | Portkey as API base-URL (not HTTPS_PROXY); model/prompt capture best-effort per harness | Mechanical | P5 | Both CRITICAL: proxy sees only ciphertext; claim was false |
+| 3 | Eng | Snapshot edit detection (base..HEAD + staged + untracked), not `git diff` | Mechanical | P1 | Both CRITICAL, code-verified: CodeClash commits in post_run_hook |
+| 4 | Eng | Scrubbed profile copy (strip mcpServers/hooks/skills), not raw ~/.claude | Mechanical | P1 | Both CRITICAL: ambient MCP/hooks break isolation+fairness+token safety |
+| 5 | Eng | register() requires in-process tournament (hard constraint) | Mechanical | P5 | Both: no plugin hook in CodeClash; monkeypatch only works in-process |
+| 6 | Eng | Fix manifest ro:true→scrubbed copy; concurrency 8→3; purge rank.py refs | Mechanical | P5 | Internal contradictions flagged by both |
+| 7 | Eng | Add argv unit tests + keep real-container (USER CHALLENGE #2 → accepted) | User Challenge | P1 | User accepted: fast per-push tripwire for security regressions |
+| 8 | CEO | Insert Phase 1.5 A/A variance gate before Phase 2 (USER CHALLENGE #1 → accepted) | User Challenge | P1 | User accepted: prove signal>noise before funding containerization |
+| 9 | DX | Add `run --demo` + `doctor` on-ramp to Phase 1 | Taste (auto) | P1 | Internal tool dies at setup cliff; reuses host loop |
+| 10 | Design | Leaderboard row-key (game,harness,model); segment modes; mark flagged/low-N | Taste (auto) | P5 | Schema the static-export contract depends on; prevents over-read |
+| 11 | DX | `validate-harness` + Dockerfile template → Phase 2 | Taste (auto) | P1 | Makes the evangelism contribution path real, not aspirational |
+| 12 | Eng/DX | Forfeit reason enum surfaced to user | Taste (auto) | P1 | Diagnosable losses; already internal for scoring |
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
 |--------|---------|-----|------|--------|----------|
-| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | not run (optional) |
-| Codex Review | `/codex review` | Independent 2nd opinion | 1 | issues_found | 16 raised; 4 fixed in-plan (network, config-rw, model-tag, prompt), 3 hardened (register, ELO dir, concurrency), rest acknowledged/phased |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 6 decisions locked (dashboard scope, register seam, containerized runner, manifest, test strategy, concurrency) |
-| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | not run (minimal UI) |
-| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | not run |
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | issues_found | Codex+Claude: phasing backwards (→Phase 1.5 gate accepted), games-as-proxy premise, recs-as-real-value; variance is the credibility risk |
+| Codex Review | `/codex review` | Independent 2nd opinion | 2 | issues_found | 1st: network contradiction. 2nd (autoplan): Portkey-proxy-can't-read-TLS, config drags MCP/hooks, git-diff misses commits — all fixed |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 6 decisions locked + autoplan fixed 6 mechanical CRITICALs |
+| Design Review | `/plan-design-review` | UI/UX gaps | 1 | issues_found | Leaderboard row-key + mode segmentation + flagged/low-N states (auto-folded) |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 1 | issues_found | On-ramp cliff → demo+doctor; contribution path → validate-harness (auto-folded) |
 
-- **CODEX:** caught the load-bearing `--network none` contradiction; drove the Portkey-gateway isolation redesign that also retired model-tagging, prompt-fairness, and rate-limit risks.
-- **CROSS-MODEL:** review + Codex agreed the benchmark loop should be proven before Docker hardening → Phase 1 (host loop) then Phase 2 (containerized Portkey runner).
-- **UNRESOLVED:** 0.
-- **VERDICT:** ENG CLEARED — spikes done, scope locked, architecture corrected via outside voice. Ready to implement Phase 1.
+- **CODEX:** across two runs, caught the network contradiction and then the deeper Portkey-as-forward-proxy feasibility flaw (can't read TLS). Both drove real redesigns.
+- **CROSS-MODEL:** Claude subagents + Codex converged independently on all 4 CRITICAL technical fixes (network, proxy, git-diff, config-scrub) and on the variance-gate strategy — high-confidence signal.
+- **CROSS-PHASE THEME:** "trust before surface" appeared in CEO (variance), Eng (isolation correctness), and DX (diagnosable failures) independently.
+- **UNRESOLVED:** 0. Two user challenges both accepted.
+- **VERDICT:** ENG CLEARED — plan corrected via 4-phase dual-voice review; 6 mechanical CRITICALs fixed, 2 user challenges accepted, taste items folded. Ready to implement Phase 1.
 
