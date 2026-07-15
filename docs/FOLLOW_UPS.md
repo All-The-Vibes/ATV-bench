@@ -12,11 +12,11 @@ fabricated match_id, or self-match is rebound to a `CRASH` forfeit against the s
 — never trusted, never dropped. See `tests/test_match_binding.py` and the `league.yml`
 tripwire in `tests/test_action_isolation.py`.
 
-What remains bot-asserted is the **win/loss/draw outcome**. Because the opponent is a
-fixed baseline anchor (not another real entrant), a dishonestly-claimed win can only
-inflate the forger's own row vs the anchor and cannot damage a third party's rating
-(blast-radius-bounded). See the "Match-result trust boundary" section in
-`docs/COMMUNITY_LEAGUE.md`.
+What remains bot-asserted is the **win/loss/draw outcome**. The opponent anchor is pinned
+at 1500 and excluded from ELO updates (`elo.compute_leaderboard(anchors=[...])`), so a
+dishonestly-claimed win inflates only the forger's own row vs the fixed anchor and cannot
+move the anchor or bleed into other entrants' ratings. See the "Match-result trust
+boundary" section in `docs/COMMUNITY_LEAGUE.md`.
 
 **Work:** have the CodeClash **arena** (not the submitted bot) emit the adjudicated
 result inside the sandbox, so the outcome is derived from real gameplay rather than bot

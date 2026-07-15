@@ -78,6 +78,10 @@ jobs:
           cp "$BOT" submission/main.py
 
       - name: Run bot in a locked-down sandbox container
+        # explicit bash: the fallback logic uses ${PIPESTATUS[0]} (a bash builtin) to read
+        # the container status through the `head` pipe. GitHub defaults to bash on Linux,
+        # but pin it so a runner-default change can't silently break the fail-closed path.
+        shell: bash
         env:
           # Match identities from the spec. The submitter is the PR author; the
           # opponent is the baseline anchor for v1. A crash is scored as the
@@ -102,6 +106,13 @@ jobs:
           # fallback/upload steps and record NO score (a bot-controlled no-score DoS).
           # Cap stdout to a bounded artifact too (`head -c`): unbounded bot stdout could
           # fill the disk or OOM the trusted publish job's whole-file read.
+          #
+          # We must NOT let `head` mask the container status: in `a | head > f`, `$?` is
+          # head's status, so a bot that prints valid JSON then hangs/exits non-zero would
+          # look successful. Capture ${PIPESTATUS[0]} (the timeout/docker status, which
+          # `head` does not affect) and fall back to CRASH on ANY non-zero (124 = timeout,
+          # or the bot's own non-zero exit). `head` still bounds the on-disk artifact.
+          set +e
           timeout 300 docker run --rm \
             --network none \
             --memory 512m --memory-swap 512m \
@@ -113,12 +124,14 @@ jobs:
             --security-opt no-new-privileges \
             -v "$PWD/submission:/work:ro" \
             atv-bench/arena:latest \
-            /work/main.py 2>/dev/null | head -c 65536 > match-result.json || true
-          # timeout / non-zero pipeline / empty output all fall back to a scored CRASH.
-          if [ ! -s match-result.json ]; then echo "$CRASH" > match-result.json; fi
-          # Hard size cap: if the (already head-limited) artifact is still oversized for
-          # any reason, replace it with the trusted CRASH record before it is uploaded.
-          if [ "$(wc -c < match-result.json)" -gt 65536 ]; then echo "$CRASH" > match-result.json; fi
+            /work/main.py 2>/dev/null | head -c 65536 > match-result.json
+          run_status=${PIPESTATUS[0]}
+          # Non-zero container/timeout status, empty output, or an oversized artifact all
+          # fall back to a trusted, scored CRASH record before upload.
+          if [ "$run_status" -ne 0 ] || [ ! -s match-result.json ] \
+             || [ "$(wc -c < match-result.json)" -gt 65536 ]; then
+            echo "$CRASH" > match-result.json
+          fi
 
       - name: Validate result is well-formed JSON before upload
         env:

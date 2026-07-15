@@ -239,8 +239,10 @@ def ingest_result(path: str, *, store_dir: str = _DEFAULT_STORE,
             try:
                 data = bind_ok_to_spec(data, spec)
             except SpecMismatch:
-                # forged identities/match_id -> submitter forfeits, forgery discarded
-                store.append_match(_submitter_forfeit(spec, game=game, seed=seed))
+                # forged identities/match_id -> submitter forfeits, forgery FULLY
+                # discarded: use canonical game/seed defaults so no bot-supplied value
+                # (even a type-valid one) rides along on a rejected forgery.
+                store.append_match(_submitter_forfeit(spec, game="battlesnake", seed=0))
                 return True
         match = {
             "player_a": data["player_a"],

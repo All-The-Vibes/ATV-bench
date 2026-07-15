@@ -265,6 +265,18 @@ def test_match_job_wraps_bot_in_a_container_timeout(wf):
         "match job must wrap the bot container in a `timeout` (per-container time cap)"
 
 
+def test_match_job_does_not_mask_container_exit_status_with_head(wf):
+    # Reviewer B (santa round-3): `timeout docker run ... | head -c N > f` makes the
+    # pipeline exit status `head`'s, not the container's. A bot that prints valid ok JSON
+    # then hangs/exits non-zero would be scored as ok (timeout kills it, but the captured
+    # JSON is valid+non-empty). The step must capture the timeout/docker status (pipefail
+    # or an explicit status check) so a non-zero container run falls back to CRASH.
+    match = _jobs(wf)["match"]
+    body = yaml.safe_dump(match)
+    assert "pipefail" in body or "PIPESTATUS" in body or "${status" in body, \
+        "match job must not let `head` mask the container exit status (use pipefail / capture status)"
+
+
 def test_match_job_caps_artifact_size_before_upload(wf):
     # Reviewer B (santa round-2): bot stdout is redirected to match-result.json with no
     # cap; the sanitizer and publish both read it whole. A multi-GB artifact can OOM/kill

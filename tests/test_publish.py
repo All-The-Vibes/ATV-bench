@@ -306,4 +306,3 @@ def test_append_match_skips_duplicate_match_id_at_write_time(tmp_path):
     store.append_match(m)
     store.append_match(dict(m))  # same match_id again
     assert len(store.load_matches()) == 1  # deduped at write time
-

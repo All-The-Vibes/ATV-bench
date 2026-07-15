@@ -57,9 +57,12 @@ match_id = the stable `github.run_id`) before anything enters permanent ELO hist
   every push by `tests/test_match_binding.py` + the `league.yml` tripwire in
   `tests/test_action_isolation.py`.
 - **Outcome IS bot-asserted (accepted v1 boundary).** The win/loss/draw the bot reports
-  is taken on trust. Because the opponent is a fixed baseline **anchor** (not another real
-  entrant), a dishonestly-claimed win can only inflate the forger's own row versus the
-  anchor — it **cannot damage a third party's rating**. The anchor column is therefore a
+  is taken on trust. The opponent is a fixed baseline **anchor** whose rating is **pinned
+  at 1500 and excluded from ELO updates** (`elo.compute_leaderboard(anchors=[...])`, plan
+  #11/#12). Because the anchor never moves, a dishonestly-claimed win only inflates the
+  forger's own row versus that fixed yardstick — it **cannot move the anchor and therefore
+  cannot bleed into any other entrant's rating** (each entrant is scored against the same
+  1500 reference, independent of what other entrants asserted). The anchor column is a
   participation signal, not a trust signal. Making the *arena* (not the bot) emit the
   adjudicated outcome is the deferred match-orchestration follow-up; until then, public
   match logs remain the dispute mechanism (Premise 4).

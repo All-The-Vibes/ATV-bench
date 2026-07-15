@@ -43,6 +43,34 @@ def test_zero_opponent_provisional():
     assert json.loads(json.dumps(board)) == board
 
 
+# --- anchor is pinned (plan #11/#12: byok strict anchor, 1500, excluded from updates) ---
+
+def test_anchor_rating_is_pinned_at_seed():
+    """A forged/asserted win vs the anchor must NOT move the anchor's rating — else the
+    anchor's ELO feeds every later entrant's expected score and one entrant's dishonest
+    outcome bleeds into third parties. The anchor is a fixed 1500 reference."""
+    matches = [_match("alice", "byok-anchor", Outcome.A_WINS)]
+    board = compute_leaderboard(matches, entrants=["alice", "byok-anchor"],
+                                anchors=["byok-anchor"])
+    assert board["byok-anchor"]["elo"] == SEED  # pinned, unmoved by alice's win
+    assert board["alice"]["elo"] > SEED          # entrant still gains
+
+
+def test_anchor_pin_isolates_third_parties():
+    """Two entrants each 'beat' the anchor. Because the anchor is pinned, the second
+    entrant's rating delta is computed against the SAME 1500 baseline as the first —
+    entrant A's asserted win cannot change entrant B's outcome."""
+    a_only = compute_leaderboard([_match("alice", "byok-anchor", Outcome.A_WINS)],
+                                 entrants=["alice", "byok-anchor"], anchors=["byok-anchor"])
+    both = compute_leaderboard(
+        [_match("alice", "byok-anchor", Outcome.A_WINS),
+         _match("bob", "byok-anchor", Outcome.A_WINS)],
+        entrants=["alice", "bob", "byok-anchor"], anchors=["byok-anchor"])
+    # alice's rating is identical whether or not bob also played the anchor
+    assert both["alice"]["elo"] == a_only["alice"]["elo"]
+    assert both["byok-anchor"]["elo"] == SEED
+
+
 def test_single_match_becomes_rated():
     matches = [_match("alice", "bob", Outcome.A_WINS)]
     board = compute_leaderboard(matches)

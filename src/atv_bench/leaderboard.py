@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from atv_bench.elo import (
+    ANCHOR_IDENTITY,
     MatchResult,
     MAX_CI_WIDTH,
     MIN_RATED_MATCHES,
@@ -142,7 +143,8 @@ def build_leaderboard_doc(
     `submissions[name]` carries: fingerprint (probe manifest), identity (GitHub
     login), bot_sha256, pr_url, logs_url. ELO comes from `matches`.
     """
-    board = compute_leaderboard(matches, entrants=list(submissions))
+    board = compute_leaderboard(matches, entrants=list(submissions),
+                                anchors=[ANCHOR_IDENTITY])
 
     def _low_conf(n: str) -> bool:
         b = board[n]

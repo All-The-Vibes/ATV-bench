@@ -18,6 +18,9 @@ from typing import Any
 
 SEED_ELO = 1500
 K_FACTOR = 32
+# The baseline anchor identity (plan #11/#12): a strict reference pinned at SEED_ELO and
+# excluded from rating updates, so it stays a fixed yardstick for every entrant.
+ANCHOR_IDENTITY = "byok-anchor"
 # Variance-gate teeth — the SINGLE source of the numeric thresholds. Both the pairwise
 # A/A gate (variance_gate) and the per-row low-confidence gate (leaderboard._low_conf)
 # consume these so "wired into the board" means the same numbers, not two gates.
@@ -107,12 +110,19 @@ def _ci_width(match_count: int) -> float:
 def compute_leaderboard(
     matches: list[MatchResult],
     entrants: list[str] | None = None,
+    anchors: list[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Pure recompute of the whole board from match history.
 
     `entrants` seeds players who have zero matches yet (zero-opponent provisional).
-    Output is deterministic and order-independent.
+    `anchors` are pinned reference identities (e.g. the byok baseline): they participate
+    in matches but their rating stays fixed at SEED_ELO and is EXCLUDED from updates. This
+    keeps the anchor a stable 1500 yardstick for every entrant, so one entrant's
+    (bot-asserted) outcome against the shared anchor cannot move the anchor and therefore
+    cannot bleed into any other entrant's rating. Output is deterministic and
+    order-independent.
     """
+    anchor_set = set(anchors or [])
     ratings: dict[str, _Rating] = {}
     for name in entrants or []:
         ratings.setdefault(name, _Rating())
@@ -124,8 +134,12 @@ def compute_leaderboard(
         score_a = m._score_a()
         exp_a = _expected(ra.elo, rb.elo)
         delta = K_FACTOR * (score_a - exp_a)
-        ra.elo += delta
-        rb.elo -= delta
+        # An anchor's rating is pinned: it never moves, so it can't transmit one
+        # entrant's asserted outcome to another via the expected-score term.
+        if m.player_a not in anchor_set:
+            ra.elo += delta
+        if m.player_b not in anchor_set:
+            rb.elo -= delta
         ra.matches += 1
         rb.matches += 1
         if m.outcome == Outcome.DRAW:
