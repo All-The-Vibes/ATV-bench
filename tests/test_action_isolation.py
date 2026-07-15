@@ -200,3 +200,27 @@ def test_match_job_stages_bot_without_credentials(wf):
     for step in _checkout_steps(match):
         assert step.get("with", {}).get("persist-credentials") is False, \
             "every match-job checkout must set persist-credentials: false"
+
+
+def test_publish_ingest_binds_ok_artifact_to_trusted_spec(wf):
+    # Reviewer B (held FAIL R1-5): an ok artifact's player_a/player_b/match_id come from
+    # the untrusted bot's stdout. The publish ingest step must bind them to a trusted
+    # match spec (--require-spec + ATV_SUBMITTER/OPPONENT/MATCH_ID from GitHub context),
+    # so a forged third-party identity or match_id is rebound to a submitter forfeit
+    # instead of entering permanent ELO history. Dropping this flag silently re-opens
+    # the forgery hole — so the tripwire fails CI if it regresses.
+    publish = _jobs(wf)["publish"]
+    ingest = next((s for s in publish["steps"]
+                   if "ingest" in str(s.get("run", ""))), None)
+    assert ingest is not None, "publish job must have an ingest step"
+    run = ingest["run"]
+    assert "--require-spec" in run, \
+        "ingest must pass --require-spec so ok artifacts bind to the trusted match spec"
+    env = ingest.get("env", {})
+    for key in ("ATV_SUBMITTER", "ATV_OPPONENT", "ATV_MATCH_ID"):
+        assert key in env, f"ingest must export {key} for the trusted match spec"
+    # the spec identities must come from GitHub context, never from the bot artifact
+    assert "pull_request.user.login" in str(env["ATV_SUBMITTER"]), \
+        "ATV_SUBMITTER must be the PR author's GitHub identity, not a bot-supplied value"
+    assert "github.run_id" in str(env["ATV_MATCH_ID"]), \
+        "ATV_MATCH_ID must be the run-scoped id, not a bot-supplied value"

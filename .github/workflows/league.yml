@@ -185,7 +185,15 @@ jobs:
       - name: Ingest result into the match history (validated fail-closed first)
         env:
           PYTHONPATH: src
-        run: python -m atv_bench.publish ingest ./artifacts/match-result.json --store league
+          # TRUSTED match spec from GitHub context — NOT from the untrusted bot's stdout.
+          # --require-spec binds the ok artifact's player_a/player_b/match_id to these
+          # exact values; a bot that forged a third-party identity or a fabricated
+          # match_id is rebound to a CRASH forfeit against the submitter (never trusted,
+          # never dropped). Must match the identities the match job pitted them against.
+          ATV_SUBMITTER: ${{ github.event.pull_request.user.login || 'submitter' }}
+          ATV_OPPONENT: byok-anchor
+          ATV_MATCH_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: python -m atv_bench.publish ingest ./artifacts/match-result.json --store league --require-spec
 
       - name: Recompute ELO from full history + build static board
         env:

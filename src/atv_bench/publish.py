@@ -12,7 +12,9 @@ regression to an empty/1970 board is caught by tests/test_publish.py.
 from __future__ import annotations
 
 import json
+import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +28,75 @@ _OK_REQUIRED_KEYS = {"player_a", "player_b", "outcome", "match_id"}
 _CRASH_REQUIRED_KEYS = {"loser", "opponent", "match_id"}
 _EPOCH = "1970-01-01T00:00:00Z"
 _DEFAULT_STORE = "league"
+
+
+class SpecMismatch(Exception):
+    """An ok artifact's identities/match_id do not bind to the workflow-issued spec.
+
+    NOT a validation error (the artifact is well-formed) — it means the untrusted bot
+    asserted participants or a match_id it was never issued. The caller fails closed:
+    the match is recorded as a CRASH forfeit against the submitter, never with the
+    forged data and never dropped.
+    """
+
+
+@dataclass(frozen=True)
+class MatchSpec:
+    """The TRUSTED match identity, issued by the workflow from GitHub context.
+
+    An untrusted bot controls only its stdout; it does NOT control this. `submitter` is
+    the PR author (`github.event.pull_request.user.login`), `opponent` the roster anchor
+    the match job pitted it against, `match_id` the run-scoped id
+    (`github.run_id-github.run_attempt`). The publish job binds the bot's `ok` claim to
+    these before anything enters permanent ELO history.
+    """
+    submitter: str
+    opponent: str
+    match_id: str
+
+    @classmethod
+    def from_env(cls) -> "MatchSpec":
+        """Build the spec from the workflow-exported env (ATV_SUBMITTER/OPPONENT/MATCH_ID).
+
+        Fails closed: a missing/blank value means the trusted context is absent, and we
+        must NOT fall back to trusting the bot's self-reported identities."""
+        vals = {}
+        for field_name, env in (("submitter", "ATV_SUBMITTER"),
+                                ("opponent", "ATV_OPPONENT"),
+                                ("match_id", "ATV_MATCH_ID")):
+            v = os.environ.get(env, "")
+            if not isinstance(v, str) or not v.strip():
+                raise ValueError(f"{env} must be a non-empty string (trusted match spec missing)")
+            vals[field_name] = v.strip()
+        return cls(**vals)
+
+
+def bind_ok_to_spec(data: dict[str, Any], spec: MatchSpec) -> dict[str, Any]:
+    """Bind a validated `ok` artifact to the trusted spec, or raise SpecMismatch.
+
+    The bot may assert the OUTCOME (bot-asserted in v1; honest trust boundary). It may
+    NOT assert WHO played or WHICH match this is. The two reported identities must be
+    exactly {submitter, opponent} and the match_id must equal the issued one. On success
+    the returned record's identities + match_id are taken from the SPEC (canonicalized),
+    not from the bot — so even an accepted record never carries a bot-chosen string in an
+    identity/id field.
+    """
+    reported = {data.get("player_a"), data.get("player_b")}
+    expected = {spec.submitter, spec.opponent}
+    if reported != expected:
+        raise SpecMismatch(
+            f"reported participants {sorted(str(x) for x in reported)} != "
+            f"issued {sorted(expected)}")
+    if data.get("match_id") != spec.match_id:
+        raise SpecMismatch(
+            f"reported match_id {data.get('match_id')!r} != issued {spec.match_id!r}")
+    # Canonicalize identities/id from the trusted spec. Preserve the (bot-asserted)
+    # outcome relative to the reported A/B orientation.
+    rec = dict(data)
+    rec["player_a"] = data["player_a"]
+    rec["player_b"] = data["player_b"]
+    rec["match_id"] = spec.match_id
+    return rec
 
 
 def _require_nonempty_str(data: dict[str, Any], key: str) -> None:
@@ -92,30 +163,68 @@ def validate_artifact(path: str) -> dict[str, Any]:
     return data
 
 
-def ingest_result(path: str, *, store_dir: str = _DEFAULT_STORE) -> bool:
+def _submitter_forfeit(spec: MatchSpec, *, game: str, seed: int) -> dict[str, Any]:
+    """Score the submitter as forfeiting against the trusted opponent (reason CRASH).
+
+    Used both for real crashes and for a rebound spec-mismatch, so a forged `ok` costs
+    the forger a loss instead of crediting a fabricated win — and never enters the store
+    with the forged identities."""
+    return {
+        "player_a": spec.opponent,
+        "player_b": spec.submitter,
+        "outcome": Outcome.FORFEIT_B.value,   # player_b (submitter) forfeited
+        "forfeit_reason": ForfeitReason.CRASH.value,
+        "match_id": spec.match_id,
+        "game": game,
+        "seed": seed,
+    }
+
+
+def ingest_result(path: str, *, store_dir: str = _DEFAULT_STORE,
+                   spec: "MatchSpec | None" = None) -> bool:
     """Append a validated result to the store's history.
 
-    An `ok` result is appended as-is. A `crash`/`invalid_output` record is scored as a
-    FORFEIT LOSS for the crashing player (reason CRASH) — never dropped, because a
-    dropped forfeit skews everyone's ELO (the forfeit=loss+reason claim). Returns True
-    when a match was appended.
+    When a trusted `spec` is supplied (the workflow always supplies one), an `ok`
+    result's identities + match_id are BOUND to the spec: a mismatch means the untrusted
+    bot forged participants or a match_id, so we rebind to a CRASH forfeit against the
+    submitter — never trusting the forgery, never dropping the match. A `crash`/
+    `invalid_output` record is scored as a FORFEIT LOSS for the crashing player (reason
+    CRASH) — never dropped, because a dropped forfeit skews everyone's ELO. With a spec,
+    the crash identities are taken from the trusted spec too. Returns True when a match
+    was appended.
+
+    Without a spec (local/hermetic use) the prior verbatim behavior is preserved.
     """
     data = validate_artifact(path)
     store = LeagueStore(store_dir)
+    game = data.get("game", "battlesnake")
+    seed = int(data.get("seed", 0))
     if data["status"] == "ok":
+        if spec is not None:
+            try:
+                data = bind_ok_to_spec(data, spec)
+            except SpecMismatch:
+                # forged identities/match_id -> submitter forfeits, forgery discarded
+                store.append_match(_submitter_forfeit(spec, game=game, seed=seed))
+                return True
         match = {
             "player_a": data["player_a"],
             "player_b": data["player_b"],
             "outcome": data["outcome"],
             "match_id": data["match_id"],
-            "game": data.get("game", "battlesnake"),
-            "seed": int(data.get("seed", 0)),
+            "game": game,
+            "seed": seed,
         }
         if data.get("forfeit_reason"):
             match["forfeit_reason"] = data["forfeit_reason"]
         store.append_match(match)
         return True
     # crash / invalid_output -> forfeit loss for the crasher
+    if spec is not None:
+        # crash identities come from the trusted spec, not the (workflow-built but
+        # still normalized-here) record, so match_id + participants stay canonical.
+        store.append_match(_submitter_forfeit(spec, game=game, seed=seed))
+        return True
     loser, opponent = data["loser"], data["opponent"]
     store.append_match({
         "player_a": opponent,
@@ -123,8 +232,8 @@ def ingest_result(path: str, *, store_dir: str = _DEFAULT_STORE) -> bool:
         "outcome": Outcome.FORFEIT_B.value,   # player_b (loser) forfeited
         "forfeit_reason": ForfeitReason.CRASH.value,
         "match_id": data["match_id"],
-        "game": data.get("game", "battlesnake"),
-        "seed": int(data.get("seed", 0)),
+        "game": game,
+        "seed": seed,
     })
     return True
 
@@ -183,7 +292,11 @@ def _main(argv: list[str]) -> int:
         return 0
     if cmd == "ingest":
         store = _arg(argv, "--store", _DEFAULT_STORE)
-        appended = ingest_result(argv[1], store_dir=store)
+        # --require-spec: the trusted publish job MUST bind to a workflow-issued spec.
+        # It fails closed (from_env raises) if the trusted context is missing, rather
+        # than silently trusting the untrusted bot's self-reported identities.
+        spec = MatchSpec.from_env() if "--require-spec" in argv else None
+        appended = ingest_result(argv[1], store_dir=store, spec=spec)
         print("match appended" if appended else "crash/invalid record — not scored")
         return 0
     if cmd == "build":
