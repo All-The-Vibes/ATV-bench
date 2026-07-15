@@ -114,6 +114,12 @@ function fmtTs(iso) {
   catch { return iso; }
 }
 function esc(s){ return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+// href sanitizer: allow ONLY http(s) URLs. esc() blocks tag injection but NOT
+// javascript:/data: schemes, which execute on click. Anything else -> "#".
+function safeHref(u){
+  const s = String(u == null ? "" : u).trim();
+  return /^https?:\/\//i.test(s) ? esc(s) : "#";
+}
 
 function chip(label, on){ return `<span class="chip${on?" on":""}">${esc(label)}</span>`; }
 
@@ -145,7 +151,7 @@ function renderRow(r) {
       </div>
       <div class="identity">
         <span class="avatar" aria-hidden="true">${initials}</span>
-        <a href="${esc(r.pr_url)}">@${esc(r.identity)}</a>
+        <a href="${safeHref(r.pr_url)}">@${esc(r.identity)}</a>
         <span class="harness">· ${esc(r.harness_name)}</span>
       </div>
       <div class="chips">${chips}</div>
@@ -157,7 +163,7 @@ function renderRow(r) {
             <dt>MCP servers</dt><dd>${d.mcps.length?d.mcps.map(esc).join(", "):"none"}</dd>
             <dt>plugins</dt><dd>${d.plugins.length?d.plugins.map(esc).join(", "):"none"}</dd>
             ${unknownHtml}
-            <dt>bot</dt><dd><code>${esc((r.bot_sha256||"").slice(0,16))}…</code> · <a href="${esc(r.logs_url)}" style="color:var(--accent)">match logs</a></dd>
+            <dt>bot</dt><dd><code>${esc((r.bot_sha256||"").slice(0,16))}…</code> · <a href="${safeHref(r.logs_url)}" style="color:var(--accent)">match logs</a></dd>
           </dl>
         </div>
       </details>
@@ -183,11 +189,14 @@ function renderError(msg, sha) {
 
 function render(doc) {
   staleEl.innerHTML = `<span class="dot"></span> Last updated ${esc(fmtTs(doc.updated_at))} · rebuilt on merge`;
-  const rows = doc.rows || [];
+  const rows = (doc.rows || []).slice().sort((a, b) => a.rank - b.rank);
   if (rows.length === 0) { root.innerHTML = renderEmpty(); return; }
-  // stable rows first, low-confidence/unrated demoted below a divider
-  const stable = rows.filter(r => r.rated && !( r.match_count>0 && r.match_count<5));
-  const shaky  = rows.filter(r => !r.rated || (r.match_count>0 && r.match_count<5));
+  // The builder already ranks stable rows above low-confidence/unrated ones, so we
+  // render strictly in rank order (no re-sort) — JSON rank always == visual row.
+  // We only insert a visual divider where the provisional tier begins.
+  const isShaky = r => !r.rated || r.low_confidence === true || (r.match_count > 0 && r.match_count < 5);
+  const stable = rows.filter(r => !isShaky(r));
+  const shaky  = rows.filter(isShaky);
   let html = `<ol class="board">${stable.map(renderRow).join("")}</ol>`;
   if (shaky.length) {
     html += `<div class="divider">provisional · not yet rated</div>`;

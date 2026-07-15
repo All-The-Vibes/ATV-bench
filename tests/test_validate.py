@@ -47,6 +47,23 @@ def test_validate_harness_rejects_leaky_value():
     assert any("leak" in e.lower() or "secret" in e.lower() for e in report["errors"])
 
 
+def test_validate_harness_rejects_unknown_reason_not_in_schema_enum():
+    """Santa round-1 (Reviewer B): validate-harness was looser than the locked schema
+    — it accepted an unknown[].reason the leaderboard schema rejects."""
+    fp = _clean_fp()
+    fp["unknown"] = [{"field": "plugins", "reason": "totally_made_up_reason"}]
+    report = validate_harness_fingerprint(fp)
+    assert report["ok"] is False
+    assert any("reason" in e.lower() for e in report["errors"])
+
+
+def test_validate_harness_accepts_valid_unknown_reason():
+    fp = _clean_fp()
+    fp["unknown"] = [{"field": "plugins", "reason": "permission_denied"}]
+    report = validate_harness_fingerprint(fp)
+    assert report["ok"] is True
+
+
 def test_validate_game_bot_accepts_small_text_file(tmp_path):
     bot = tmp_path / "main.py"
     bot.write_text("def move(s):\n    return 'up'\n")

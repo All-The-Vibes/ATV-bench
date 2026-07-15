@@ -103,22 +103,41 @@ def list_child_dir_names(path: Path, root: Path) -> tuple[list[str], list[tuple[
     return names, errors
 
 
-def count_child_files(path: Path, root: Path, suffix: str | None = None) -> ReadOutcome:
-    """Count immediate files under `path` (basenames/counts only, never contents)."""
+def count_child_files(
+    path: Path, root: Path, suffix: str | None = None
+) -> tuple[int, list[tuple[str, str]]]:
+    """Count immediate files under `path` (basenames/counts only, never contents).
+
+    Returns (count, errors) where errors is a list of (name, reason). A child whose
+    real path escapes `root` (symlink) is NOT counted and IS reported; a per-child
+    read failure is reported rather than silently skipped.
+    """
+    errors: list[tuple[str, str]] = []
     if not _within_root(path, root):
-        return ReadOutcome(reason=REASON_SYMLINK_ESCAPE)
+        return 0, [(path.name, REASON_SYMLINK_ESCAPE)]
     try:
         if not path.exists():
-            return ReadOutcome(value=0)
-        n = 0
-        for child in path.iterdir():
-            try:
-                if child.is_file() and (suffix is None or child.name.endswith(suffix)):
-                    n += 1
-            except OSError:
-                continue
-        return ReadOutcome(value=n)
+            return 0, errors
+        entries = list(path.iterdir())
     except PermissionError:
-        return ReadOutcome(reason=REASON_PERMISSION)
+        return 0, [(path.name, REASON_PERMISSION)]
     except OSError:
-        return ReadOutcome(reason=REASON_NOT_READABLE)
+        return 0, [(path.name, REASON_NOT_READABLE)]
+    n = 0
+    for child in entries:
+        # a symlinked child that escapes the root is refused (never counted)
+        try:
+            is_link = child.is_symlink()
+        except OSError:
+            errors.append((child.name, REASON_NOT_READABLE))
+            continue
+        if is_link and not _within_root(child, root):
+            errors.append((child.name, REASON_SYMLINK_ESCAPE))
+            continue
+        try:
+            if child.is_file() and (suffix is None or child.name.endswith(suffix)):
+                n += 1
+        except OSError:
+            errors.append((child.name, REASON_NOT_READABLE))
+            continue
+    return n, errors

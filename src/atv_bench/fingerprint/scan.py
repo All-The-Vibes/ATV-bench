@@ -100,13 +100,28 @@ def _has_credential_prefix(value: str) -> bool:
     return any(low.startswith(p) for p in _CREDENTIAL_PREFIXES)
 
 
+# Common weak secrets / default credentials. Short, low-entropy, keyword-free, so the
+# shape heuristics miss them — but they are the MOST predictable secrets a config could
+# carry. An exact-match (case-insensitive) denylist rejects them as defense-in-depth.
+# Not exhaustive: arbitrary user-chosen names remain a consent-surface boundary.
+_COMMON_WEAK_SECRETS = frozenset({
+    "hunter2", "admin", "root", "letmein", "password1", "passw0rd", "s3cr3t",
+    "changeme", "default", "guest", "test123", "qwerty", "abc123", "welcome",
+    "administrator", "toor", "pass", "secret1", "login", "master",
+})
+
+
+def _is_common_weak_secret(value: str) -> bool:
+    return value.lower() in _COMMON_WEAK_SECRETS
+
+
 def is_secret(value: str) -> bool:
     """True if `value` must NOT enter a published manifest.
 
-    Rejects: known token shapes, credential prefixes, credentials-in-URL, PEM
-    blocks, high-entropy strings, and names carrying credential keywords.
-    Deliberately conservative — a false positive costs one dropped field; a false
-    negative costs a leaked secret on a public leaderboard.
+    Rejects: known token shapes, credential prefixes, common weak secrets,
+    credentials-in-URL, PEM blocks, high-entropy strings, and names carrying
+    credential keywords. Deliberately conservative — a false positive costs one
+    dropped field; a false negative costs a leaked secret on a public leaderboard.
     """
     if not isinstance(value, str):
         return True
@@ -114,6 +129,8 @@ def is_secret(value: str) -> bool:
     # if normalization changed the string, invisible/compat chars were present:
     # treat as suspicious rather than reasoning about the cleaned form.
     if norm != value:
+        return True
+    if _is_common_weak_secret(value):
         return True
     if _has_secret_keyword(value):
         return True

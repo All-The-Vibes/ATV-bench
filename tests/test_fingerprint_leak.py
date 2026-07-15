@@ -280,3 +280,28 @@ def test_redteam_short_credential_prefix_rejected(name, tmp_path):
     (home / "settings.json").write_text(json.dumps({"model": "claude-opus-4-8"}))
     result = fp.probe_claude_code(home)
     assert name not in json.dumps(result.manifest)
+
+
+@pytest.mark.parametrize("secret", [
+    "hunter2", "admin", "root", "letmein", "s3cr3t", "passw0rd", "changeme",
+])
+def test_santa_common_weak_secret_rejected(secret):
+    """Santa round-1 (both reviewers): short common passwords bypassed is_secret.
+    Defense-in-depth: a common-weak-secret denylist rejects the most predictable
+    ones even though arbitrary user-chosen slugs remain a consent-surface boundary."""
+    from atv_bench.fingerprint.scan import is_secret, is_safe_name
+    assert is_secret(secret) is True
+    assert is_safe_name(secret) is False
+
+
+def test_santa_common_secret_not_emitted_as_model_or_mcp(tmp_path):
+    """Reviewer B repro: model='hunter2' / mcps=['hunter2'] were emitted unchanged."""
+    home = tmp_path / ".claude"
+    (home / "skills").mkdir(parents=True)
+    (home / "settings.json").write_text(json.dumps({"model": "hunter2"}))
+    (home / ".mcp.json").write_text(json.dumps({"mcpServers": {"hunter2": {"command": "x"}}}))
+    result = fp.probe_claude_code(home)
+    blob = json.dumps(result.manifest)
+    assert "hunter2" not in blob
+    assert result.manifest["model"] == "unknown"  # rejected, not emitted
+    assert result.manifest["mcps"] == []

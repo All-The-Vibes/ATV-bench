@@ -84,3 +84,31 @@ def test_low_confidence_demoted_and_marked():
     text, html = _render(fixture)
     assert "low confidence" in text.lower()
     assert "provisional" in text.lower()  # demoted below a divider
+
+
+def test_javascript_url_neutralized_in_href():
+    """Santa round-1: a javascript: pr_url/logs_url must never become a live href.
+    Defense-in-depth in the viewer even though the schema also rejects it."""
+    from playwright.sync_api import sync_playwright
+    fixture = {"schema_version": 1, "updated_at": "2026-07-15T18:00:00Z", "rows": [{
+        "rank": 1, "elo": 1600, "rated": True, "match_count": 40,
+        "ci": {"lo": 1570, "hi": 1630}, "identity": "attacker", "harness_name": "claude-code",
+        "fingerprint_summary": "", "fingerprint_gstack": False,
+        "details": {"skills": [], "mcps": [], "plugins": [], "unknown": []},
+        "bot_sha256": "a" * 64, "fingerprint_probe_version": "1.0.0",
+        "pr_url": "javascript:alert(document.cookie)",
+        "logs_url": "javascript:alert(1)",
+    }]}
+    errors = []
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.add_init_script(f"window.__FIXTURE__ = {json.dumps(fixture)};")
+        page.goto(VIEW.as_uri())
+        page.wait_for_timeout(150)
+        hrefs = page.eval_on_selector_all("a", "els => els.map(e => e.getAttribute('href'))")
+        browser.close()
+    assert not errors, f"JS errors: {errors}"
+    for h in hrefs:
+        assert h is None or not h.lower().startswith("javascript:"), f"live javascript href: {h}"

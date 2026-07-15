@@ -42,15 +42,27 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.repository.default_branch }}
 
-      - name: Fetch submitted bot into an isolated path
+      - name: Stage the submitted bot as DATA (never executed here on the host)
+        uses: actions/checkout@v4
+        with:
+          # The PR head is untrusted. We check it out into a SEPARATE path and copy
+          # ONLY the bot file into submission/. It is never run on the host — only
+          # inside the locked-down sandbox container below. No creds, no token.
+          ref: refs/pull/${{ github.event.pull_request.number }}/head
+          persist-credentials: false
+          path: pr-src
+
+      - name: Extract the bot file into the sandbox mount dir
         run: |
           mkdir -p submission
-          # bot + fingerprint come from the PR; fetch as data, never execute here.
-          gh pr view "${PR}" --json files --jq '.files[].path' > /dev/null || true
-        env:
-          PR: ${{ github.event.pull_request.number }}
-        # NOTE: no GITHUB_TOKEN in env — this step degrades gracefully; real fetch
-        # uses the artifact upload/download boundary, not a token in the match job.
+          # Copy only the single bot file the submission adds (submissions/<id>/main.py
+          # or a top-level main.py). Refuse anything that is not a plain small file.
+          BOT="$(find pr-src -maxdepth 3 -name 'main.py' -type f | head -n1)"
+          if [ -z "$BOT" ]; then echo '{"status":"crash"}' > match-result.json; echo "no bot file"; exit 0; fi
+          # size guard (<=256 KiB) before it is ever mounted
+          SZ=$(wc -c < "$BOT")
+          if [ "$SZ" -gt 262144 ]; then echo '{"status":"crash"}' > match-result.json; echo "bot too large"; exit 0; fi
+          cp "$BOT" submission/main.py
 
       - name: Run bot in a locked-down sandbox container
         run: |
@@ -110,10 +122,15 @@ jobs:
     environment:
       name: github-pages
     steps:
-      - name: Checkout league code
+      - name: Checkout TRUSTED league code (pinned to default branch, never PR head)
         uses: actions/checkout@v4
         with:
           persist-credentials: false
+          # Pin to the trusted default branch. A pull_request-triggered checkout
+          # defaults to the PR MERGE ref; running this job's build/install steps from
+          # PR-controlled code with pages:write + id-token:write is a pwn-request
+          # escalation. We only ever build from trusted, already-merged code + store.
+          ref: ${{ github.event.repository.default_branch }}
 
       - name: Download match result artifact
         uses: actions/download-artifact@v4
@@ -126,14 +143,30 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install (validation + board build only)
-        run: pip install -e '.[dev]'
+      - name: Install pinned deps (NOT an editable install of checked-out code)
+        run: |
+          # Do NOT `pip install -e .` — that executes the package's build hooks. We
+          # only need the runtime deps to run atv_bench as a module from the trusted
+          # checkout via PYTHONPATH=src.
+          pip install "jsonschema>=4.0"
 
-      - name: Validate artifact against the locked schema (no bot execution)
+      - name: Validate artifact against the result contract (no bot execution)
+        env:
+          PYTHONPATH: src
         run: python -m atv_bench.publish validate ./artifacts/match-result.json
 
-      - name: Recompute ELO from history + build static board
-        run: python -m atv_bench.publish build --out ./site
+      - name: Ingest result into the committed match history
+        env:
+          PYTHONPATH: src
+        run: python -m atv_bench.publish ingest ./artifacts/match-result.json --store league
+
+      - name: Recompute ELO from full history + build static board
+        env:
+          PYTHONPATH: src
+        run: |
+          python -m atv_bench.publish build \
+            --out ./site --store league \
+            --updated-at "$(git show -s --format=%cI HEAD)"
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

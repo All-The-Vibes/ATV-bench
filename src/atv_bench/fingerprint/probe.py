@@ -109,12 +109,9 @@ def probe_claude_code(home: Path) -> ProbeResult:
         b.note_unknown("mcps", mcp_cfg.reason or reader.REASON_MALFORMED)
 
     # --- custom_agents_count (count of agent files, never their contents) ---
-    agents = reader.count_child_files(home / "agents", home, suffix=".md")
-    if agents.ok:
-        custom_agents_count = int(agents.value)
-    else:
-        custom_agents_count = 0
-        b.note_unknown("custom_agents_count", agents.reason or reader.REASON_NOT_READABLE)
+    custom_agents_count, agent_errs = reader.count_child_files(home / "agents", home, suffix=".md")
+    for _name, reason in agent_errs:
+        b.note_unknown("custom_agents_count", reason)
 
     manifest: dict[str, Any] = {
         "harness": "claude-code",

@@ -132,3 +132,59 @@ def test_match_job_validates_json_before_upload(wf):
     assert validate_idx is not None, "match job must validate JSON before upload"
     assert upload_idx is not None and validate_idx < upload_idx, \
         "JSON validation must run BEFORE the artifact upload"
+
+
+def _checkout_steps(job):
+    return [s for s in job["steps"] if "actions/checkout" in str(s.get("uses", ""))]
+
+
+def test_publish_job_pins_checkout_to_trusted_ref(wf):
+    # santa round-1 (Reviewer B): a pull_request-triggered checkout defaults to the
+    # PR merge ref. The TRUSTED publish job (pages:write, id-token:write) must pin to
+    # the default branch, or it executes PR-controlled code with write privileges
+    # (pwn-request escalation).
+    publish = _jobs(wf)["publish"]
+    checkouts = _checkout_steps(publish)
+    assert checkouts, "publish job must check out trusted code explicitly"
+    for step in checkouts:
+        ref = str(step.get("with", {}).get("ref", ""))
+        assert ref, "publish checkout must pin an explicit ref (not the PR merge ref)"
+        assert "event.pull_request" not in ref and "head" not in ref.lower(), \
+            f"publish checkout ref must be trusted, got: {ref}"
+
+
+def test_publish_job_does_not_editable_install_pr_code(wf):
+    # the trusted job must not `pip install -e` (which runs PR-authored build/setup
+    # code). It may install pinned deps, but never execute the checked-out package's
+    # build hooks from an untrusted ref. Check the actual run: commands, not comments.
+    publish = _jobs(wf)["publish"]
+    for step in publish["steps"]:
+        run = step.get("run", "")
+        run_lines = [ln.split("#", 1)[0] for ln in run.splitlines()]  # strip comments
+        code = "\n".join(run_lines)
+        assert "pip install -e" not in code, \
+            "publish job must not editable-install PR-controlled code"
+
+
+def test_match_job_stages_the_submitted_bot(wf):
+    # the match job must actually materialize the submitted bot into the mount dir,
+    # else every match mounts an empty dir and yields a crash (no real matches). The
+    # bot is staged as DATA (checked out into a path, copied into submission/), never
+    # executed on the host — only inside the sandbox container.
+    match = _jobs(wf)["match"]
+    body = yaml.safe_dump(match)
+    assert "submission/main.py" in body or "submission" in body
+    stages_bot = (
+        "refs/pull/" in body            # checks out the PR head as data
+        and "main.py" in body            # extracts the bot file
+    )
+    assert stages_bot, "match job must stage the submitted bot into the submission dir"
+
+
+def test_match_job_stages_bot_without_credentials(wf):
+    # every checkout in the match job (including the PR-head bot staging) must be
+    # credential-less — the untrusted job never holds a token.
+    match = _jobs(wf)["match"]
+    for step in _checkout_steps(match):
+        assert step.get("with", {}).get("persist-credentials") is False, \
+            "every match-job checkout must set persist-credentials: false"

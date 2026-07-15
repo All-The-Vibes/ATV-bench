@@ -95,6 +95,34 @@ def test_ranks_are_dense_and_ordered():
     assert elos == sorted(elos, reverse=True)  # rank 1 has highest ELO
 
 
+def test_rank_matches_display_order_stable_above_provisional():
+    """Santa round-1 (Reviewer B): builder ranked purely by ELO, but the viewer
+    demotes low-confidence rows below stable ones — so JSON rank 1 could render below
+    others. The builder must assign rank in the SAME demoted order the viewer shows:
+    stable (rated, >=5 matches) first, provisional/low-confidence last."""
+    # 'newcomer' has a high ELO but only 3 matches (low-confidence); 'veteran' is
+    # stable with a lower ELO. Display + rank must put veteran above newcomer.
+    matches = (
+        [MatchResult("veteran", f"filler{i}", Outcome.A_WINS, match_id=f"v{i}") for i in range(6)]
+        + [MatchResult("newcomer", "veteran", Outcome.A_WINS, match_id="n1"),
+           MatchResult("newcomer", "veteran", Outcome.A_WINS, match_id="n2"),
+           MatchResult("newcomer", "veteran", Outcome.A_WINS, match_id="n3")]
+    )
+    names = {"veteran", "newcomer"} | {f"filler{i}" for i in range(6)}
+    subs = {n: {"fingerprint": _fingerprint(), "identity": n, "bot_sha256": "d" * 64,
+                "pr_url": "https://github.com/x/y/pull/1", "logs_url": "https://x/l"}
+            for n in names}
+    doc = build_leaderboard_doc(matches, subs, updated_at="2026-07-15T18:00:00Z")
+    by_id = {r["identity"]: r for r in doc["rows"]}
+    # any stable (not low_confidence) rated row must rank above any low_confidence row
+    stable_ranks = [r["rank"] for r in doc["rows"] if r["rated"] and not r["low_confidence"]]
+    low_ranks = [r["rank"] for r in doc["rows"] if r["low_confidence"]]
+    if stable_ranks and low_ranks:
+        assert max(stable_ranks) < min(low_ranks), \
+            "every stable row must rank above every low-confidence row"
+    assert by_id["newcomer"]["low_confidence"] is True
+
+
 def test_validator_rejects_missing_required_field():
     bad = {"schema_version": 1, "updated_at": "2026-07-15T18:00:00Z", "rows": [{"elo": 1500}]}
     with pytest.raises(jsonschema.ValidationError):
@@ -112,3 +140,40 @@ def test_validator_rejects_unknown_reason_enum():
     doc = build_leaderboard_doc(matches, subs, updated_at="2026-07-15T18:00:00Z")
     with pytest.raises(jsonschema.ValidationError):
         validate_leaderboard(doc)
+
+
+@pytest.mark.parametrize("bad_url", [
+    "javascript:alert(document.cookie)",
+    "data:text/html,<script>alert(1)</script>",
+    "vbscript:msgbox(1)",
+    "  javascript:alert(1)",
+    "ftp://internal/secret",
+])
+def test_validator_rejects_non_http_urls(bad_url):
+    """Santa round-1 (both reviewers): a submission-controlled pr_url/logs_url of
+    javascript: is a stored-XSS-on-click vector. The schema must reject any URL that
+    is not http(s), on BOTH pr_url and logs_url."""
+    matches = [MatchResult("alice", "bob", Outcome.A_WINS, match_id="m1")]
+    for field in ("pr_url", "logs_url"):
+        subs = {
+            "alice": {"fingerprint": _fingerprint(), "identity": "octocat", "bot_sha256": "a" * 64,
+                      "pr_url": "https://github.com/x/y/pull/1", "logs_url": "https://x/l"},
+            "bob": {"fingerprint": _fingerprint(), "identity": "hubot", "bot_sha256": "b" * 64,
+                    "pr_url": "https://github.com/x/y/pull/2", "logs_url": "https://x/l"},
+        }
+        subs["alice"][field] = bad_url
+        doc = build_leaderboard_doc(matches, subs, updated_at="2026-07-15T18:00:00Z")
+        with pytest.raises(jsonschema.ValidationError):
+            validate_leaderboard(doc)
+
+
+def test_validator_accepts_http_and_https_urls():
+    matches = [MatchResult("alice", "bob", Outcome.A_WINS, match_id="m1")]
+    subs = {
+        "alice": {"fingerprint": _fingerprint(), "identity": "octocat", "bot_sha256": "a" * 64,
+                  "pr_url": "https://github.com/x/y/pull/1", "logs_url": "http://x.io/logs/1"},
+        "bob": {"fingerprint": _fingerprint(), "identity": "hubot", "bot_sha256": "b" * 64,
+                "pr_url": "https://github.com/x/y/pull/2", "logs_url": "https://x.io/logs/2"},
+    }
+    doc = build_leaderboard_doc(matches, subs, updated_at="2026-07-15T18:00:00Z")
+    validate_leaderboard(doc)  # no raise

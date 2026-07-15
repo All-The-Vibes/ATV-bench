@@ -170,10 +170,11 @@
           },
           "pr_url": {
             "type": "string",
-            "format": "uri"
+            "pattern": "^https?://"
           },
           "logs_url": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^https?://"
           }
         }
       }

@@ -90,8 +90,11 @@ LEADERBOARD_SCHEMA: dict[str, Any] = {
                     },
                     "bot_sha256": {"type": "string", "pattern": r"^[a-f0-9]{64}$"},
                     "fingerprint_probe_version": {"type": "string"},
-                    "pr_url": {"type": "string", "format": "uri"},
-                    "logs_url": {"type": "string"},
+                    # http(s) only — a javascript:/data: URL here is a stored-XSS-on-
+                    # click vector in the viewer. Enforced by pattern (jsonschema does
+                    # not enforce `format` without a format_checker), on BOTH urls.
+                    "pr_url": {"type": "string", "pattern": r"^https?://"},
+                    "logs_url": {"type": "string", "pattern": r"^https?://"},
                 },
             },
         },
@@ -130,17 +133,32 @@ def build_leaderboard_doc(
     login), bot_sha256, pr_url, logs_url. ELO comes from `matches`.
     """
     board = compute_leaderboard(matches, entrants=list(submissions))
-    # rank: highest ELO first; rated above unrated; stable by identity for ties.
+
+    def _low_conf(n: str) -> bool:
+        b = board[n]
+        return bool(b["rated"] and 0 < b["match_count"] < _LOW_CONFIDENCE_MATCHES)
+
+    # Rank tiers (must match the viewer's display order so JSON rank == visual row):
+    #   1. stable rated rows (>= _LOW_CONFIDENCE_MATCHES matches)
+    #   2. low-confidence rated rows (demoted)
+    #   3. unrated / provisional rows (no matches yet)
+    # Within a tier: highest ELO first, then identity for a stable tie-break.
+    def _tier(n: str) -> int:
+        b = board[n]
+        if not b["rated"]:
+            return 2
+        return 1 if _low_conf(n) else 0
+
     ordered = sorted(
         submissions,
-        key=lambda n: (not board[n]["rated"], -board[n]["elo"], submissions[n]["identity"]),
+        key=lambda n: (_tier(n), -board[n]["elo"], submissions[n]["identity"]),
     )
     rows: list[dict[str, Any]] = []
     for rank, name in enumerate(ordered, start=1):
         b = board[name]
         sub = submissions[name]
         fp = sub["fingerprint"]
-        low_confidence = bool(b["rated"] and 0 < b["match_count"] < _LOW_CONFIDENCE_MATCHES)
+        low_confidence = _low_conf(name)
         rows.append({
             "rank": rank,
             "elo": b["elo"],
