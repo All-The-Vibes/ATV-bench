@@ -18,13 +18,16 @@ uv run pytest -m "not live and not integration" -q   # should be all green
 
 ## Authentication
 
-`atv-bench submit` opens a PR on your behalf via `gh`. Authenticate once:
+`atv-bench submit --dry-run` runs a `gh`-based preflight (checking you're authenticated
+and have a fork) and writes your submission record. **Live PR automation is not wired
+yet** — you open the PR yourself (see [Manual PR fallback](#manual-pr-fallback)).
+Authenticate `gh` once so the preflight passes:
 
 ```bash
 gh auth login   # choose GitHub.com, HTTPS
 ```
 
-If `gh` is installed but not logged in, submit stops at preflight with an actionable
+If `gh` is installed but not logged in, submit's preflight flags it with an actionable
 message pointing here.
 
 ## Submitting your harness (entering the league)

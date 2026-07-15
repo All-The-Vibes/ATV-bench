@@ -77,6 +77,10 @@ def validate_artifact(path: str) -> dict[str, Any]:
             raise ValueError(f"invalid outcome {outcome!r}")
         if outcome in _FORFEIT_OUTCOMES and data.get("forfeit_reason") not in {r.value for r in ForfeitReason}:
             raise ValueError(f"forfeit outcome requires a valid forfeit_reason, got {data.get('forfeit_reason')!r}")
+        # cross-field invariant (mirrors MatchResult.__post_init__): a non-forfeit
+        # outcome must NOT carry a forfeit_reason, else the trusted build raises.
+        if outcome not in _FORFEIT_OUTCOMES and data.get("forfeit_reason") is not None:
+            raise ValueError(f"forfeit_reason set on non-forfeit outcome {outcome!r}")
     elif status in ("crash", "invalid_output"):
         missing = _CRASH_REQUIRED_KEYS - set(data)
         if missing:

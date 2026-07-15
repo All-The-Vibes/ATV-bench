@@ -50,7 +50,20 @@ class LeagueStore:
             return subs
         for f in sorted(self.submissions_dir.glob("*.json")):
             data = json.loads(f.read_text())
-            subs[data["identity"]] = data
+            identity = data.get("identity")
+            # Anchor identity to the FILENAME stem: a submission's identity is bound to
+            # its file path (league/submissions/<identity>.json), which the PR diff
+            # attributes to an author. Rejecting a body whose identity != filename
+            # stops a hand-edited mallory.json from claiming another entrant's identity
+            # and overwriting their row.
+            if identity != f.stem:
+                raise ValueError(
+                    f"submission identity {identity!r} does not match filename {f.name!r}; "
+                    "identity must equal the file stem"
+                )
+            if identity in subs:
+                raise ValueError(f"duplicate submission identity: {identity!r}")
+            subs[identity] = data
         return subs
 
     # --- matches ---

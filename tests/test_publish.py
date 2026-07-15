@@ -104,6 +104,16 @@ def test_validate_artifact_rejects_poison_types(tmp_path, poison):
         validate_artifact(str(p))
 
 
+def test_forfeit_reason_on_non_forfeit_rejected(tmp_path):
+    """R5 (Reviewer A, reproduced): outcome=a_wins + forfeit_reason=TIMEOUT passed
+    validate_artifact but crashed MatchResult.__post_init__ in the trusted build.
+    The cross-field invariant must be enforced at the boundary."""
+    p = tmp_path / "r.json"
+    p.write_text(json.dumps(_ok(outcome="a_wins", forfeit_reason="TIMEOUT")))
+    with pytest.raises(ValueError):
+        validate_artifact(str(p))
+
+
 def test_validate_artifact_ingest_never_crashes_on_accepted(tmp_path):
     """Anything validate_artifact ACCEPTS must ingest + build without a trusted-job
     crash (the fail-closed guarantee: accepted => safe)."""
@@ -244,3 +254,24 @@ def test_history_persists_across_fresh_checkout(tmp_path):
     doc = build_leaderboard_from_store(store_dir, updated_at="2026-07-15T18:00:00Z")
     alice = next(r for r in doc["rows"] if r["identity"] == "alice")
     assert alice["match_count"] == 2  # both persisted matches counted
+
+
+def test_store_rejects_identity_filename_mismatch(tmp_path):
+    """R5 (Reviewer B, reproduced): a hand-edited league/submissions/mallory.json with
+    body identity='alice' would overwrite alice's row. load_submissions must anchor
+    identity to the filename stem."""
+    store = LeagueStore(str(tmp_path / "league"))
+    store.add_submission(_sub("alice"))
+    # attacker writes mallory.json but claims to be alice
+    spoof = _sub("alice")  # body identity = alice
+    (store.submissions_dir / "mallory.json").write_text(json.dumps(spoof))
+    with pytest.raises(ValueError):
+        store.load_submissions()
+
+
+def test_store_loads_matching_identity(tmp_path):
+    store = LeagueStore(str(tmp_path / "league"))
+    store.add_submission(_sub("alice"))
+    store.add_submission(_sub("bob"))
+    subs = store.load_submissions()  # stems match bodies -> OK
+    assert set(subs) == {"alice", "bob"}
