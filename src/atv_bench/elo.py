@@ -18,10 +18,16 @@ from typing import Any
 
 SEED_ELO = 1500
 K_FACTOR = 32
-# variance-gate teeth
-_MIN_MATCHES = 10          # below this: not enough data to publish a pair delta
-_MAX_CI_WIDTH = 200        # wider CI than this: too noisy to publish
-_MIN_PUBLISH_SPREAD = 100  # identical-ish players stay under this spread
+# Variance-gate teeth — the SINGLE source of the numeric thresholds. Both the pairwise
+# A/A gate (variance_gate) and the per-row low-confidence gate (leaderboard._low_conf)
+# consume these so "wired into the board" means the same numbers, not two gates.
+MIN_RATED_MATCHES = 10     # below this many matches: insufficient signal -> low confidence
+MAX_CI_WIDTH = 200         # wider ELO CI than this: too noisy to rank as stable
+MIN_PUBLISH_SPREAD = 100   # identical-ish players must exceed this spread to be publishable
+# backwards-compatible private aliases (used within this module)
+_MIN_MATCHES = MIN_RATED_MATCHES
+_MAX_CI_WIDTH = MAX_CI_WIDTH
+_MIN_PUBLISH_SPREAD = MIN_PUBLISH_SPREAD
 
 
 class Outcome(str, enum.Enum):

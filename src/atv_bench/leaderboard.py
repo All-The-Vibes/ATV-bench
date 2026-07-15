@@ -8,16 +8,22 @@ from __future__ import annotations
 
 from typing import Any
 
-from atv_bench.elo import MatchResult, compute_leaderboard
+from atv_bench.elo import (
+    MatchResult,
+    MAX_CI_WIDTH,
+    MIN_RATED_MATCHES,
+    compute_leaderboard,
+)
 
 SCHEMA_VERSION = 1
-# rated rows with fewer than this many matches are shown but marked low-confidence
-# and demoted below stable rows (matches the viewer's treatment).
-_LOW_CONFIDENCE_MATCHES = 5
-# Published max CI width (ELO points). A rated row wider than this carries too little
-# signal to rank as stable — this is the variance gate's numeric teeth applied at row
-# level. Sized so a row with >= _LOW_CONFIDENCE_MATCHES matches clears it.
-_MAX_PUBLISH_CI_WIDTH = 330
+# Low-confidence gate — reuses elo's canonical variance-gate thresholds (single source)
+# so the board's demotion uses the SAME numeric teeth as elo.variance_gate, not a
+# separate set of numbers. A rated row with fewer than MIN_RATED_MATCHES matches, or a
+# CI wider than the ELO-CI ceiling, is marked low-confidence and demoted.
+_LOW_CONFIDENCE_MATCHES = MIN_RATED_MATCHES
+# Per-row CI ceiling: the ELO confidence interval (points) tolerated for a stable row.
+# Sized from MAX_CI_WIDTH but on the row's own half-width scale.
+_MAX_PUBLISH_CI_WIDTH = MAX_CI_WIDTH * 2
 
 # forfeit/unknown reason enums must match the probe + elo modules exactly.
 _UNKNOWN_REASONS = [

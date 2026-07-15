@@ -87,15 +87,39 @@ def test_validate_artifact_rejects_missing_players(tmp_path):
     {"status": "crash", "loser": "", "opponent": "", "match_id": ""},
     {"status": "crash", "loser": {"x": 1}, "opponent": "alice", "match_id": "m"},
     {"status": "invalid_output", "loser": "bob", "opponent": "alice", "match_id": None},
+    # R4 (Reviewer B, reproduced): optional fields must be typed on EVERY branch
+    {"status": "invalid_output", "loser": "alice", "opponent": "bob", "match_id": "m1", "seed": "oops"},
+    {"status": "crash", "loser": "alice", "opponent": "bob", "match_id": "m1", "seed": 1.5},
+    {"status": "ok", "player_a": "a", "player_b": "b", "outcome": "a_wins", "match_id": "m", "seed": "x"},
+    {"status": "ok", "player_a": "a", "player_b": "b", "outcome": "a_wins", "match_id": "m", "game": {"x": 1}},
+    {"status": "crash", "loser": "a", "opponent": "b", "match_id": "m", "game": ["battlesnake"]},
 ])
 def test_validate_artifact_rejects_poison_types(tmp_path, poison):
-    """R3 (both reviewers, reproduced): a non-string/blank match_id or player from an
-    untrusted bot must be rejected at the boundary — else it is committed to the store
-    and crashes the trusted ELO recompute with a TypeError (poison-the-trusted-job)."""
+    """R3+R4 (both reviewers, reproduced): a non-string/blank match_id or player, or a
+    mistyped seed/game from an untrusted bot must be rejected at the boundary — else it
+    is committed to the store and crashes the trusted ingest/ELO recompute."""
     p = tmp_path / "r.json"
     p.write_text(json.dumps(poison))
     with pytest.raises(ValueError):
         validate_artifact(str(p))
+
+
+def test_validate_artifact_ingest_never_crashes_on_accepted(tmp_path):
+    """Anything validate_artifact ACCEPTS must ingest + build without a trusted-job
+    crash (the fail-closed guarantee: accepted => safe)."""
+    store = LeagueStore(str(tmp_path / "league"))
+    store.add_submission(_sub("alice"))
+    store.add_submission(_sub("bob"))
+    good = [
+        _ok(seed=3, game="battlesnake"),
+        {"status": "crash", "loser": "bob", "opponent": "alice", "match_id": "c1", "seed": 2, "game": "battlesnake"},
+    ]
+    for i, art in enumerate(good):
+        p = tmp_path / f"a{i}.json"
+        p.write_text(json.dumps(art))
+        ingest_result(str(p), store_dir=str(tmp_path / "league"))
+    doc = build_leaderboard_from_store(str(tmp_path / "league"), updated_at="2026-07-15T18:00:00Z")
+    assert len(doc["rows"]) == 2
 
 
 def test_poison_artifact_never_reaches_store(tmp_path):

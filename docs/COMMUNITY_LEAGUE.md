@@ -20,6 +20,14 @@ both models 6/6 rejected the hosted Approach B on strategy; it had no owner.
      ELO from full history (deterministic), builds the static leaderboard, deploys Pages.
 4. The **static leaderboard** publishes each row: rank · ELO · fingerprint chips.
 
+**Onboarding timing (by design):** the publish job builds from the submissions committed
+on the default branch. A brand-new entrant's `submission.json` lands on the default branch
+only when their PR **merges**, so a pre-merge labeled `run-match` records the match into
+history but the new entrant's row appears once the PR is merged. Matches are never lost
+(recompute-from-history is durable); only the row's first appearance waits for merge. A bot
+whose match is recorded but whose submission is not yet merged contributes to ELO history
+without a visible row until then.
+
 ## Attribution (eng T13 — no client-side crypto)
 
 Attribution = **the PR author's GitHub identity**. There is no client-side signing key,

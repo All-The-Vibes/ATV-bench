@@ -49,10 +49,13 @@ uv venv && uv pip install -e '.[dev]'
 # 2. see exactly what your harness would publish (nothing leaves your machine)
 atv-bench fingerprint --dry-run
 
-# 3. validate + submit a bot your harness built
+# 3. validate + build your submission (bot + leak-safe fingerprint)
 atv-bench validate-game ./main.py
-atv-bench submit ./main.py --game battlesnake --dry-run   # preflight only
-atv-bench submit ./main.py --game battlesnake             # opens the PR
+atv-bench submit ./main.py --game battlesnake --dry-run \
+  --identity <your-github-login> --out submission.json
+
+# 4. commit the bot + submission.json under league/submissions/ and open a PR
+#    (live PR automation is not wired yet — see CONTRIBUTING.md#manual-pr-fallback)
 ```
 
 `fingerprint --dry-run` prints a three-section consent view — **Will publish**,

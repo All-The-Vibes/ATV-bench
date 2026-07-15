@@ -34,13 +34,26 @@ def _require_nonempty_str(data: dict[str, Any], key: str) -> None:
         raise ValueError(f"{key} must be a non-empty string, got {v!r}")
 
 
+def _check_optional_common(data: dict[str, Any]) -> None:
+    """Type-check optional fields present on ANY status. Untyped optionals are a
+    poison vector: a bad `seed` crashes int() in ingest, a dict `game` crashes the
+    ELO sort — both inside the trusted job. Reject at the boundary."""
+    if "seed" in data and (not isinstance(data["seed"], int) or isinstance(data["seed"], bool)):
+        raise ValueError(f"seed must be an integer, got {data['seed']!r}")
+    if "game" in data and (not isinstance(data["game"], str) or not data["game"].strip()):
+        raise ValueError(f"game must be a non-empty string, got {data.get('game')!r}")
+    if "forfeit_reason" in data and data["forfeit_reason"] is not None:
+        if data["forfeit_reason"] not in {r.value for r in ForfeitReason}:
+            raise ValueError(f"invalid forfeit_reason {data['forfeit_reason']!r}")
+
+
 def validate_artifact(path: str) -> dict[str, Any]:
     """Validate a match-result artifact — FAIL-CLOSED at the trust boundary.
 
     An untrusted bot's run produced this. We reject anything that isn't one of the
-    known result shapes with correctly-TYPED fields BEFORE it can reach the store or
-    the ELO engine. A non-string match_id/player would otherwise be committed and then
-    crash the trusted recompute with a TypeError (poison-the-trusted-job).
+    known result shapes with correctly-TYPED fields (required AND optional) BEFORE it
+    can reach the store or the ELO engine. Guarantee: anything this ACCEPTS ingests and
+    builds without a trusted-job crash.
     """
     try:
         data = json.loads(Path(path).read_text())
@@ -51,6 +64,7 @@ def validate_artifact(path: str) -> dict[str, Any]:
     status = data.get("status")
     if status not in _VALID_STATUSES:
         raise ValueError(f"status must be one of {sorted(_VALID_STATUSES)}, got {status!r}")
+    _check_optional_common(data)
     if status == "ok":
         missing = _OK_REQUIRED_KEYS - set(data)
         if missing:
@@ -61,12 +75,8 @@ def validate_artifact(path: str) -> dict[str, Any]:
         outcome = data["outcome"]
         if outcome not in {o.value for o in Outcome}:
             raise ValueError(f"invalid outcome {outcome!r}")
-        if outcome in _FORFEIT_OUTCOMES:
-            reason = data.get("forfeit_reason")
-            if reason not in {r.value for r in ForfeitReason}:
-                raise ValueError(f"forfeit outcome requires a valid forfeit_reason, got {reason!r}")
-        if "seed" in data and not isinstance(data["seed"], int):
-            raise ValueError(f"seed must be an integer, got {data['seed']!r}")
+        if outcome in _FORFEIT_OUTCOMES and data.get("forfeit_reason") not in {r.value for r in ForfeitReason}:
+            raise ValueError(f"forfeit outcome requires a valid forfeit_reason, got {data.get('forfeit_reason')!r}")
     elif status in ("crash", "invalid_output"):
         missing = _CRASH_REQUIRED_KEYS - set(data)
         if missing:

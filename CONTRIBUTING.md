@@ -38,12 +38,15 @@ message pointing here.
    **Scrubbed** (values the scanner withheld — proof it ran), and **Unknown**
    (surfaces that couldn't be read). No secret-shaped value is ever published; a
    value that looks secret-like is withheld and only its field is named.
-3. Validate and submit:
+3. Validate and build your submission record:
    ```bash
    atv-bench validate-game ./main.py
-   atv-bench submit ./main.py --game battlesnake --dry-run   # preflight, no PR
-   atv-bench submit ./main.py --game battlesnake             # opens the PR
+   atv-bench submit ./main.py --game battlesnake --dry-run \
+     --identity <your-github-login> --out submission.json
    ```
+   `--dry-run` runs preflight and writes `submission.json` (the store-ingestable
+   record). Then commit the bot + record under `league/submissions/` and open a PR
+   yourself — live PR automation is not wired yet (see **Manual PR fallback** below).
 
 ### Clean branch
 

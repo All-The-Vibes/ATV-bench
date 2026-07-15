@@ -128,11 +128,11 @@ def submission_status_trail(is_first_time: bool) -> list[str]:
     read as silent latency.
     """
     trail = [
-        "1. PR opened against All-The-Vibes/ATV-bench",
-        "2. CI match job runs your bot in the sandbox → result artifact",
-        "3. Publish job recomputes ELO → leaderboard updates on merge",
+        "1. PR opened against All-The-Vibes/ATV-bench (you open it; live automation is not wired yet)",
+        "2. A maintainer adds the `run-match` label → the sandboxed match job runs your bot",
+        "3. Publish job recomputes ELO from history → the static leaderboard updates",
     ]
     if is_first_time:
-        trail.insert(1, "→ First-time contributor: a maintainer must approve the "
+        trail.insert(2, "→ First-time contributor: a maintainer must also approve the "
                         "workflow run before matches start (GitHub gate; expect a short wait).")
     return trail

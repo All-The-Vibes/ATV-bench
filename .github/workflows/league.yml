@@ -61,10 +61,15 @@ jobs:
           mkdir -p submission
           CRASH=$(printf '{"status":"crash","loser":"%s","opponent":"%s","match_id":"%s"}' \
             "$SUBMITTER" "$OPPONENT" "$MATCH_ID")
-          # The bot lives at league/submissions/<identity>/main.py (depth 4 under
-          # pr-src/). Copy only that single file. Refuse anything not a plain small file.
-          BOT="$(find pr-src/league/submissions -maxdepth 2 -name 'main.py' -type f 2>/dev/null | head -n1)"
-          if [ -z "$BOT" ]; then echo "$CRASH" > match-result.json; echo "no bot file"; exit 0; fi
+          # IDENTITY-PINNED: the bot must be exactly the submitter's own path,
+          # league/submissions/<submitter>/main.py — NOT the first main.py found
+          # anywhere (a PR could otherwise smuggle another identity's bot). Fail closed
+          # to a scored crash if that exact file is absent.
+          BOT="pr-src/league/submissions/${SUBMITTER}/main.py"
+          if [ ! -f "$BOT" ]; then
+            echo "$CRASH" > match-result.json
+            echo "no bot at $BOT (identity-pinned path required)"; exit 0
+          fi
           SZ=$(wc -c < "$BOT")
           if [ "$SZ" -gt 262144 ]; then echo "$CRASH" > match-result.json; echo "bot too large"; exit 0; fi
           cp "$BOT" submission/main.py

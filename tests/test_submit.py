@@ -120,3 +120,13 @@ def _write_bot(tmp=[None]):
     p = d / "main.py"
     p.write_text(_BOT_SRC)
     return str(p)
+
+
+def test_status_trail_is_honest_about_wiring():
+    """R4 (Reviewer B): status trail must not claim submit opens the PR or that the
+    board 'updates on merge' when the workflow is label-triggered and live-submit
+    is unwired."""
+    from atv_bench.submit import submission_status_trail
+    trail = " ".join(submission_status_trail(is_first_time=True)).lower()
+    assert "run-match" in trail or "label" in trail  # label-triggered, stated
+    assert "not wired" in trail or "you open it" in trail  # honest about automation

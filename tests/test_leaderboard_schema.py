@@ -103,12 +103,12 @@ def test_rank_matches_display_order_stable_above_provisional():
     # 'newcomer' has a high ELO but only 3 matches (low-confidence); 'veteran' is
     # stable with a lower ELO. Display + rank must put veteran above newcomer.
     matches = (
-        [MatchResult("veteran", f"filler{i}", Outcome.A_WINS, match_id=f"v{i}") for i in range(6)]
+        [MatchResult("veteran", f"filler{i}", Outcome.A_WINS, match_id=f"v{i}") for i in range(12)]
         + [MatchResult("newcomer", "veteran", Outcome.A_WINS, match_id="n1"),
            MatchResult("newcomer", "veteran", Outcome.A_WINS, match_id="n2"),
            MatchResult("newcomer", "veteran", Outcome.A_WINS, match_id="n3")]
     )
-    names = {"veteran", "newcomer"} | {f"filler{i}" for i in range(6)}
+    names = {"veteran", "newcomer"} | {f"filler{i}" for i in range(12)}
     subs = {n: {"fingerprint": _fingerprint(), "identity": n, "bot_sha256": "d" * 64,
                 "pr_url": "https://github.com/x/y/pull/1", "logs_url": "https://x/l"}
             for n in names}
@@ -206,3 +206,23 @@ def test_variance_gate_clears_high_signal_rows():
     doc = build_leaderboard_doc(matches, subs, updated_at="2026-07-15T18:00:00Z")
     champ = next(r for r in doc["rows"] if r["identity"] == "champ")
     assert champ["low_confidence"] is False
+
+
+def test_row_gate_shares_variance_gate_thresholds():
+    """R4 (Reviewer B): the row low_confidence gate must use the SAME numeric teeth as
+    elo.variance_gate, not a separate 5/330 pair — single source of thresholds."""
+    from atv_bench import elo
+    from atv_bench.leaderboard import _LOW_CONFIDENCE_MATCHES
+    assert _LOW_CONFIDENCE_MATCHES == elo.MIN_RATED_MATCHES
+    # a player just under the match floor is low-confidence in BOTH the row gate and
+    # the pair gate's reason
+    n = elo.MIN_RATED_MATCHES - 1
+    matches = [MatchResult("a", "b", Outcome.A_WINS, match_id=f"m{i}") for i in range(n)]
+    subs = {x: {"fingerprint": _fingerprint(), "identity": x, "bot_sha256": "a" * 64,
+                "pr_url": "https://github.com/x/y/pull/1", "logs_url": "https://x/l"}
+            for x in ("a", "b")}
+    doc = build_leaderboard_doc(matches, subs, updated_at="2026-07-15T18:00:00Z")
+    a_row = next(r for r in doc["rows"] if r["identity"] == "a")
+    gate = elo.variance_gate(matches, player_pair=("a", "b"))
+    assert a_row["low_confidence"] is True
+    assert gate["reason"] == "insufficient_matches"  # both agree: not enough matches

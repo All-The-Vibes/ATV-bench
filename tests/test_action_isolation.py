@@ -181,6 +181,18 @@ def test_match_job_stages_the_submitted_bot(wf):
     assert stages_bot, "match job must stage the submitted bot into the submission dir"
 
 
+def test_match_job_bot_path_is_identity_pinned(wf):
+    # R4 (Reviewer B): the bot must be the submitter's OWN identity-pinned path, not
+    # the first main.py found anywhere (a PR could smuggle another identity's bot).
+    match = _jobs(wf)["match"]
+    body = yaml.safe_dump(match)
+    assert "submissions/${SUBMITTER}/main.py" in body or "submissions/$SUBMITTER/main.py" in body, \
+        "bot path must be pinned to league/submissions/<submitter>/main.py"
+    # must NOT pick an arbitrary bot via find|head
+    assert "head -n1" not in body and "head -1" not in body, \
+        "must not select an arbitrary bot with find|head"
+
+
 def test_match_job_stages_bot_without_credentials(wf):
     # every checkout in the match job (including the PR-head bot staging) must be
     # credential-less — the untrusted job never holds a token.
