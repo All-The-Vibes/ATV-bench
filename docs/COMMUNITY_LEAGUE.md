@@ -41,6 +41,29 @@ Fingerprint **honesty** is still trust-based (Premise 4): GitHub identity proves
 submitted, not that the reported skills/MCPs/plugins are truthful. Public match logs are
 the dispute mechanism. See the "Scope of the claim" section in the README.
 
+## Match-result trust boundary (what the Action does and does NOT prove)
+
+The untrusted bot runs in the sandboxed match job and its stdout becomes a result
+artifact. The trusted publish job **binds** that artifact to a workflow-issued match spec
+(`MatchSpec`: submitter = PR author's GitHub login, opponent = the roster anchor,
+match_id = `run_id-run_attempt`) before anything enters permanent ELO history:
+
+- **Identity is trusted, not bot-asserted.** An `ok` artifact's `player_a`/`player_b`
+  must be exactly the two issued participants and its `match_id` the issued one. A bot
+  that names a third party, fabricates a match_id (replay/injection), or claims it played
+  itself is **rebound to a `CRASH` forfeit against the submitter** — never trusted, never
+  dropped (a dropped match skews everyone's ELO). Stored identities are canonicalized
+  from the spec, so no bot-chosen string ever lands in an identity field. Enforced on
+  every push by `tests/test_match_binding.py` + the `league.yml` tripwire in
+  `tests/test_action_isolation.py`.
+- **Outcome IS bot-asserted (accepted v1 boundary).** The win/loss/draw the bot reports
+  is taken on trust. Because the opponent is a fixed baseline **anchor** (not another real
+  entrant), a dishonestly-claimed win can only inflate the forger's own row versus the
+  anchor — it **cannot damage a third party's rating**. The anchor column is therefore a
+  participation signal, not a trust signal. Making the *arena* (not the bot) emit the
+  adjudicated outcome is the deferred match-orchestration follow-up; until then, public
+  match logs remain the dispute mechanism (Premise 4).
+
 ## Harness fingerprint (the credibility gate)
 
 A per-harness probe reads on-disk config and emits ONE normalized, **leak-safe** schema:

@@ -190,7 +190,9 @@ jobs:
           # exact values; a bot that forged a third-party identity or a fabricated
           # match_id is rebound to a CRASH forfeit against the submitter (never trusted,
           # never dropped). Must match the identities the match job pitted them against.
-          ATV_SUBMITTER: ${{ github.event.pull_request.user.login || 'submitter' }}
+          # No `|| 'submitter'` fallback here: on a non-PR context the login is blank and
+          # MatchSpec.from_env fails closed rather than inventing a phantom entrant.
+          ATV_SUBMITTER: ${{ github.event.pull_request.user.login }}
           ATV_OPPONENT: byok-anchor
           ATV_MATCH_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: python -m atv_bench.publish ingest ./artifacts/match-result.json --store league --require-spec

@@ -100,8 +100,22 @@ def _to_match_result(m: dict[str, Any]) -> MatchResult:
 
 
 def build_leaderboard_from_store(store_dir: str, *, updated_at: str) -> dict[str, Any]:
-    """Recompute the full leaderboard document from the committed store."""
+    """Recompute the full leaderboard document from the committed store.
+
+    Dedup by match_id so recompute is idempotent: a re-run publish step (or a retried
+    job) that appends the same match_id twice must NOT double-count it into ELO. First
+    occurrence wins; a stable append order keeps this deterministic.
+    """
     store = LeagueStore(store_dir)
     submissions = store.load_submissions()
-    matches = [_to_match_result(m) for m in store.load_matches()]
+    seen: set[str] = set()
+    matches = []
+    for m in store.load_matches():
+        mid = m.get("match_id")
+        # only dedup records that carry a match_id; a blank id can't collide meaningfully
+        if isinstance(mid, str) and mid:
+            if mid in seen:
+                continue
+            seen.add(mid)
+        matches.append(_to_match_result(m))
     return build_leaderboard_doc(matches, submissions, updated_at=updated_at)

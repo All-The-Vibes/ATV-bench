@@ -65,9 +65,14 @@ class MatchSpec:
                                 ("opponent", "ATV_OPPONENT"),
                                 ("match_id", "ATV_MATCH_ID")):
             v = os.environ.get(env, "")
-            if not isinstance(v, str) or not v.strip():
+            if not v.strip():
                 raise ValueError(f"{env} must be a non-empty string (trusted match spec missing)")
             vals[field_name] = v.strip()
+        if vals["submitter"] == vals["opponent"]:
+            # If the two identities collapse, the participant-set check degenerates and a
+            # self-match could bind. Enforce the invariant locally at spec construction.
+            raise ValueError(
+                f"submitter and opponent must differ (both {vals['submitter']!r})")
         return cls(**vals)
 
 
@@ -77,26 +82,55 @@ def bind_ok_to_spec(data: dict[str, Any], spec: MatchSpec) -> dict[str, Any]:
     The bot may assert the OUTCOME (bot-asserted in v1; honest trust boundary). It may
     NOT assert WHO played or WHICH match this is. The two reported identities must be
     exactly {submitter, opponent} and the match_id must equal the issued one. On success
-    the returned record's identities + match_id are taken from the SPEC (canonicalized),
-    not from the bot — so even an accepted record never carries a bot-chosen string in an
-    identity/id field.
+    the returned record's identities + match_id are taken from the SPEC (canonicalized to
+    a fixed orientation: player_a=opponent, player_b=submitter) — so even an accepted
+    record never carries a bot-chosen string in an identity/id field. The bot-asserted
+    outcome is TRANSLATED to preserve the winner under that canonical orientation.
     """
-    reported = {data.get("player_a"), data.get("player_b")}
+    pa, pb = data.get("player_a"), data.get("player_b")
+    reported = {pa, pb}
     expected = {spec.submitter, spec.opponent}
-    if reported != expected:
+    # Reject a collapsed self-match (pa == pb) explicitly: the set comparison alone would
+    # miss it if the spec identities ever collapsed. spec.submitter != spec.opponent is
+    # enforced at construction, so a genuine two-identity match always has pa != pb.
+    if pa == pb or reported != expected:
         raise SpecMismatch(
             f"reported participants {sorted(str(x) for x in reported)} != "
             f"issued {sorted(expected)}")
     if data.get("match_id") != spec.match_id:
         raise SpecMismatch(
             f"reported match_id {data.get('match_id')!r} != issued {spec.match_id!r}")
-    # Canonicalize identities/id from the trusted spec. Preserve the (bot-asserted)
-    # outcome relative to the reported A/B orientation.
+    # Canonicalize identities from the trusted spec (fixed orientation), and translate
+    # the bot-asserted outcome so the WINNER is preserved rather than silently flipped.
     rec = dict(data)
-    rec["player_a"] = data["player_a"]
-    rec["player_b"] = data["player_b"]
+    rec["player_a"] = spec.opponent
+    rec["player_b"] = spec.submitter
     rec["match_id"] = spec.match_id
+    rec["outcome"] = _translate_outcome(
+        data["outcome"], bot_a=pa, canonical_a=spec.opponent)
     return rec
+
+
+# outcome under a flipped A/B orientation: swap winner side, leave symmetric ones.
+_OUTCOME_FLIP = {
+    Outcome.A_WINS.value: Outcome.B_WINS.value,
+    Outcome.B_WINS.value: Outcome.A_WINS.value,
+    Outcome.FORFEIT_A.value: Outcome.FORFEIT_B.value,
+    Outcome.FORFEIT_B.value: Outcome.FORFEIT_A.value,
+    Outcome.DRAW.value: Outcome.DRAW.value,
+}
+
+
+def _translate_outcome(outcome: str, *, bot_a: Any, canonical_a: str) -> str:
+    """Re-express a bot-asserted outcome for the canonical A/B orientation.
+
+    The bot labeled the outcome relative to ITS player_a (`bot_a`). If canonical player_a
+    is the same identity, the outcome is unchanged; if it's the other identity, A and B
+    swapped so the outcome must flip (a_wins<->b_wins, forfeit_a<->forfeit_b, draw fixed).
+    """
+    if bot_a == canonical_a:
+        return outcome
+    return _OUTCOME_FLIP[outcome]
 
 
 def _require_nonempty_str(data: dict[str, Any], key: str) -> None:

@@ -275,3 +275,24 @@ def test_store_loads_matching_identity(tmp_path):
     store.add_submission(_sub("bob"))
     subs = store.load_submissions()  # stems match bodies -> OK
     assert set(subs) == {"alice", "bob"}
+
+
+def test_recompute_dedups_duplicate_match_id(tmp_path):
+    """Review hardening (both reviewers, MEDIUM): a re-run publish step can append the
+    same match_id twice (append is blind). Recompute-from-history must be idempotent —
+    dedup by match_id so a double-ingest never double-counts ELO."""
+    store_dir = str(tmp_path / "league")
+    store = LeagueStore(store_dir)
+    store.add_submission(_sub("alice"))
+    store.add_submission(_sub("bob"))
+    # same match_id ingested twice (identical artifact re-run)
+    art = tmp_path / "r.json"
+    art.write_text(json.dumps(_ok(pa="alice", pb="bob", outcome="a_wins", mid="dup1")))
+    ingest_result(str(art), store_dir=store_dir)
+    ingest_result(str(art), store_dir=store_dir)
+    assert len(store.load_matches()) == 2  # both lines on disk (blind append)
+    doc = build_leaderboard_from_store(store_dir, updated_at="2026-07-15T18:00:00Z")
+    alice = next(r for r in doc["rows"] if r["identity"] == "alice")
+    # counted ONCE despite two identical lines
+    assert alice["match_count"] == 1
+

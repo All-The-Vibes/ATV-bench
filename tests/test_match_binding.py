@@ -70,6 +70,45 @@ def test_bind_accepts_swapped_orientation():
     assert {rec["player_a"], rec["player_b"]} == {"alice", "byok-anchor"}
 
 
+def test_bind_canonicalizes_identities_from_spec_not_bot():
+    """Review hardening: the stored record's identity strings come from the SPEC, never
+    the bot. Even with swapped orientation, submitter is bound to a canonical slot so a
+    future gate change can't smuggle a bot-chosen string into an identity field."""
+    rec = bind_ok_to_spec(_ok(pa="byok-anchor", pb="alice", outcome="b_wins", mid="run-1"), _spec())
+    # canonical orientation: player_b is always the submitter, player_a the opponent
+    assert rec["player_a"] == "byok-anchor"
+    assert rec["player_b"] == "alice"
+    # and the bot-asserted outcome is translated to stay aligned: bot said b_wins with
+    # pa=byok-anchor/pb=alice (alice wins) -> canonical pa=byok-anchor/pb=alice is same
+    assert rec["outcome"] == "b_wins"
+
+
+def test_bind_translates_outcome_when_orientation_flips():
+    """If the bot's orientation is opposite the canonical one, the outcome must be
+    translated so the WINNER is preserved, never silently flipped."""
+    # bot: pa=alice, pb=byok-anchor, a_wins  => alice wins.
+    # canonical: pa=byok-anchor, pb=alice  => alice is player_b, so must become b_wins.
+    rec = bind_ok_to_spec(_ok(pa="alice", pb="byok-anchor", outcome="a_wins", mid="run-1"), _spec())
+    assert rec["player_a"] == "byok-anchor" and rec["player_b"] == "alice"
+    assert rec["outcome"] == "b_wins"  # alice still the winner
+
+
+def test_bind_rejects_self_match_both_submitter():
+    """Explicit: player_a == player_b must never bind, independent of the set check."""
+    with pytest.raises(SpecMismatch):
+        bind_ok_to_spec(_ok(pa="alice", pb="alice", mid="run-1"), _spec())
+
+
+def test_spec_from_env_rejects_submitter_equals_opponent(monkeypatch):
+    """Latent-trap guard: if submitter == opponent the participant set collapses and a
+    self-match could bind. from_env rejects it so the invariant is enforced locally."""
+    monkeypatch.setenv("ATV_SUBMITTER", "byok-anchor")
+    monkeypatch.setenv("ATV_OPPONENT", "byok-anchor")
+    monkeypatch.setenv("ATV_MATCH_ID", "run-1")
+    with pytest.raises(ValueError):
+        MatchSpec.from_env()
+
+
 def test_bind_rejects_third_party_identity():
     """THE core forgery: bot names a third party it never played."""
     with pytest.raises(SpecMismatch):
@@ -144,8 +183,14 @@ def test_ingest_honest_ok_with_spec_appends_bound_record(tmp_path):
     assert ingest_result(str(art), store_dir=store_dir, spec=_spec()) is True
     m = store.load_matches()[0]
     assert m["match_id"] == "run-1"
-    assert m["outcome"] == "a_wins"
-    assert {m["player_a"], m["player_b"]} == {"alice", "byok-anchor"}
+    # canonical orientation is player_a=opponent, player_b=submitter; the bot said alice
+    # (submitter) won, so under canonical orientation that is b_wins — winner preserved.
+    assert m["player_a"] == "byok-anchor" and m["player_b"] == "alice"
+    assert m["outcome"] == "b_wins"
+    # and the leaderboard credits alice the win
+    doc = build_leaderboard_from_store(store_dir, updated_at="2026-07-15T18:00:00Z")
+    alice = next(r for r in doc["rows"] if r["identity"] == "alice")
+    assert alice["elo"] > 1500
 
 
 def test_ingest_without_spec_is_unchanged(tmp_path):
