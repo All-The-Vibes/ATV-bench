@@ -252,3 +252,35 @@ def test_publish_ingest_is_the_single_fail_closed_gate(wf):
     standalone_validate = [r for r in runs if "publish validate" in r and "ingest" not in r]
     assert not standalone_validate, \
         "no standalone `publish validate` step may abort scoring before ingest"
+
+
+def test_match_job_wraps_bot_in_a_container_timeout(wf):
+    # Reviewer B (santa round-2): the job-level timeout cancels the WHOLE job before the
+    # CRASH fallback + upload can run, so a hanging bot yields NO score. The docker run
+    # must be wrapped in a `timeout` shorter than the job so expiry falls through to the
+    # CRASH fallback within the step and still uploads a scoreable artifact.
+    match = _jobs(wf)["match"]
+    body = yaml.safe_dump(match)
+    assert "timeout " in body, \
+        "match job must wrap the bot container in a `timeout` (per-container time cap)"
+
+
+def test_match_job_caps_artifact_size_before_upload(wf):
+    # Reviewer B (santa round-2): bot stdout is redirected to match-result.json with no
+    # cap; the sanitizer and publish both read it whole. A multi-GB artifact can OOM/kill
+    # the trusted publish job before scoring. The match job must bound the artifact size
+    # and fall back to a CRASH record when exceeded.
+    match = _jobs(wf)["match"]
+    body = yaml.safe_dump(match)
+    assert "wc -c < match-result.json" in body or "stat -c%s match-result.json" in body, \
+        "match job must measure match-result.json size before upload"
+
+
+def test_workflow_only_triggers_on_pull_request(wf):
+    # Reviewer B (santa round-2): workflow_dispatch has no PR author, so MatchSpec.from_env
+    # aborts the publish job (no trusted submitter to score). Remove the half-wired trigger
+    # rather than leave a path that runs the untrusted bot but can never score it.
+    on = wf.get("on") or wf.get(True)  # PyYAML parses bare `on:` as boolean True
+    assert "workflow_dispatch" not in on, \
+        "workflow_dispatch has no scoreable path (no PR-authored submitter); remove it"
+    assert "pull_request" in on

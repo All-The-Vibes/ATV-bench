@@ -288,15 +288,30 @@ def test_ingest_or_forfeit_requires_spec(tmp_path):
         ingest_result_or_forfeit(str(art), store_dir=store_dir, spec=None)
 
 
+def test_ingest_or_forfeit_scores_forfeit_on_missing_artifact(tmp_path):
+    """Santa round-2 (both reviewers): a missing/unreadable artifact raises OSError, not
+    ValueError. The single gate must fail closed to a submitter forfeit here too, not
+    abort the trusted publish job."""
+    from atv_bench.publish import ingest_result_or_forfeit
+    store_dir = str(tmp_path / "league")
+    store = LeagueStore(store_dir)
+    store.add_submission(_sub("alice"))
+    store.add_submission(_sub("byok-anchor"))
+    missing = str(tmp_path / "does-not-exist.json")
+    assert ingest_result_or_forfeit(missing, store_dir=store_dir, spec=_spec()) is True
+    m = store.load_matches()[0]
+    assert m["forfeit_reason"] == "CRASH" and m["match_id"] == "run-1"
+
+
 
 def test_spec_from_env_reads_github_context(monkeypatch):
     """The workflow exports SUBMITTER/OPPONENT/MATCH_ID; MatchSpec.from_env builds the
     trusted spec so the publish CLI doesn't reparse GitHub context by hand."""
     monkeypatch.setenv("ATV_SUBMITTER", "alice")
     monkeypatch.setenv("ATV_OPPONENT", "byok-anchor")
-    monkeypatch.setenv("ATV_MATCH_ID", "run-1-1")
+    monkeypatch.setenv("ATV_MATCH_ID", "run-1")
     spec = MatchSpec.from_env()
-    assert spec == MatchSpec(submitter="alice", opponent="byok-anchor", match_id="run-1-1")
+    assert spec == MatchSpec(submitter="alice", opponent="byok-anchor", match_id="run-1")
 
 
 def test_spec_from_env_missing_fails_closed(monkeypatch):

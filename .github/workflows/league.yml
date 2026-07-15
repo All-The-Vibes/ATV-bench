@@ -19,7 +19,6 @@ name: league
 on:
   pull_request:
     types: [labeled]        # a maintainer adds `run-match` after review
-  workflow_dispatch:
 
 concurrency:
   group: league-${{ github.event.pull_request.number || github.ref }}
@@ -28,7 +27,11 @@ concurrency:
 jobs:
   match:
     # UNTRUSTED job — runs the submitted bot. Zero privileges.
-    if: ${{ github.event.label.name == 'run-match' || github.event_name == 'workflow_dispatch' }}
+    # Only the labeled-PR path: workflow_dispatch is intentionally NOT a trigger — it has
+    # no PR-authored submitter, so the publish job's MatchSpec.from_env would abort with
+    # no scoreable identity. A trigger that runs the untrusted bot but can never score it
+    # is removed rather than left half-wired.
+    if: ${{ github.event.label.name == 'run-match' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions: {}
@@ -93,7 +96,13 @@ jobs:
           # result is captured, and only into the artifact — never the log.
           CRASH=$(printf '{"status":"crash","loser":"%s","opponent":"%s","match_id":"%s"}' \
             "$SUBMITTER" "$OPPONENT" "$MATCH_ID")
-          docker run --rm \
+          # Per-container timeout SHORTER than the job timeout (line 33). A hanging bot
+          # must expire HERE and fall through to the CRASH fallback + upload; if it ran
+          # to the job-level timeout, GitHub would cancel the whole job before the
+          # fallback/upload steps and record NO score (a bot-controlled no-score DoS).
+          # Cap stdout to a bounded artifact too (`head -c`): unbounded bot stdout could
+          # fill the disk or OOM the trusted publish job's whole-file read.
+          timeout 300 docker run --rm \
             --network none \
             --memory 512m --memory-swap 512m \
             --cpus 1 \
@@ -104,7 +113,12 @@ jobs:
             --security-opt no-new-privileges \
             -v "$PWD/submission:/work:ro" \
             atv-bench/arena:latest \
-            /work/main.py > match-result.json 2>/dev/null || echo "$CRASH" > match-result.json
+            /work/main.py 2>/dev/null | head -c 65536 > match-result.json || true
+          # timeout / non-zero pipeline / empty output all fall back to a scored CRASH.
+          if [ ! -s match-result.json ]; then echo "$CRASH" > match-result.json; fi
+          # Hard size cap: if the (already head-limited) artifact is still oversized for
+          # any reason, replace it with the trusted CRASH record before it is uploaded.
+          if [ "$(wc -c < match-result.json)" -gt 65536 ]; then echo "$CRASH" > match-result.json; fi
 
       - name: Validate result is well-formed JSON before upload
         env:

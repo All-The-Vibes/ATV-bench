@@ -46,7 +46,7 @@ the dispute mechanism. See the "Scope of the claim" section in the README.
 The untrusted bot runs in the sandboxed match job and its stdout becomes a result
 artifact. The trusted publish job **binds** that artifact to a workflow-issued match spec
 (`MatchSpec`: submitter = PR author's GitHub login, opponent = the roster anchor,
-match_id = `run_id-run_attempt`) before anything enters permanent ELO history:
+match_id = the stable `github.run_id`) before anything enters permanent ELO history:
 
 - **Identity is trusted, not bot-asserted.** An `ok` artifact's `player_a`/`player_b`
   must be exactly the two issued participants and its `match_id` the issued one. A bot

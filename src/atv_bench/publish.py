@@ -46,9 +46,10 @@ class MatchSpec:
 
     An untrusted bot controls only its stdout; it does NOT control this. `submitter` is
     the PR author (`github.event.pull_request.user.login`), `opponent` the roster anchor
-    the match job pitted it against, `match_id` the run-scoped id
-    (`github.run_id-github.run_attempt`). The publish job binds the bot's `ok` claim to
-    these before anything enters permanent ELO history.
+    the match job pitted it against, `match_id` the STABLE run id (`github.run_id`, with
+    no run_attempt so a publish re-run reuses the same id and never rebinds an honest
+    earlier-attempt artifact into a forfeit). The publish job binds the bot's `ok` claim
+    to these before anything enters permanent ELO history.
     """
     submitter: str
     opponent: str
@@ -290,9 +291,13 @@ def ingest_result_or_forfeit(path: str, *, store_dir: str = _DEFAULT_STORE,
         raise ValueError("ingest_result_or_forfeit requires a trusted MatchSpec")
     try:
         return ingest_result(path, store_dir=store_dir, spec=spec)
-    except ValueError:
-        # artifact failed the schema contract -> the submitter forfeits (CRASH), scored
-        # against the trusted opponent with the issued match_id. No bot data persisted.
+    except (ValueError, OSError):
+        # artifact failed the schema contract, was unreadable, or absent -> the submitter
+        # forfeits (CRASH), scored against the trusted opponent with the issued match_id.
+        # No bot data persisted. SpecMismatch is NOT caught here (it subclasses Exception,
+        # not ValueError) — a forged-but-valid ok is already rebound inside ingest_result,
+        # so this except only ever fires on a genuinely malformed/missing artifact, never
+        # masking a binding bug.
         LeagueStore(store_dir).append_match(_submitter_forfeit(spec, game="battlesnake", seed=0))
         return True
 
