@@ -272,6 +272,31 @@ def ingest_result(path: str, *, store_dir: str = _DEFAULT_STORE,
     return True
 
 
+def ingest_result_or_forfeit(path: str, *, store_dir: str = _DEFAULT_STORE,
+                             spec: "MatchSpec | None" = None) -> bool:
+    """Single fail-closed scoring gate for the trusted publish job.
+
+    A bot can emit a KNOWN status with an INVALID schema (e.g. `{"status":"ok"}` with no
+    players, or non-JSON). The match-job sanitizer only checks dict+status, so such an
+    artifact is uploaded. If the publish job ran a separate hard-failing `validate` step,
+    that would abort the WHOLE job and record NO score — a bot-controlled no-score DoS.
+
+    Instead, ingest here: any validation failure (malformed/invalid/mistyped) is
+    converted into a spec-bound submitter CRASH forfeit — scored as a loss, never an
+    aborted job, never a dropped match. A spec is REQUIRED: without a trusted identity
+    there is nobody to attribute the forfeit to, so we refuse rather than guess.
+    """
+    if spec is None:
+        raise ValueError("ingest_result_or_forfeit requires a trusted MatchSpec")
+    try:
+        return ingest_result(path, store_dir=store_dir, spec=spec)
+    except ValueError:
+        # artifact failed the schema contract -> the submitter forfeits (CRASH), scored
+        # against the trusted opponent with the issued match_id. No bot data persisted.
+        LeagueStore(store_dir).append_match(_submitter_forfeit(spec, game="battlesnake", seed=0))
+        return True
+
+
 def _normalize_utc_z(ts: str) -> str:
     """Normalize an ISO-8601 timestamp to the schema's required `...Z` UTC form.
 
@@ -328,9 +353,14 @@ def _main(argv: list[str]) -> int:
         store = _arg(argv, "--store", _DEFAULT_STORE)
         # --require-spec: the trusted publish job MUST bind to a workflow-issued spec.
         # It fails closed (from_env raises) if the trusted context is missing, rather
-        # than silently trusting the untrusted bot's self-reported identities.
-        spec = MatchSpec.from_env() if "--require-spec" in argv else None
-        appended = ingest_result(argv[1], store_dir=store, spec=spec)
+        # than silently trusting the untrusted bot's self-reported identities. Ingest is
+        # the SINGLE fail-closed gate: an invalid/malformed artifact becomes a spec-bound
+        # submitter forfeit instead of aborting the job (no bot-controlled no-score DoS).
+        if "--require-spec" in argv:
+            appended = ingest_result_or_forfeit(argv[1], store_dir=store,
+                                                spec=MatchSpec.from_env())
+        else:
+            appended = ingest_result(argv[1], store_dir=store)
         print("match appended" if appended else "crash/invalid record — not scored")
         return 0
     if cmd == "build":

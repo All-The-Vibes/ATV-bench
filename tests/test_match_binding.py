@@ -224,6 +224,71 @@ def test_ingest_crash_with_spec_still_scores_submitter_forfeit(tmp_path):
     assert {m["player_a"], m["player_b"]} == {"alice", "byok-anchor"}
 
 
+# --- santa round-1: schema-invalid known-status artifact must not DoS the score ---
+
+def test_ingest_or_forfeit_scores_forfeit_on_malformed_artifact(tmp_path):
+    """Reviewer B (codex): a bot can emit a known status with a missing/invalid schema
+    (e.g. {"status":"ok"} with no players). The match-job sanitizer only checks
+    dict+status, so it uploads; a separate hard-failing validate step would then abort
+    the whole publish job -> NO score (a bot-controlled no-score DoS). ingest under a
+    spec must instead convert ANY validation failure into a spec-bound submitter CRASH
+    forfeit — fail closed to a scored loss, never an aborted job."""
+    from atv_bench.publish import ingest_result_or_forfeit
+    store_dir = str(tmp_path / "league")
+    store = LeagueStore(store_dir)
+    store.add_submission(_sub("alice"))
+    store.add_submission(_sub("byok-anchor"))
+    art = tmp_path / "malformed.json"
+    art.write_text(json.dumps({"status": "ok"}))  # missing players/outcome/match_id
+    assert ingest_result_or_forfeit(str(art), store_dir=store_dir, spec=_spec()) is True
+    m = store.load_matches()[0]
+    assert m["forfeit_reason"] == "CRASH"
+    assert m["match_id"] == "run-1"
+    assert {m["player_a"], m["player_b"]} == {"alice", "byok-anchor"}
+
+
+def test_ingest_or_forfeit_scores_forfeit_on_non_json(tmp_path):
+    from atv_bench.publish import ingest_result_or_forfeit
+    store_dir = str(tmp_path / "league")
+    store = LeagueStore(store_dir)
+    store.add_submission(_sub("alice"))
+    store.add_submission(_sub("byok-anchor"))
+    art = tmp_path / "garbage.json"
+    art.write_text("not json at all {{{")
+    assert ingest_result_or_forfeit(str(art), store_dir=store_dir, spec=_spec()) is True
+    m = store.load_matches()[0]
+    assert m["forfeit_reason"] == "CRASH" and m["match_id"] == "run-1"
+
+
+def test_ingest_or_forfeit_passes_through_valid_ok(tmp_path):
+    """A well-formed, spec-matching ok artifact scores normally (not forfeited)."""
+    from atv_bench.publish import ingest_result_or_forfeit
+    store_dir = str(tmp_path / "league")
+    store = LeagueStore(store_dir)
+    store.add_submission(_sub("alice"))
+    store.add_submission(_sub("byok-anchor"))
+    art = tmp_path / "ok.json"
+    art.write_text(json.dumps(_ok(pa="alice", pb="byok-anchor", outcome="a_wins", mid="run-1")))
+    assert ingest_result_or_forfeit(str(art), store_dir=store_dir, spec=_spec()) is True
+    m = store.load_matches()[0]
+    assert m.get("forfeit_reason") is None  # a real scored win, not a forfeit
+    doc = build_leaderboard_from_store(store_dir, updated_at="2026-07-15T18:00:00Z")
+    alice = next(r for r in doc["rows"] if r["identity"] == "alice")
+    assert alice["elo"] > 1500
+
+
+def test_ingest_or_forfeit_requires_spec(tmp_path):
+    """The fail-closed forfeit needs the trusted spec; without it there is no trusted
+    identity to attribute the loss to, so it must refuse rather than guess."""
+    from atv_bench.publish import ingest_result_or_forfeit
+    store_dir = str(tmp_path / "league")
+    art = tmp_path / "x.json"
+    art.write_text(json.dumps({"status": "ok"}))
+    with pytest.raises(ValueError):
+        ingest_result_or_forfeit(str(art), store_dir=store_dir, spec=None)
+
+
+
 def test_spec_from_env_reads_github_context(monkeypatch):
     """The workflow exports SUBMITTER/OPPONENT/MATCH_ID; MatchSpec.from_env builds the
     trusted spec so the publish CLI doesn't reparse GitHub context by hand."""

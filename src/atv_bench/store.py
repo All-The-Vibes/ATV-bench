@@ -72,6 +72,14 @@ class LeagueStore:
         if missing:
             raise ValueError(f"match missing keys: {sorted(missing)}")
         self.root.mkdir(parents=True, exist_ok=True)
+        # Write-time dedup: a re-ingest of an existing match_id is a no-op, so history
+        # stays a set of distinct matches rather than accumulating duplicate lines
+        # forever. Recompute also dedups (defense in depth) but this keeps the store lean.
+        mid = match.get("match_id")
+        if isinstance(mid, str) and mid:
+            for existing in self.load_matches():
+                if existing.get("match_id") == mid:
+                    return
         with self.matches_file.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(match, sort_keys=True) + "\n")
 
@@ -102,9 +110,11 @@ def _to_match_result(m: dict[str, Any]) -> MatchResult:
 def build_leaderboard_from_store(store_dir: str, *, updated_at: str) -> dict[str, Any]:
     """Recompute the full leaderboard document from the committed store.
 
-    Dedup by match_id so recompute is idempotent: a re-run publish step (or a retried
-    job) that appends the same match_id twice must NOT double-count it into ELO. First
-    occurrence wins; a stable append order keeps this deterministic.
+    Dedup by match_id so recompute is idempotent: if the same match_id ever appears
+    twice in history (e.g. a re-ingest of the same artifact), it is counted once. First
+    occurrence wins; a stable append order keeps this deterministic. Note match_id is
+    the workflow's stable github.run_id, so a publish re-run reuses the same id and does
+    not double-count; a genuinely new run gets a new id and is a distinct match.
     """
     store = LeagueStore(store_dir)
     submissions = store.load_submissions()

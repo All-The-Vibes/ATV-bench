@@ -290,9 +290,20 @@ def test_recompute_dedups_duplicate_match_id(tmp_path):
     art.write_text(json.dumps(_ok(pa="alice", pb="bob", outcome="a_wins", mid="dup1")))
     ingest_result(str(art), store_dir=store_dir)
     ingest_result(str(art), store_dir=store_dir)
-    assert len(store.load_matches()) == 2  # both lines on disk (blind append)
     doc = build_leaderboard_from_store(store_dir, updated_at="2026-07-15T18:00:00Z")
     alice = next(r for r in doc["rows"] if r["identity"] == "alice")
-    # counted ONCE despite two identical lines
+    # counted ONCE despite two ingests
     assert alice["match_count"] == 1
+
+
+def test_append_match_skips_duplicate_match_id_at_write_time(tmp_path):
+    """Santa round-1 (Reviewer B): don't grow history unboundedly on re-ingest. A second
+    append of an existing match_id is a no-op on disk, so the store stays a set of
+    distinct matches rather than accumulating duplicate lines forever."""
+    store_dir = str(tmp_path / "league")
+    store = LeagueStore(store_dir)
+    m = {"player_a": "alice", "player_b": "bob", "outcome": "a_wins", "match_id": "dup1"}
+    store.append_match(m)
+    store.append_match(dict(m))  # same match_id again
+    assert len(store.load_matches()) == 1  # deduped at write time
 

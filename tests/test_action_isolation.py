@@ -224,3 +224,31 @@ def test_publish_ingest_binds_ok_artifact_to_trusted_spec(wf):
         "ATV_SUBMITTER must be the PR author's GitHub identity, not a bot-supplied value"
     assert "github.run_id" in str(env["ATV_MATCH_ID"]), \
         "ATV_MATCH_ID must be the run-scoped id, not a bot-supplied value"
+
+
+def test_match_id_is_stable_across_job_reruns(wf):
+    # Reviewer B (santa round-1): match_id must NOT include github.run_attempt. A publish
+    # re-run increments run_attempt, so an attempt-scoped id would make the spec expect a
+    # different match_id than the retained artifact carries -> an honest ok result rebinds
+    # to a CRASH forfeit against a legitimate submitter. Pin to github.run_id alone.
+    body = yaml.safe_dump(wf)
+    assert "github.run_attempt" not in body, \
+        "match_id must be stable across job reruns (no github.run_attempt)"
+
+
+def test_publish_ingest_is_the_single_fail_closed_gate(wf):
+    # Reviewer B (santa round-1): a bot can emit a known status with an invalid schema
+    # (e.g. {"status":"ok"} with no players). A standalone hard-failing `publish validate`
+    # step before ingest would abort the whole job -> NO score (bot-controlled no-score
+    # DoS). The ingest step must be the single gate that converts any validation failure
+    # into a spec-bound submitter forfeit, so there is no separate pre-ingest validate
+    # step that can abort scoring.
+    publish = _jobs(wf)["publish"]
+    runs = [str(s.get("run", "")) for s in publish["steps"]]
+    ingest_runs = [r for r in runs if "publish ingest" in r]
+    assert ingest_runs, "publish job must ingest the artifact"
+    # no separate `publish validate` step that runs standalone before ingest and can
+    # abort the job (validation now happens fail-closed inside ingest --require-spec)
+    standalone_validate = [r for r in runs if "publish validate" in r and "ingest" not in r]
+    assert not standalone_validate, \
+        "no standalone `publish validate` step may abort scoring before ingest"

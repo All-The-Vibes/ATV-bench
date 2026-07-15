@@ -56,7 +56,7 @@ jobs:
         env:
           SUBMITTER: ${{ github.event.pull_request.user.login || 'submitter' }}
           OPPONENT: byok-anchor
-          MATCH_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          MATCH_ID: ${{ github.run_id }}
         run: |
           mkdir -p submission
           CRASH=$(printf '{"status":"crash","loser":"%s","opponent":"%s","match_id":"%s"}' \
@@ -81,7 +81,7 @@ jobs:
           # submitter forfeiting (loss + reason CRASH), never dropped.
           SUBMITTER: ${{ github.event.pull_request.user.login || 'submitter' }}
           OPPONENT: byok-anchor
-          MATCH_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          MATCH_ID: ${{ github.run_id }}
         run: |
           # cpu/mem/pid/time caps + no network + non-root + read-only rootfs.
           # The bot cannot exfiltrate (no egress), cannot fork-bomb (--pids-limit),
@@ -110,7 +110,7 @@ jobs:
         env:
           SUBMITTER: ${{ github.event.pull_request.user.login || 'submitter' }}
           OPPONENT: byok-anchor
-          MATCH_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          MATCH_ID: ${{ github.run_id }}
         run: |
           # Guard: a bot can exit 0 while printing non-JSON to stdout, which would
           # otherwise be uploaded as a malformed artifact. Replace anything that is
@@ -177,12 +177,7 @@ jobs:
           # checkout via PYTHONPATH=src.
           pip install "jsonschema>=4.0"
 
-      - name: Validate artifact against the result contract (no bot execution)
-        env:
-          PYTHONPATH: src
-        run: python -m atv_bench.publish validate ./artifacts/match-result.json
-
-      - name: Ingest result into the match history (validated fail-closed first)
+      - name: Ingest result into history (SINGLE fail-closed scoring gate)
         env:
           PYTHONPATH: src
           # TRUSTED match spec from GitHub context — NOT from the untrusted bot's stdout.
@@ -192,9 +187,17 @@ jobs:
           # never dropped). Must match the identities the match job pitted them against.
           # No `|| 'submitter'` fallback here: on a non-PR context the login is blank and
           # MatchSpec.from_env fails closed rather than inventing a phantom entrant.
+          #
+          # This is the ONLY validation gate: ingest --require-spec validates internally
+          # and converts ANY malformed/invalid artifact into a spec-bound submitter
+          # forfeit. A separate hard-failing `validate` step is deliberately NOT run — it
+          # would let a bot emit a known-status-but-invalid artifact to abort the whole
+          # job and record NO score (a bot-controlled no-score DoS). match_id is stable
+          # (github.run_id, no run_attempt) so a publish re-run reuses the same spec and
+          # never rebinds an honest earlier-attempt artifact into a forfeit.
           ATV_SUBMITTER: ${{ github.event.pull_request.user.login }}
           ATV_OPPONENT: byok-anchor
-          ATV_MATCH_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          ATV_MATCH_ID: ${{ github.run_id }}
         run: python -m atv_bench.publish ingest ./artifacts/match-result.json --store league --require-spec
 
       - name: Recompute ELO from full history + build static board
