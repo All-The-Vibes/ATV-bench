@@ -126,8 +126,10 @@ jobs:
             atv-bench/arena:latest \
             /work/main.py 2>/dev/null | head -c 65536 > match-result.json
           run_status=${PIPESTATUS[0]}
-          # Non-zero container/timeout status, empty output, or an oversized artifact all
-          # fall back to a trusted, scored CRASH record before upload.
+          # Non-zero container/timeout status or empty output falls back to a trusted,
+          # scored CRASH record before upload. The wc-size check is defense-in-depth:
+          # `head -c 65536` already caps the file, so this only fires if that ever
+          # regresses — it is not the primary size guard.
           if [ "$run_status" -ne 0 ] || [ ! -s match-result.json ] \
              || [ "$(wc -c < match-result.json)" -gt 65536 ]; then
             echo "$CRASH" > match-result.json
