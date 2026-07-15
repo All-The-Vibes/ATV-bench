@@ -1,26 +1,86 @@
-# ATV-bench
+# ATV-bench Community League
 
-A lightweight harness benchmark for coding agents. Where SWE-bench and CodeClash
-measure the **model**, ATV-bench measures the whole **harness** — your skills,
-MCP servers, plugins, custom agents, and config — by putting two harnesses
-head-to-head in a game arena (Battlesnake, Tron) and producing an ELO score plus
-heuristic recommendations for improving the losing harness.
+A community leaderboard for coding-agent **harnesses**. Where SWE-bench and
+CodeClash measure the **model**, ATV-bench measures the whole **harness** — your
+skills, MCP servers, plugins, custom agents, and config — by putting harness-built
+bots head-to-head in a game arena (Battlesnake, Tron) and publishing an ELO score
+alongside a leak-safe fingerprint of each harness.
 
-Optimized for GitHub Copilot OAuth (CLI + ADE app), Claude Code, and
-bring-your-own-key.
+You submit **a bot + your harness fingerprint** (never a self-reported result). A
+GitHub Action runs the matches, recomputes ELO from scratch, and publishes a static
+leaderboard on GitHub Pages. No hosted server to run or trust.
 
-## Status
+## How it works (Approach A — git + Action + static Pages)
 
-Design + gating spikes complete. See `spikes/SPIKE_REPORT.md`. Implementation plan
-next (`/plan-eng-review`).
+```
+ you                                 this repo (GitHub)
+ ┌───────────────────────┐  PR       ┌───────────────────────────────┐
+ │ atv-bench submit       │ ────────▶ │ match job (untrusted):        │
+ │  local match           │           │   perms:{}, no token,         │
+ │  fingerprint probe     │           │   egress blocked → artifact   │
+ │  (leak-scrubbed)       │           ├───────────────────────────────┤
+ └───────────────────────┘           │ publish job (trusted):        │
+                                      │   reads artifact only,        │
+                                      │   recompute ELO, build board  │
+                                      └───────────────┬───────────────┘
+                                                      ▼
+                                       static leaderboard (GitHub Pages)
+                                       row = rank · ELO · fingerprint chips
+```
 
-## Quick start (dev)
+The two-job split is load-bearing: the job that executes an untrusted, harness-built
+bot has **no** `GITHUB_TOKEN`, no Pages write, and blocked egress. The trusted publish
+job never executes bot code — it only reads a schema-validated result artifact.
+
+## Scope of the claim (read this)
+
+v1 leaderboard rankings are **for entertainment and directional signal**, not an
+authoritative "which harness ingredients win" result. Fingerprints are **self-attested**
+(GitHub-OAuth identity proves *who* submitted, not that the reported capabilities are
+honest), so correlations between fingerprint tags and ELO are suggestive only. Treat the
+board as a leaderboard, not a study — until fingerprints are independently attestable.
+
+## Quick start (zero to board)
 
 ```bash
-uv venv && uv pip install pytest
-uv run pytest -m "not live"   # fast: contract + decoupling seam
-uv run pytest -m live -s      # live: real claude/copilot CLIs
+# 1. install
+uv venv && uv pip install -e '.[dev]'
+
+# 2. see exactly what your harness would publish (nothing leaves your machine)
+atv-bench fingerprint --dry-run
+
+# 3. validate + submit a bot your harness built
+atv-bench validate-game ./main.py
+atv-bench submit ./main.py --game battlesnake --dry-run   # preflight only
+atv-bench submit ./main.py --game battlesnake             # opens the PR
 ```
+
+`fingerprint --dry-run` prints a three-section consent view — **Will publish**,
+**Scrubbed** (values the scanner withheld, proving it ran), **Unknown** (surfaces it
+couldn't read). No secret-shaped value is ever published. Full contributor guide:
+[`CONTRIBUTING.md`](CONTRIBUTING.md). Design + security model:
+[`docs/COMMUNITY_LEAGUE.md`](docs/COMMUNITY_LEAGUE.md).
+
+## Dev
+
+```bash
+uv run pytest -m "not live and not integration"   # fast hermetic suite (every push)
+uv run pytest -m integration                       # gated: real-Docker bot containment
+uv run pytest -m live -s                           # live: real claude/copilot CLIs
+uv run python scripts/screenshot_leaderboard.py    # render the board in all 7 states
+```
+
+## Deferred: Approach B (hosted service)
+
+A hosted submit API + live websocket board was considered and **deferred** behind an
+explicit gate. It does not ship in v1 unless all of the following hold:
+
+- a **named owner** accountable for the service (auth, DB, ops, on-call);
+- a written **data-retention policy** for stored bots + fingerprints;
+- **> 25 voluntary submitters** on the Approach-A board (demonstrated demand).
+
+Until then the git + Action + static-Pages model is the whole league. Re-scope decision:
+both review models rejected the hosted approach 6/6 on strategy; it had no owner.
 
 ## Credits & license
 

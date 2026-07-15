@@ -5,3 +5,6 @@ vendor/CodeClash/
 .pytest_cache/
 *.egg-info/
 /tmp/
+.claude/worktrees/
+screenshots/
+site/

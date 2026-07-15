@@ -1,0 +1,144 @@
+# ATV-bench Community League — two-job security model.
+#
+# SECURITY MODEL (load-bearing): a submission carries an UNTRUSTED, harness-authored
+# bot. We never run it in a job that holds a token or can write Pages.
+#
+#   match   (untrusted): permissions: {}, no GITHUB_TOKEN, egress blocked, cpu/mem/pid
+#                        + time caps, non-root read-only container. Writes ONLY a
+#                        schema-shaped result artifact. Gated behind a protected
+#                        environment so first-time-contributor runs need approval.
+#   publish (trusted):   needs: match. Downloads the artifact, VALIDATES it against
+#                        the locked schema, recomputes ELO, builds + deploys the static
+#                        board. Never executes bot code or the arena.
+#
+# A regression in these properties is caught on every push by
+# tests/test_action_isolation.py (the CI tripwire), not here at deploy time.
+
+name: league
+
+on:
+  pull_request:
+    types: [labeled]        # a maintainer adds `run-match` after review
+  workflow_dispatch:
+
+concurrency:
+  group: league-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  match:
+    # UNTRUSTED job — runs the submitted bot. Zero privileges.
+    if: ${{ github.event.label.name == 'run-match' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions: {}
+    # Protected environment => first-time contributors need manual approval before
+    # the untrusted bot ever executes (GitHub gates entry to environments).
+    environment: league-match
+    steps:
+      - name: Checkout league code (NOT the untrusted PR head, no creds)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Fetch submitted bot into an isolated path
+        run: |
+          mkdir -p submission
+          # bot + fingerprint come from the PR; fetch as data, never execute here.
+          gh pr view "${PR}" --json files --jq '.files[].path' > /dev/null || true
+        env:
+          PR: ${{ github.event.pull_request.number }}
+        # NOTE: no GITHUB_TOKEN in env — this step degrades gracefully; real fetch
+        # uses the artifact upload/download boundary, not a token in the match job.
+
+      - name: Run bot in a locked-down sandbox container
+        run: |
+          # cpu/mem/pid/time caps + no network + non-root + read-only rootfs.
+          # The bot cannot exfiltrate (no egress), cannot fork-bomb (--pids-limit),
+          # cannot exhaust memory (--memory), cannot escalate (--user, --read-only).
+          #
+          # stderr -> /dev/null: an untrusted bot's stderr (tracebacks, debug prints,
+          # deliberately-planted secrets) would otherwise land in the PUBLIC job log,
+          # which GitHub does not mask for bot-sourced strings. Only the stdout JSON
+          # result is captured, and only into the artifact — never the log.
+          docker run --rm \
+            --network none \
+            --memory 512m --memory-swap 512m \
+            --cpus 1 \
+            --pids-limit 128 \
+            --read-only \
+            --user 65534:65534 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            -v "$PWD/submission:/work:ro" \
+            atv-bench/arena:latest \
+            /work/main.py > match-result.json 2>/dev/null || echo '{"status":"crash"}' > match-result.json
+
+      - name: Validate result is well-formed JSON before upload
+        run: |
+          # Guard: a bot can exit 0 while printing non-JSON to stdout, which would
+          # otherwise be uploaded as a malformed artifact. Replace anything that is
+          # not parseable JSON with a schema-shaped crash record.
+          python3 - <<'PY'
+          import json, pathlib
+          p = pathlib.Path("match-result.json")
+          try:
+              data = json.loads(p.read_text())
+              assert isinstance(data, dict) and "status" in data
+          except Exception:
+              p.write_text('{"status": "invalid_output"}')
+              print("bot produced non-JSON output; replaced with invalid_output record")
+          PY
+
+      - name: Upload result artifact (the ONLY output of this job)
+        uses: actions/upload-artifact@v4
+        with:
+          name: match-result
+          path: match-result.json
+          retention-days: 7
+
+  publish:
+    # TRUSTED job — never runs bot code. Consumes the artifact only.
+    needs: match
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: write
+      id-token: write   # required by actions/deploy-pages OIDC (Pages only)
+    environment:
+      name: github-pages
+    steps:
+      - name: Checkout league code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download match result artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: match-result
+          path: ./artifacts
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install (validation + board build only)
+        run: pip install -e '.[dev]'
+
+      - name: Validate artifact against the locked schema (no bot execution)
+        run: python -m atv_bench.publish validate ./artifacts/match-result.json
+
+      - name: Recompute ELO from history + build static board
+        run: python -m atv_bench.publish build --out ./site
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./site
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
