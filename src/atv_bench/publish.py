@@ -16,49 +16,89 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from atv_bench.elo import ForfeitReason, Outcome
 from atv_bench.leaderboard import validate_leaderboard
 from atv_bench.store import LeagueStore, build_leaderboard_from_store
 
-# a match-result artifact must carry at least these keys.
-_RESULT_REQUIRED_KEYS = {"status", "player_a", "player_b", "outcome", "match_id"}
+_VALID_STATUSES = {"ok", "crash", "invalid_output"}
+_FORFEIT_OUTCOMES = {Outcome.FORFEIT_A.value, Outcome.FORFEIT_B.value}
+_OK_REQUIRED_KEYS = {"player_a", "player_b", "outcome", "match_id"}
+_CRASH_REQUIRED_KEYS = {"loser", "opponent", "match_id"}
 _EPOCH = "1970-01-01T00:00:00Z"
 _DEFAULT_STORE = "league"
 
 
 def validate_artifact(path: str) -> dict[str, Any]:
-    """Validate a match-result artifact. Raises on malformed/missing."""
+    """Validate a match-result artifact — FAIL-CLOSED at the trust boundary.
+
+    An untrusted bot's run produced this. We reject anything that isn't one of the
+    known result shapes BEFORE it can reach the store or the ELO engine (a deferred
+    raise inside the trusted job is a DOS/poison surface).
+    """
     try:
         data = json.loads(Path(path).read_text())
     except (json.JSONDecodeError, ValueError) as e:
         raise ValueError(f"artifact is not valid JSON: {e}")
-    if not isinstance(data, dict) or "status" not in data:
-        raise ValueError("artifact must be an object with a 'status' key")
-    # a crash/invalid record only needs status; a real result needs the match keys.
-    if data.get("status") == "ok":
-        missing = _RESULT_REQUIRED_KEYS - set(data)
+    if not isinstance(data, dict):
+        raise ValueError("artifact must be a JSON object")
+    status = data.get("status")
+    if status not in _VALID_STATUSES:
+        raise ValueError(f"status must be one of {sorted(_VALID_STATUSES)}, got {status!r}")
+    if status == "ok":
+        missing = _OK_REQUIRED_KEYS - set(data)
         if missing:
-            raise ValueError(f"ok result missing required keys {sorted(missing)}")
+            raise ValueError(f"ok result missing keys {sorted(missing)}")
+        outcome = data["outcome"]
+        if outcome not in {o.value for o in Outcome}:
+            raise ValueError(f"invalid outcome {outcome!r}")
+        if outcome in _FORFEIT_OUTCOMES:
+            reason = data.get("forfeit_reason")
+            if reason not in {r.value for r in ForfeitReason}:
+                raise ValueError(f"forfeit outcome requires a valid forfeit_reason, got {reason!r}")
+        for p in ("player_a", "player_b"):
+            if not isinstance(data[p], str) or not data[p]:
+                raise ValueError(f"{p} must be a non-empty string")
+    elif status in ("crash", "invalid_output"):
+        missing = _CRASH_REQUIRED_KEYS - set(data)
+        if missing:
+            raise ValueError(f"{status} record missing keys {sorted(missing)} "
+                             "(loser+opponent needed to score the forfeit)")
     return data
 
 
 def ingest_result(path: str, *, store_dir: str = _DEFAULT_STORE) -> bool:
-    """Append a validated OK match result to the store's history.
+    """Append a validated result to the store's history.
 
-    Returns True if a match was appended, False for crash/invalid records (which are
-    intentionally not scored as a match — a crashed run has no opponent outcome).
+    An `ok` result is appended as-is. A `crash`/`invalid_output` record is scored as a
+    FORFEIT LOSS for the crashing player (reason CRASH) — never dropped, because a
+    dropped forfeit skews everyone's ELO (the forfeit=loss+reason claim). Returns True
+    when a match was appended.
     """
     data = validate_artifact(path)
-    if data.get("status") != "ok":
-        return False
     store = LeagueStore(store_dir)
+    if data["status"] == "ok":
+        match = {
+            "player_a": data["player_a"],
+            "player_b": data["player_b"],
+            "outcome": data["outcome"],
+            "match_id": data["match_id"],
+            "game": data.get("game", "battlesnake"),
+            "seed": int(data.get("seed", 0)),
+        }
+        if data.get("forfeit_reason"):
+            match["forfeit_reason"] = data["forfeit_reason"]
+        store.append_match(match)
+        return True
+    # crash / invalid_output -> forfeit loss for the crasher
+    loser, opponent = data["loser"], data["opponent"]
     store.append_match({
-        "player_a": data["player_a"],
-        "player_b": data["player_b"],
-        "outcome": data["outcome"],
+        "player_a": opponent,
+        "player_b": loser,
+        "outcome": Outcome.FORFEIT_B.value,   # player_b (loser) forfeited
+        "forfeit_reason": ForfeitReason.CRASH.value,
         "match_id": data["match_id"],
         "game": data.get("game", "battlesnake"),
         "seed": int(data.get("seed", 0)),
-        **({"forfeit_reason": data["forfeit_reason"]} if data.get("forfeit_reason") else {}),
     })
     return True
 

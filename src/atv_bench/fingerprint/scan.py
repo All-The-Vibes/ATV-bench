@@ -79,6 +79,8 @@ _SECRET_KEYWORDS = (
     "password", "passwd", "secret", "token", "apikey", "api-key", "api_key",
     "credential", "private-key", "privatekey", "access-key", "accesskey",
     "auth-token", "bearer", "session-key",
+    # round-2: shorter credential stems (a name containing these is suspicious)
+    "passphrase", "-pass", "pass-", "_pass", "pass_", "-pwd", "pwd-", "passwd",
 )
 
 
@@ -112,7 +114,22 @@ _COMMON_WEAK_SECRETS = frozenset({
 
 
 def _is_common_weak_secret(value: str) -> bool:
-    return value.lower() in _COMMON_WEAK_SECRETS
+    low = value.lower()
+    if low in _COMMON_WEAK_SECRETS:
+        return True
+    # round-2: a common weak secret with a short suffix (hunter2x, hunter2024,
+    # admin123). Treat any value that STARTS with a known weak secret as suspicious.
+    if any(low.startswith(w) for w in _COMMON_WEAK_SECRETS):
+        return True
+    # or whose alpha-only core is a known weak secret (adminX -> admin)
+    stripped = re.sub(r"[^a-z]", "", low)
+    return stripped in _COMMON_WEAK_SECRETS
+
+
+def _is_all_digits(value: str) -> bool:
+    # round-2: a long all-digit string (123456789012) is not a real skill name and is
+    # a common secret/PIN shape. Short numeric versions (v2, 4) stay allowed.
+    return len(value) >= 6 and value.isdigit()
 
 
 def is_secret(value: str) -> bool:
@@ -131,6 +148,8 @@ def is_secret(value: str) -> bool:
     if norm != value:
         return True
     if _is_common_weak_secret(value):
+        return True
+    if _is_all_digits(value):
         return True
     if _has_secret_keyword(value):
         return True

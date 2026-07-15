@@ -68,9 +68,11 @@ probes are fast-follow; their surfaces emit as `unknown[]` until implemented.
 
 The scanner provably blocks secret-*shaped* values: known token shapes, credential
 prefixes (`sk-`, `ghp`, `xox`, `AKIA`…), credentials-in-URL, PEM blocks, credential
-keywords, unicode/zero-width tricks, and high-entropy blobs. A red-team fan-out
-(5 independent adversaries, two rounds) drove these fixes and now reports the scanner
-leak-safe against secret-shaped input.
+keywords (`password`, `secret`, `pass`, `pwd`…), common weak secrets/defaults
+(`hunter2`, `admin`, `root`… and their suffixed variants), long all-digit strings,
+unicode/zero-width tricks, and high-entropy blobs. Independent red-team and dual-review
+rounds drove these fixes and now report the scanner leak-safe against secret-shaped
+input.
 
 What no string scanner can do is distinguish a *benign* low-entropy slug from a
 *secret* that happens to look like one — if a user literally names a skill

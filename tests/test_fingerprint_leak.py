@@ -305,3 +305,28 @@ def test_santa_common_secret_not_emitted_as_model_or_mcp(tmp_path):
     assert "hunter2" not in blob
     assert result.manifest["model"] == "unknown"  # rejected, not emitted
     assert result.manifest["mcps"] == []
+
+
+@pytest.mark.parametrize("secret", [
+    "hunter2x",        # round-2: common secret + suffix
+    "hunter2024",
+    "123456789012",    # round-2: all-digit run
+    "000000000000",
+    "db-pass",         # round-2: 'pass' stem
+    "app-pwd",         # 'pwd' stem
+    "my-passphrase",
+])
+def test_santa_r2_weak_secret_variants_rejected(secret):
+    from atv_bench.fingerprint.scan import is_secret, is_safe_name
+    assert is_secret(secret) is True, f"{secret!r} should be rejected"
+    assert is_safe_name(secret) is False
+
+
+@pytest.mark.parametrize("legit", [
+    "gstack", "office-hours", "compound-engineering", "claude-opus-4-8",
+    "github", "grafana", "code-review", "test-runner", "v2", "web3-tools",
+])
+def test_santa_r2_legit_names_still_pass(legit):
+    # the hardening must NOT over-reject real skill/MCP names
+    from atv_bench.fingerprint.scan import is_safe_name
+    assert is_safe_name(legit) is True, f"{legit!r} should be allowed"

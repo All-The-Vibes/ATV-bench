@@ -165,6 +165,11 @@ def variance_gate(
     Numeric teeth: require >= _MIN_MATCHES between the pair, CI width under
     _MAX_CI_WIDTH, and (for near-identical players) spread over _MIN_PUBLISH_SPREAD.
     Identical bots split ~50/50 -> spread stays small -> not publishable.
+
+    This is the pairwise A/A gate used in the variance-control workflow. The published
+    leaderboard applies the SAME numeric teeth per row (see leaderboard._low_conf,
+    which marks a row low-confidence when its CI width exceeds the publishable max),
+    so a low-signal entrant is visibly demoted rather than ranked as if stable.
     """
     a, b = player_pair
     pair_matches = [

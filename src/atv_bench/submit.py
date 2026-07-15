@@ -17,6 +17,7 @@ from atv_bench.fingerprint.scan import is_secret
 
 # Bots are single small files (v1 arena bots). Guard shape/size before execution.
 _MAX_BOT_BYTES = 256 * 1024
+_REPO_URL = "https://github.com/All-The-Vibes/ATV-bench"
 
 
 @dataclass(frozen=True)
@@ -95,8 +96,15 @@ def build_submission(
     fingerprint: dict[str, Any],
     identity: str,
     game: str,
+    pr_url: str = "",
+    logs_url: str = "",
 ) -> dict[str, Any]:
-    """Compose the submission artifact PR'd to the league repo."""
+    """Compose the submission artifact PR'd to the league repo.
+
+    This is the SINGLE canonical submission shape consumed by LeagueStore.add_submission
+    and build_leaderboard_doc. `pr_url`/`logs_url` are known only once the PR exists;
+    they default to the repo URL and are backfilled by the merge/publish step.
+    """
     validate_bot_shape(bot_path)
     leak = _fingerprint_has_leak(fingerprint)
     if leak:
@@ -107,6 +115,8 @@ def build_submission(
         "game": game,
         "bot_sha256": hashlib.sha256(data).hexdigest(),
         "bot_filename": Path(bot_path).name,
+        "pr_url": pr_url or _REPO_URL,
+        "logs_url": logs_url or _REPO_URL,
         "fingerprint": fingerprint,
     }
 

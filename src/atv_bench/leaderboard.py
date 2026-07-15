@@ -14,6 +14,10 @@ SCHEMA_VERSION = 1
 # rated rows with fewer than this many matches are shown but marked low-confidence
 # and demoted below stable rows (matches the viewer's treatment).
 _LOW_CONFIDENCE_MATCHES = 5
+# Published max CI width (ELO points). A rated row wider than this carries too little
+# signal to rank as stable — this is the variance gate's numeric teeth applied at row
+# level. Sized so a row with >= _LOW_CONFIDENCE_MATCHES matches clears it.
+_MAX_PUBLISH_CI_WIDTH = 330
 
 # forfeit/unknown reason enums must match the probe + elo modules exactly.
 _UNKNOWN_REASONS = [
@@ -136,7 +140,15 @@ def build_leaderboard_doc(
 
     def _low_conf(n: str) -> bool:
         b = board[n]
-        return bool(b["rated"] and 0 < b["match_count"] < _LOW_CONFIDENCE_MATCHES)
+        if not b["rated"]:
+            return False
+        # Variance-gate teeth (wired from elo._MAX_CI_WIDTH, not just a match count):
+        # a rated row whose confidence interval is wider than the publishable maximum,
+        # OR that has too few matches, carries insufficient signal -> low confidence.
+        ci_width = b["ci"]["hi"] - b["ci"]["lo"]
+        if ci_width > _MAX_PUBLISH_CI_WIDTH:
+            return True
+        return 0 < b["match_count"] < _LOW_CONFIDENCE_MATCHES
 
     # Rank tiers (must match the viewer's display order so JSON rank == visual row):
     #   1. stable rated rows (>= _LOW_CONFIDENCE_MATCHES matches)

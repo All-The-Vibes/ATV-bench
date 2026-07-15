@@ -177,3 +177,32 @@ def test_validator_accepts_http_and_https_urls():
     }
     doc = build_leaderboard_doc(matches, subs, updated_at="2026-07-15T18:00:00Z")
     validate_leaderboard(doc)  # no raise
+
+
+def test_variance_gate_marks_low_signal_rows():
+    """R2-Fix D: the A/A variance gate must be WIRED into the published board, not
+    dead code. A rated player whose ELO signal is below the gate's numeric threshold
+    (too few matches / CI too wide) must be marked low_confidence in the row."""
+    # alice has only 2 matches -> below the gate's min-match threshold -> low signal
+    matches = [
+        MatchResult("alice", "bob", Outcome.A_WINS, match_id="m1"),
+        MatchResult("alice", "bob", Outcome.A_WINS, match_id="m2"),
+    ]
+    subs = {n: {"fingerprint": _fingerprint(), "identity": n, "bot_sha256": "e" * 64,
+                "pr_url": "https://github.com/x/y/pull/1", "logs_url": "https://x/l"}
+            for n in ("alice", "bob")}
+    doc = build_leaderboard_doc(matches, subs, updated_at="2026-07-15T18:00:00Z")
+    alice = next(r for r in doc["rows"] if r["identity"] == "alice")
+    assert alice["low_confidence"] is True  # gate fired: insufficient signal
+
+
+def test_variance_gate_clears_high_signal_rows():
+    # a player with many matches and a real spread clears the gate (not low_confidence)
+    matches = [MatchResult("champ", f"opp{i}", Outcome.A_WINS, match_id=f"c{i}") for i in range(12)]
+    names = {"champ"} | {f"opp{i}" for i in range(12)}
+    subs = {n: {"fingerprint": _fingerprint(), "identity": n, "bot_sha256": "f" * 64,
+                "pr_url": "https://github.com/x/y/pull/1", "logs_url": "https://x/l"}
+            for n in names}
+    doc = build_leaderboard_doc(matches, subs, updated_at="2026-07-15T18:00:00Z")
+    champ = next(r for r in doc["rows"] if r["identity"] == "champ")
+    assert champ["low_confidence"] is False

@@ -65,6 +65,13 @@ jobs:
           cp "$BOT" submission/main.py
 
       - name: Run bot in a locked-down sandbox container
+        env:
+          # Match identities from the spec. The submitter is the PR author; the
+          # opponent is the baseline anchor for v1. A crash is scored as the
+          # submitter forfeiting (loss + reason CRASH), never dropped.
+          SUBMITTER: ${{ github.event.pull_request.user.login || 'submitter' }}
+          OPPONENT: byok-anchor
+          MATCH_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           # cpu/mem/pid/time caps + no network + non-root + read-only rootfs.
           # The bot cannot exfiltrate (no egress), cannot fork-bomb (--pids-limit),
@@ -74,6 +81,8 @@ jobs:
           # deliberately-planted secrets) would otherwise land in the PUBLIC job log,
           # which GitHub does not mask for bot-sourced strings. Only the stdout JSON
           # result is captured, and only into the artifact — never the log.
+          CRASH=$(printf '{"status":"crash","loser":"%s","opponent":"%s","match_id":"%s"}' \
+            "$SUBMITTER" "$OPPONENT" "$MATCH_ID")
           docker run --rm \
             --network none \
             --memory 512m --memory-swap 512m \
@@ -85,22 +94,31 @@ jobs:
             --security-opt no-new-privileges \
             -v "$PWD/submission:/work:ro" \
             atv-bench/arena:latest \
-            /work/main.py > match-result.json 2>/dev/null || echo '{"status":"crash"}' > match-result.json
+            /work/main.py > match-result.json 2>/dev/null || echo "$CRASH" > match-result.json
 
       - name: Validate result is well-formed JSON before upload
+        env:
+          SUBMITTER: ${{ github.event.pull_request.user.login || 'submitter' }}
+          OPPONENT: byok-anchor
+          MATCH_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           # Guard: a bot can exit 0 while printing non-JSON to stdout, which would
           # otherwise be uploaded as a malformed artifact. Replace anything that is
-          # not parseable JSON with a schema-shaped crash record.
-          python3 - <<'PY'
-          import json, pathlib
+          # not a parseable, known-status record with a schema-complete crash record
+          # (loser+opponent+match_id) so the publish side scores it as a forfeit.
+          python3 - <<PY
+          import json, os, pathlib
           p = pathlib.Path("match-result.json")
+          fallback = {"status": "invalid_output",
+                      "loser": os.environ["SUBMITTER"],
+                      "opponent": os.environ["OPPONENT"],
+                      "match_id": os.environ["MATCH_ID"]}
           try:
               data = json.loads(p.read_text())
-              assert isinstance(data, dict) and "status" in data
+              assert isinstance(data, dict) and data.get("status") in {"ok", "crash", "invalid_output"}
           except Exception:
-              p.write_text('{"status": "invalid_output"}')
-              print("bot produced non-JSON output; replaced with invalid_output record")
+              p.write_text(json.dumps(fallback))
+              print("bot produced non-JSON / unknown status; replaced with invalid_output record")
           PY
 
       - name: Upload result artifact (the ONLY output of this job)
@@ -116,7 +134,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
-      contents: read
+      contents: write   # commit the ingested match back to league/ (durable history)
       pages: write
       id-token: write   # required by actions/deploy-pages OIDC (Pages only)
     environment:
@@ -125,11 +143,10 @@ jobs:
       - name: Checkout TRUSTED league code (pinned to default branch, never PR head)
         uses: actions/checkout@v4
         with:
-          persist-credentials: false
-          # Pin to the trusted default branch. A pull_request-triggered checkout
-          # defaults to the PR MERGE ref; running this job's build/install steps from
-          # PR-controlled code with pages:write + id-token:write is a pwn-request
-          # escalation. We only ever build from trusted, already-merged code + store.
+          # persist-credentials default (true) so the commit-back can push. This is
+          # the TRUSTED job on the default branch — it never runs bot code, and the
+          # checkout is pinned to the default branch (not the PR ref), so the token is
+          # never exposed to untrusted code.
           ref: ${{ github.event.repository.default_branch }}
 
       - name: Download match result artifact
@@ -159,6 +176,21 @@ jobs:
         env:
           PYTHONPATH: src
         run: python -m atv_bench.publish ingest ./artifacts/match-result.json --store league
+
+      - name: Persist match history back to the default branch (durable store)
+        run: |
+          # The recompute-from-history claim needs history to actually persist. Commit
+          # the appended match back to the trusted default branch. Safe: this runs only
+          # in the trusted publish job on the default branch, never touches bot code.
+          if git diff --quiet -- league/; then
+            echo "no store change to commit"
+          else
+            git config user.name "atv-bench-bot"
+            git config user.email "atv-bench-bot@users.noreply.github.com"
+            git add league/
+            git commit -m "league: record match ${{ github.run_id }} [skip ci]"
+            git push origin HEAD:${{ github.event.repository.default_branch }}
+          fi
 
       - name: Recompute ELO from full history + build static board
         env:

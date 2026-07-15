@@ -73,8 +73,27 @@ def test_build_submission_shape():
     assert sub["game"] == "battlesnake"
     assert len(sub["bot_sha256"]) == 64
     assert sub["fingerprint"] == fingerprint
+    # store-compatible: carries pr_url + logs_url (the store requires them)
+    assert sub["pr_url"].startswith("https://")
+    assert sub["logs_url"].startswith("https://")
     # never carries a self-reported result
     assert "result" not in sub and "elo" not in sub and "win" not in sub
+
+
+def test_build_submission_is_store_ingestable(tmp_path):
+    """R2: build_submission output must be directly ingestable by LeagueStore
+    (the two contracts previously disagreed on required keys)."""
+    from atv_bench.store import LeagueStore
+    fingerprint = {
+        "harness": "claude-code", "model": "claude-opus-4-8", "gstack": True,
+        "skills": ["gstack"], "mcps": [], "plugins": [], "custom_agents_count": 0,
+        "unknown": [], "probe_version": "1.0.0",
+    }
+    sub = build_submission(bot_path=_write_bot(), fingerprint=fingerprint,
+                           identity="octocat", game="battlesnake")
+    store = LeagueStore(str(tmp_path / "league"))
+    store.add_submission(sub)  # must not raise
+    assert "octocat" in store.load_submissions()
 
 
 def test_build_submission_rejects_leaky_fingerprint():
