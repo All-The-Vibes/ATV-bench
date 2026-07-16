@@ -61,8 +61,33 @@ jobs:
           ref: refs/pull/${{ github.event.pull_request.number }}/head
           persist-credentials: false
           path: pr-src
+          # Need history to diff the PR against its base for the path-confinement gate.
+          fetch-depth: 0
+
+      - name: Gate — a community PR may only touch its OWN submission tree
+        # santa round-4 (Reviewer B CRITICAL): the durable leaderboard is rebuilt from
+        # committed files, so a merged PR that edits league/matches.jsonl directly or writes
+        # into another entrant's directory could forge history / poison another row. Fail
+        # CLOSED here (before scoring) if the PR changes anything outside
+        # league/submissions/<author>/{main.py,submission.json}. Runs against the TRUSTED
+        # default-branch checkout's code (python -m atv_bench.cli), never pr-src code.
+        env:
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          git -C pr-src fetch --no-tags --depth=1 origin "$BASE_SHA" || true
+          # Changed paths of the PR head vs its merge base, computed from untrusted tree
+          # metadata only (names, never contents). The validator confines them.
+          git -C pr-src diff --name-only "$BASE_SHA"...HEAD > changed-paths.txt || \
+            git -C pr-src diff --name-only "$BASE_SHA" HEAD > changed-paths.txt
+          echo "PR changed paths:"; cat changed-paths.txt
+          python -m atv_bench.cli validate-pr-paths --author "$AUTHOR" \
+            --paths-file changed-paths.txt
 
       - name: Extract the bot file into the sandbox mount dir
+        id: extract
         env:
           SUBMITTER: ${{ github.event.pull_request.user.login || 'submitter' }}
           OPPONENT: byok-anchor
@@ -80,9 +105,36 @@ jobs:
             echo "$CRASH" > match-result.json
             echo "no bot at $BOT (identity-pinned path required)"; exit 0
           fi
+          # Symlink confinement (santa round-6): -f/wc/cp all FOLLOW symlinks, and the
+          # PR-path gate only checks path STRINGS. A submitter could make their own
+          # main.py a symlink to ../victim/main.py and have the trusted job hash/run the
+          # victim's bytes under the submitter's login (identity forgery). Reject any bot
+          # that is a symlink, or whose realpath escapes the submitter's own directory,
+          # BEFORE it is sized, copied, hashed, or executed. Fail closed to a scored crash.
+          SUB_DIR="pr-src/league/submissions/${SUBMITTER}"
+          if [ -L "$BOT" ]; then
+            echo "$CRASH" > match-result.json
+            echo "bot main.py is a symlink (rejected)"; exit 0
+          fi
+          REAL_BOT="$(realpath "$BOT")"
+          REAL_DIR="$(realpath "$SUB_DIR")"
+          case "$REAL_BOT" in
+            "$REAL_DIR"/*) : ;;  # inside the submitter's own directory — OK
+            *)
+              echo "$CRASH" > match-result.json
+              echo "bot main.py resolves outside ${SUB_DIR} (escape rejected)"; exit 0
+              ;;
+          esac
           SZ=$(wc -c < "$BOT")
           if [ "$SZ" -gt 262144 ]; then echo "$CRASH" > match-result.json; echo "bot too large"; exit 0; fi
           cp "$BOT" submission/main.py
+          # Bot-identity binding (santa re-review #5): hash the EXACT bytes we mounted into
+          # the sandbox and publish it as a TRUSTED job output. The publish job stamps this
+          # onto the scored record (never the bot-reported value), so a scored result is
+          # provably tied to the submitted bytes and cannot be re-attributed to a later
+          # swapped bot under the same login. Computed on trusted staged bytes, not bot
+          # stdout — the untrusted bot never influences it.
+          echo "bot_sha256=$(sha256sum submission/main.py | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Build the arena image from the TRUSTED in-repo Dockerfile
         run: |
@@ -129,6 +181,13 @@ jobs:
           # look successful. Capture ${PIPESTATUS[0]} (the timeout/docker status, which
           # `head` does not affect) and fall back to CRASH on ANY non-zero (124 = timeout,
           # or the bot's own non-zero exit). `head` still bounds the on-disk artifact.
+          # The container ENTRYPOINT is the TRUSTED referee (`python3 -m atv_bench.arena`),
+          # not a bare python that runs the bot's stdout as the result. The referee plays
+          # a real lightcycles game, driving the mounted bot as a MOVE-ONLY subprocess, and
+          # prints the ADJUDICATED result. So this stdout is the referee's verdict, never a
+          # bot-authored outcome. The trusted match identity is passed as env (ATV_*) — the
+          # referee stamps player_a/player_b/match_id from it, never from bot output. The
+          # publish job still independently spec-binds identity (defense in depth).
           set +e
           timeout 300 docker run --rm \
             --network none \
@@ -139,6 +198,9 @@ jobs:
             --user 65534:65534 \
             --cap-drop ALL \
             --security-opt no-new-privileges \
+            -e ATV_SUBMITTER="$SUBMITTER" \
+            -e ATV_OPPONENT="$OPPONENT" \
+            -e ATV_MATCH_ID="$MATCH_ID" \
             -v "$PWD/submission:/work:ro" \
             atv-bench/arena:${{ github.run_id }} \
             /work/main.py 2>/dev/null | head -c 65536 > match-result.json
@@ -177,193 +239,42 @@ jobs:
               print("bot produced non-JSON / unknown status; replaced with invalid_output record")
           PY
 
-      - name: Upload result artifact (the ONLY output of this job)
+      - name: Write the TRUSTED match-meta (GitHub context, never bot stdout)
+        env:
+          SUBMITTER: ${{ github.event.pull_request.user.login }}
+          OPPONENT: byok-anchor
+          MATCH_ID: ${{ github.run_id }}
+          BOT_SHA256: ${{ steps.extract.outputs.bot_sha256 }}
+        run: |
+          # santa re-review #7: the privileged persist/deploy phase moves to a separate
+          # workflow_run workflow (league-publish.yml) so FORK PRs can score (a fork PR's
+          # GITHUB_TOKEN is read-only in THIS pull_request run). A workflow_run event does
+          # not carry the PR author, so this UNTRUSTED job hands the trusted publish
+          # workflow the match spec as a SEPARATE artifact — built here from GitHub context
+          # (github.event.pull_request.user.login / github.run_id) and the trusted staged-
+          # bytes hash, NEVER from bot stdout. The publish workflow binds the ok artifact to
+          # exactly these values (--require-spec). SUBMITTER is intentionally NOT defaulted:
+          # a blank login means no scoreable identity and the publish side fails closed.
+          python3 - <<'PY'
+          import json, os, pathlib
+          meta = {
+              "submitter": os.environ.get("SUBMITTER", ""),
+              "opponent": os.environ["OPPONENT"],
+              "match_id": os.environ["MATCH_ID"],
+              "bot_sha256": os.environ.get("BOT_SHA256", ""),
+          }
+          pathlib.Path("match-meta.json").write_text(json.dumps(meta))
+          print("wrote trusted match-meta:", meta)
+          PY
+
+      - name: Upload result + trusted meta (the ONLY outputs of this job)
         uses: actions/upload-artifact@v4
         with:
           name: match-result
-          path: match-result.json
+          # Both the bot-controlled result AND the trusted meta travel to the publish
+          # workflow. The result is untrusted data; the meta is the trust anchor.
+          path: |
+            match-result.json
+            match-meta.json
           retention-days: 7
 
-  publish:
-    # TRUSTED job — never runs bot code. Consumes the artifact only.
-    needs: match
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    # NOTE: intentionally NO job-level `concurrency` group. A serializing group would
-    # DROP matches, not protect them: GitHub keeps only ONE pending run per concurrency
-    # group and cancels an older pending run when a newer one queues (cancel-in-progress
-    # protects only the IN-PROGRESS run, not pending ones). With >=3 near-simultaneous
-    # publishes, the queued one is cancelled and its already-scored match is lost — the
-    # exact bug santa #3 targets. Instead, the persist step below uses an idempotent
-    # fetch + re-ingest + retry loop that is race-safe WITHOUT serialization and never
-    # drops a match. See tests/test_publish_race.py.
-    permissions:
-      contents: write   # commit the ingested match back to league/ (durable history)
-      pages: write
-      id-token: write   # required by actions/deploy-pages OIDC (Pages only)
-    environment:
-      name: github-pages
-    steps:
-      - name: Checkout TRUSTED league code (pinned to default branch, never PR head)
-        uses: actions/checkout@v4
-        with:
-          # persist-credentials default (true) so the commit-back can push. This is
-          # the TRUSTED job on the default branch — it never runs bot code, and the
-          # checkout is pinned to the default branch (not the PR ref), so the token is
-          # never exposed to untrusted code.
-          ref: ${{ github.event.repository.default_branch }}
-
-      - name: Download match result artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: match-result
-          path: ./artifacts
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install pinned deps (NOT an editable install of checked-out code)
-        run: |
-          # Do NOT `pip install -e .` — that executes the package's build hooks. We
-          # only need the runtime deps to run atv_bench as a module from the trusted
-          # checkout via PYTHONPATH=src.
-          pip install "jsonschema>=4.0"
-
-      - name: Ingest result into history (SINGLE fail-closed scoring gate)
-        env:
-          PYTHONPATH: src
-          # TRUSTED match spec from GitHub context — NOT from the untrusted bot's stdout.
-          # --require-spec binds the ok artifact's player_a/player_b/match_id to these
-          # exact values; a bot that forged a third-party identity or a fabricated
-          # match_id is rebound to a CRASH forfeit against the submitter (never trusted,
-          # never dropped). Must match the identities the match job pitted them against.
-          # No `|| 'submitter'` fallback here: on a non-PR context the login is blank and
-          # MatchSpec.from_env fails closed rather than inventing a phantom entrant.
-          #
-          # This is the ONLY validation gate: ingest --require-spec validates internally
-          # and converts ANY malformed/invalid artifact into a spec-bound submitter
-          # forfeit. A separate hard-failing `validate` step is deliberately NOT run — it
-          # would let a bot emit a known-status-but-invalid artifact to abort the whole
-          # job and record NO score (a bot-controlled no-score DoS). match_id is stable
-          # (github.run_id, no run_attempt) so a publish re-run reuses the same spec and
-          # never rebinds an honest earlier-attempt artifact into a forfeit.
-          ATV_SUBMITTER: ${{ github.event.pull_request.user.login }}
-          ATV_OPPONENT: byok-anchor
-          ATV_MATCH_ID: ${{ github.run_id }}
-        run: python -m atv_bench.publish ingest ./artifacts/match-result.json --store league --require-spec
-
-      - name: Recompute ELO from full history + build static board
-        env:
-          PYTHONPATH: src
-        run: |
-          # Build (which validates the whole board) BEFORE committing the store, so a
-          # poison/invalid artifact fails here and is never persisted to the branch.
-          python -m atv_bench.publish build \
-            --out ./site --store league \
-            --updated-at "$(git show -s --format=%cI HEAD)"
-
-      - name: Persist match history back to the default branch (durable store)
-        # explicit bash: the loop uses `$RANDOM` (a bash builtin) for jitter. GitHub
-        # defaults to bash on Linux, but pin it so a runner-default change can't break the
-        # backoff — mirrors the match job's `shell: bash` pin.
-        shell: bash
-        env:
-          PYTHONPATH: src
-          ATV_SUBMITTER: ${{ github.event.pull_request.user.login }}
-          ATV_OPPONENT: byok-anchor
-          ATV_MATCH_ID: ${{ github.run_id }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          # Commit the ingested match back to the trusted default branch so
-          # recompute-from-history persists. Safe: trusted publish job, default branch,
-          # never touches bot code.
-          #
-          # santa re-review #3: a single-shot push drops the match on a non-fast-forward
-          # race (another PR's publish pushed first). We use OPTIMISTIC CONCURRENCY, which
-          # is race-safe WITHOUT a serializing GitHub concurrency group. A constant-group
-          # `concurrency:` would itself DROP matches: GitHub keeps only one PENDING run per
-          # group and "any existing pending job... will be canceled" when a newer run
-          # queues (cancel-in-progress:false protects only the IN-PROGRESS run, not pending
-          # ones) — so a burst of publishes silently loses the cancelled ones. Instead, on
-          # each attempt we reset to the freshly-fetched trusted branch, RE-INGEST this
-          # match on top (idempotent — matches.jsonl dedups on the stable github.run_id
-          # match_id), rebuild, then push. A rejected push re-fetches and re-applies.
-          #
-          # The retry is DEADLINE-bounded with exponential backoff + jitter (not a small
-          # fixed count): under a bursty label storm only one publish wins per push round,
-          # so a fixed 5-attempt cap could exhaust and fail a job with its match unpushed.
-          # Retrying until a generous deadline (well inside the 10-min job timeout) means
-          # every scored match persists rather than needing a manual re-run; if the
-          # deadline IS hit the step fails closed (exit 1, loud + re-runnable), never
-          # silently dropping a match.
-          #
-          # NOTE: league/matches.jsonl is UNTRACKED until the first match, and
-          # `git diff --quiet -- league/` IGNORES untracked files. So we always stage
-          # with `git add -A league/` first and detect real changes via `git diff
-          # --cached`, never a bare pre-stage `git diff --quiet` (which would silently
-          # drop the very first match).
-          git config user.name "atv-bench-bot"
-          git config user.email "atv-bench-bot@users.noreply.github.com"
-
-          deadline=$(( $(date +%s) + 420 ))   # ~7 min budget, inside the 10-min job timeout
-          attempt=0
-          while :; do
-            # Check the deadline at the TOP so a long backoff sleep can't carry the clock
-            # past the budget into another full attempt. Fail closed (exit 1) if exhausted.
-            if [ "$(date +%s)" -ge "$deadline" ]; then
-              echo "store push did not succeed within the deadline after $attempt attempts" >&2
-              exit 1
-            fi
-            attempt=$((attempt + 1))
-
-            # Reset hard to the latest trusted branch, INCLUDING untracked store files, so
-            # each attempt re-applies from a clean, current origin state (never stale local
-            # files). Scoped to league/; -fd (no -x) so a future gitignored path elsewhere
-            # is never wiped, and the gitignored build output ./site (outside league/) is
-            # untouched.
-            git fetch origin "$DEFAULT_BRANCH"
-            git reset --hard "origin/$DEFAULT_BRANCH"
-            git clean -fd league/
-
-            # Re-apply THIS match onto the fresh store, then rebuild the board. --updated-at
-            # is the CURRENT time so the board reflects the match just recorded (not the
-            # previous store commit's time).
-            python -m atv_bench.publish ingest ./artifacts/match-result.json \
-              --store league --require-spec
-            python -m atv_bench.publish build \
-              --out ./site --store league \
-              --updated-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
-            # Stage EVERYTHING under league/ (tracked + untracked matches.jsonl), then
-            # detect changes on the STAGED tree (git diff --cached sees untracked-now-added
-            # files, unlike `git diff --quiet -- league/`).
-            git add -A league/
-            if git diff --cached --quiet -- league/; then
-              echo "match already present in latest store; nothing to push"
-              exit 0
-            fi
-
-            git commit -m "league: record match ${{ github.run_id }} [skip ci]"
-            if git push origin "HEAD:$DEFAULT_BRANCH"; then
-              echo "store push succeeded on attempt $attempt"
-              exit 0
-            fi
-
-            # Exponential backoff capped at 30s, plus jitter, so concurrent publishers
-            # de-synchronize instead of colliding on every round. The deadline is checked
-            # at the top of the loop, so a backoff that overshoots it exits cleanly there.
-            backoff=$(( attempt * attempt ))
-            [ "$backoff" -gt 30 ] && backoff=30
-            sleep "$(( backoff + (RANDOM % 5) ))"
-            echo "push rejected (race on attempt $attempt); backed off, re-fetching"
-          done
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: ./site
-
-      - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v4

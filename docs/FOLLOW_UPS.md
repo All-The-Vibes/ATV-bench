@@ -3,7 +3,7 @@
 Tracked here because issue creation is unavailable on this account (Enterprise
 Managed User restriction). These are genuinely deferred v1-adjacent scope, not bugs.
 
-## 1. Adjudicated match outcome (live match-orchestration)
+## 1. Adjudicated match outcome (live match-orchestration) — ✅ RESOLVED
 
 PR #1 closes **identity + match_id forgery**: the trusted publish job binds an `ok`
 artifact's `player_a`/`player_b`/`match_id` to a workflow-issued `MatchSpec` (submitter
@@ -12,22 +12,59 @@ fabricated match_id, or self-match is rebound to a `CRASH` forfeit against the s
 — never trusted, never dropped. See `tests/test_match_binding.py` and the `league.yml`
 tripwire in `tests/test_action_isolation.py`.
 
-What remains bot-asserted is the **win/loss/draw outcome**. The opponent anchor is pinned
-at 1500 and excluded from ELO updates (`elo.compute_leaderboard(anchors=[...])`), so a
-dishonestly-claimed win inflates only the forger's own row vs the fixed anchor and cannot
-move the anchor or bleed into other entrants' ratings. See the "Match-result trust
-boundary" section in `docs/COMMUNITY_LEAGUE.md`.
+What previously remained bot-asserted was the **win/loss/draw outcome**. The opponent
+anchor is pinned at 1500 and excluded from ELO updates
+(`elo.compute_leaderboard(anchors=[...])`), so a dishonestly-claimed win inflated only
+the forger's own row vs the fixed anchor. That blast-radius bound is now moot: the
+outcome is no longer bot-asserted at all.
 
 **Work:** have the CodeClash **arena** (not the submitted bot) emit the adjudicated
 result inside the sandbox, so the outcome is derived from real gameplay rather than bot
 stdout — the "live trusted match-orchestration" layer end-to-end.
 
-## 2. Live `gh` PR submission automation
+**Resolved:** the arena image ENTRYPOINT is now the **trusted referee**
+(`python3 -m atv_bench.arena`, in `src/atv_bench/arena/`), not a bare `python3` that ran
+the bot's stdout as the result. The referee:
+
+- runs a deterministic lightcycles/Tron engine (`arena/engine.py`) — a pure, immutable,
+  reproducible adjudicator with no I/O and no bot trust;
+- spawns the mounted bot at `/work/main.py` as an **untrusted move-only subprocess**
+  (`arena/referee.py::SubprocessMoveSource`): one direction token per turn over a strict
+  line protocol, with a per-turn timeout. A hang, EOF, crash, garbage line, or a
+  fabricated result JSON all parse to "no move" → a **scored forfeit loss**;
+- plays it against a trusted in-process anchor (`TrustedGreedyBot`) so the `byok-anchor`
+  opponent is now a real reference player, not a bookkeeping row;
+- **authors** the schema-shaped `ok` result from the engine verdict
+  (`arena/__main__.py`). The last line on the container's stdout is always the referee's,
+  never the bot's.
+
+The referee code is **baked into the image** (`arena/pkg/`, byte-identical to the tested
+`src/` package — enforced by a drift tripwire) so no trusted code is read from the
+untrusted `/work` mount. The trusted match identity is passed as `ATV_*` env from GitHub
+context; the publish job still independently spec-binds identity (defense in depth).
+
+Tests: `tests/test_arena_engine.py` (engine rules), `tests/test_arena_referee.py`
+(move protocol + forfeit-on-fake-result), `tests/test_arena_entrypoint.py` (entrypoint
+end-to-end, hermetic), `tests/test_arena_image.py` (entrypoint + baked-package drift
+tripwires, every push), and `tests/test_arena_adjudication.py` (Docker integration:
+malicious result-faker forfeits, wall-diver loses, honest bot gets a real outcome).
+Proof artifacts + a rendered match board: `docs/proof/item1-adjudication/`.
+
+## 2. Live `gh` PR submission automation — ✅ RESOLVED
 
 `atv-bench submit` builds the submission record; the contributor opens the PR manually
 today (documented in `docs/COMMUNITY_LEAGUE.md` and the submit status trail). Wire the
 live `gh pr create` path (fork, branch, push, open PR) behind the existing 7-check
 preflight.
+
+**Resolved:** `atv-bench submit --live --identity <login> <bot>` now runs the gh-backed
+7-check preflight (`gh_preflight_runner`) and, only if it passes, opens the PR end-to-end
+via `open_submission_pr`: `gh repo fork` → `git checkout -b` → stage bot + submission.json
+at the identity-pinned `league/submissions/<login>/` path → commit → push →
+`gh pr create`. Fails closed — any non-zero gh/git step aborts with an actionable
+`SUBMIT_PR_FAILED` AtvError before a later step, never a half-open PR. All gh/git calls go
+through an injected command runner so the flow is hermetically tested
+(`tests/test_submit_live.py`); the default `--dry-run`/manual fallback is unchanged.
 
 ---
 
@@ -88,7 +125,7 @@ subtle bugs were fixed here in re-review: `git diff --quiet -- league/` ignores 
 the board `--updated-at` used the previous commit's time (now current time). Tripwire:
 `tests/test_publish_race.py`.
 
-## 5. ok-artifact not bound to immutable bot identity (ENHANCEMENT)
+## 5. ok-artifact not bound to immutable bot identity (ENHANCEMENT) — ✅ RESOLVED
 
 PR #1 closed identity + match_id forgery, but the `MatchSpec` is `(login, anchor,
 run_id)` only. The executed bytes are **not** structurally bound to `bot_sha256` / PR
@@ -100,7 +137,14 @@ this is about binding the artifact to the *bot identity*.
 **Work:** include `bot_sha256` / PR head SHA in the `MatchSpec` and reject on mismatch,
 so a result is provably from the submitted bytes.
 
-## 6. Stale Pages deploy race (BUG — pre-existing, out of scope for #2/#3)
+**Resolved:** `MatchSpec` gained an optional trusted `bot_sha256` (computed by the match
+job from the exact staged bytes via `sha256sum submission/main.py`, handed to the trusted
+publish side). `bind_ok_to_spec` stamps the trusted hash onto the record and rejects a
+disagreeing bot-reported `bot_sha256` to a CRASH forfeit — never trusts the claim, never
+drops the match. Optional field = full back-compat. Tripwire:
+`tests/test_bot_identity_binding.py`.
+
+## 6. Stale Pages deploy race (BUG — pre-existing, out of scope for #2/#3) — ✅ RESOLVED
 
 Surfaced by santa-loop final-check (Reviewer B, gpt-5.4). The persist retry loop makes the
 `league/` STORE push race-safe, but the **Pages deploy** is not. Each publish job builds
@@ -116,7 +160,13 @@ deployment into a separate default-branch workflow (`workflow_run` on the store 
 the deployed board always reflects the latest settled store. Add a tripwire asserting the
 deployed artifact is rebuilt from the settled state.
 
-## 7. Forked-PR read-only token blocks the documented contributor flow (BUG — pre-existing)
+**Resolved:** a dedicated step now fetches + `reset --hard origin/<default_branch>` and
+rebuilds `./site` from the settled store immediately before `upload-pages-artifact`, so the
+deployed board reflects the latest settled state (this match plus any concurrently landed)
+rather than a per-attempt snapshot. Now lives in the trusted `league-publish.yml` workflow
+(see item 7). Tripwire: `tests/test_pages_deploy_freshness.py`.
+
+## 7. Forked-PR read-only token blocks the documented contributor flow (BUG — pre-existing) — ✅ RESOLVED
 
 Surfaced by santa-loop final-check (Reviewer B). `CONTRIBUTING.md` documents "fork → open
 PR → maintainer labels `run-match`", but the workflow runs on `pull_request` and the
@@ -130,7 +180,20 @@ Pages. Works only for same-repo branches today. Not a regression from #2/#3.
 maintainer-run default-branch workflow) that can legitimately write on fork submissions
 without executing untrusted code.
 
-## 8. Integration-test flag parity drift (TEST — pre-existing)
+**Resolved:** the privileged persist/deploy phase moved to a new `league-publish.yml`
+workflow triggered on `workflow_run` (the `league` match workflow completing). A
+workflow_run workflow runs in the TRUSTED base-repo context with a full write token even
+for fork PRs, and this one never checks out or executes PR code — it consumes only (a) the
+bot's result artifact and (b) a *trusted* `match-meta` artifact (submitter/opponent/
+match_id/bot_sha256, authored by the match job from GitHub context, never bot stdout),
+downloaded cross-run via `workflow_run.id`. It gates on `workflow_run.conclusion ==
+'success'`, ingests with `--require-spec`, runs the same optimistic-concurrency persist
+loop (#3) and settled-store rebuild (#6). The untrusted match job in `league.yml` now
+holds no write scope at all. Tripwire: `tests/test_fork_safe_publish.py` (plus the
+publish-side assertions in `test_action_isolation.py` / `test_publish_race.py` /
+`test_pages_deploy_freshness.py` retargeted to the new workflow).
+
+## 8. Integration-test flag parity drift (TEST — pre-existing) — ✅ RESOLVED
 
 Surfaced by santa-loop final-check (Reviewer B). `tests/test_action_malicious_bot.py` uses
 `--memory 256m` and `python:3.12-alpine`, which no longer match the workflow's `512m` and
@@ -139,6 +202,11 @@ flags" parity claim is weakened. Not a scoring/security defect.
 
 **Work:** sync the gated test's docker flags + image with the actual `league.yml` match
 step (ideally derive both from one source) so the parity claim stays true.
+
+**Resolved:** the integration test now uses `--memory 512m` and builds+runs the in-repo
+arena image (`arena/Dockerfile`), matching the workflow. A new `test_sandbox_flag_parity.py`
+tripwire parses the real match step from `league.yml` and fails on every push if the
+memory cap, core isolation flags, or image drift from the integration test again.
 
 ---
 

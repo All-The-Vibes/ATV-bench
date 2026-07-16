@@ -129,7 +129,10 @@ def test_validator_rejects_missing_required_field():
         validate_leaderboard(bad)
 
 
-def test_validator_rejects_unknown_reason_enum():
+def test_build_normalizes_unknown_reason_out_of_enum():
+    """santa round-3 (H1): build_leaderboard_doc now SANITIZES a hand-edited unknown[] entry
+    before it reaches the doc — an out-of-enum reason is normalized to a valid enum value
+    (name_failed_safety_scan) rather than passed through. The resulting doc validates."""
     matches = [MatchResult("alice", "bob", Outcome.A_WINS, match_id="m1")]
     fp = _fingerprint()
     fp["unknown"] = [{"field": "x", "reason": "totally_made_up_reason"}]
@@ -138,6 +141,30 @@ def test_validator_rejects_unknown_reason_enum():
             "bob": {"fingerprint": _fingerprint(), "identity": "hubot", "bot_sha256": "b" * 64,
                     "pr_url": "https://github.com/x/y/pull/2", "logs_url": "https://x/l"}}
     doc = build_leaderboard_doc(matches, subs, updated_at="2026-07-15T18:00:00Z")
+    # normalized, not passed through — and the doc is schema-valid
+    validate_leaderboard(doc)
+    alice = next(r for r in doc["rows"] if r["identity"] == "octocat")
+    for entry in alice["details"]["unknown"]:
+        assert entry["reason"] != "totally_made_up_reason"
+
+
+def test_validator_rejects_unknown_reason_enum():
+    """The schema itself must still reject an out-of-enum reason in a HAND-CONSTRUCTED doc
+    (defense in depth, independent of build_leaderboard_doc's sanitization)."""
+    doc = {
+        "schema_version": 1, "updated_at": "2026-07-15T18:00:00Z",
+        "rows": [{
+            "rank": 1, "elo": 1500, "rated": True, "low_confidence": False,
+            "fingerprint_gstack": False, "match_count": 1, "status": "rated",
+            "wins": 1, "losses": 0, "draws": 0, "forfeits": 0,
+            "ci": {"lo": 1400, "hi": 1600}, "identity": "octocat", "harness_name": "claude-code",
+            "fingerprint_summary": "0 skills",
+            "details": {"skills": [], "mcps": [], "plugins": [],
+                        "unknown": [{"field": "x", "reason": "totally_made_up_reason"}]},
+            "bot_sha256": "a" * 64, "fingerprint_probe_version": "1.0.0",
+            "pr_url": "https://github.com/x/y/pull/1", "logs_url": "https://x/l",
+        }],
+    }
     with pytest.raises(jsonschema.ValidationError):
         validate_leaderboard(doc)
 
@@ -197,9 +224,12 @@ def test_variance_gate_marks_low_signal_rows():
 
 
 def test_variance_gate_clears_high_signal_rows():
-    # a player with many matches and a real spread clears the gate (not low_confidence)
-    matches = [MatchResult("champ", f"opp{i}", Outcome.A_WINS, match_id=f"c{i}") for i in range(12)]
-    names = {"champ"} | {f"opp{i}" for i in range(12)}
+    # a player with many matches and a real spread clears the gate (not low_confidence).
+    # Needs enough matches to bring the FULL CI width (700/sqrt(n)) under MAX_CI_WIDTH=200,
+    # i.e. n >= 13; use 20 for comfortable margin (was 12, which sat at width ~202 and only
+    # "cleared" under the prior *2 threshold bug).
+    matches = [MatchResult("champ", f"opp{i}", Outcome.A_WINS, match_id=f"c{i}") for i in range(20)]
+    names = {"champ"} | {f"opp{i}" for i in range(20)}
     subs = {n: {"fingerprint": _fingerprint(), "identity": n, "bot_sha256": "f" * 64,
                 "pr_url": "https://github.com/x/y/pull/1", "logs_url": "https://x/l"}
             for n in names}
@@ -226,3 +256,31 @@ def test_row_gate_shares_variance_gate_thresholds():
     gate = elo.variance_gate(matches, player_pair=("a", "b"))
     assert a_row["low_confidence"] is True
     assert gate["reason"] == "insufficient_matches"  # both agree: not enough matches
+
+
+def test_row_gate_ci_width_window_matches_variance_gate():
+    """Santa dual-review: the row low_confidence gate and elo.variance_gate must agree
+    on the CI-WIDTH threshold, not just the match-count floor. Both compute a FULL CI
+    width, so both must demote at the same number. The prior bug had the row gate demote
+    at MAX_CI_WIDTH*2 (400) while variance_gate demotes at MAX_CI_WIDTH (200), leaving an
+    n=10-12 window where a pair variance_gate calls 'ci_too_wide' still published as a
+    stable (not low_confidence) row.
+    """
+    from atv_bench import elo
+    # Clear the match-count floor (>= MIN_RATED_MATCHES) so ONLY the CI-width tooth can
+    # fire, then confirm both gates agree the row is low-signal.
+    n = elo.MIN_RATED_MATCHES  # 10 -> full CI width = 700/sqrt(10) ~= 221 (>200, <400)
+    matches = [
+        MatchResult("a", "b", Outcome.A_WINS if i % 2 else Outcome.B_WINS, match_id=f"w{i}")
+        for i in range(n)
+    ]
+    gate = elo.variance_gate(matches, player_pair=("a", "b"))
+    # Precondition: this is the divergence window — the pair gate rejects on width.
+    assert gate["reason"] == "ci_too_wide", f"expected ci_too_wide, got {gate['reason']}"
+    subs = {x: {"fingerprint": _fingerprint(), "identity": x, "bot_sha256": "a" * 64,
+                "pr_url": "https://github.com/x/y/pull/1", "logs_url": "https://x/l"}
+            for x in ("a", "b")}
+    doc = build_leaderboard_doc(matches, subs, updated_at="2026-07-15T18:00:00Z")
+    a_row = next(r for r in doc["rows"] if r["identity"] == "a")
+    # The row gate must agree: a pair too noisy for variance_gate is not a stable row.
+    assert a_row["low_confidence"] is True

@@ -1,0 +1,565 @@
+"""F1 (santa round-1, both reviewers CRITICAL): the submission-record layout must be
+ONE canonical path shared by the match job, the live-submit writer, and the store
+reader — otherwise a `--live` entrant is scored but never appears on the board.
+
+Canonical layout (matches league.yml match job `submissions/<id>/main.py`):
+
+    league/submissions/<identity>/main.py          # the bot (match job reads this)
+    league/submissions/<identity>/submission.json  # the record (store reads this)
+
+Identity is anchored to the PARENT DIRECTORY name (not a file stem), preserving the
+spoof protection from the flat layout: a hand-edited record claiming another entrant's
+identity is rejected.
+"""
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from atv_bench.store import LeagueStore, build_leaderboard_from_store
+
+
+def _sub(identity, harness="claude-code", gstack=True):
+    return {
+        "identity": identity,
+        "game": "battlesnake",
+        "bot_sha256": "a" * 64,
+        "bot_filename": "main.py",
+        "pr_url": "https://github.com/All-The-Vibes/ATV-bench/pull/1",
+        "logs_url": "https://all-the-vibes.github.io/ATV-bench/logs/1",
+        "fingerprint": {
+            "harness": harness, "model": "claude-opus-4-8", "gstack": gstack,
+            "skills": ["gstack"], "mcps": ["github"], "plugins": [],
+            "custom_agents_count": 0, "unknown": [], "probe_version": "1.0.0",
+        },
+    }
+
+
+def _write_live_tree(root, identity, record=None):
+    """Materialize exactly what `submit --live` (open_submission_pr) commits."""
+    dest = root / "submissions" / identity
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / "main.py").write_text("def move(state):\n    return 'up'\n")
+    (dest / "submission.json").write_text(
+        json.dumps(record or _sub(identity), indent=2, sort_keys=True))
+    return dest
+
+
+def test_store_ingests_live_submitted_nested_tree(tmp_path):
+    """The exact tree submit --live commits must be visible to the store, or the
+    entrant is board-invisible after merge (the F1 bug)."""
+    league = tmp_path / "league"
+    _write_live_tree(league, "octocat")
+    subs = LeagueStore(str(league)).load_submissions()
+    assert set(subs) == {"octocat"}
+    assert subs["octocat"]["identity"] == "octocat"
+
+
+def test_add_submission_writes_nested_layout(tmp_path):
+    """add_submission must write the SAME nested path the match job + live writer use,
+    so a store-built submission and a live-submitted one are byte-identical in shape."""
+    league = tmp_path / "league"
+    store = LeagueStore(str(league))
+    store.add_submission(_sub("alice"))
+    assert (league / "submissions" / "alice" / "submission.json").is_file()
+    # A publishable row also needs committed bot bytes (santa round-6); the live writer /
+    # match job always ship main.py alongside the record.
+    (league / "submissions" / "alice" / "main.py").write_text(
+        "def move(state):\n    return 'up'\n")
+    # round-trips
+    assert set(store.load_submissions()) == {"alice"}
+
+
+def test_load_submissions_anchors_identity_to_parent_dir(tmp_path):
+    """Spoof protection preserved: a record body claiming a different identity than its
+    parent directory is rejected (mallory/ dir cannot claim to be alice)."""
+    league = tmp_path / "league"
+    _write_live_tree(league, "alice")
+    # attacker creates mallory/ but the record body claims identity=alice
+    _write_live_tree(league, "mallory", record=_sub("alice"))
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_submissions()
+
+
+def test_live_submitted_entrant_appears_on_board(tmp_path):
+    """End-to-end: a live-submitted (nested) record surfaces as a leaderboard row.
+    This is the assertion whose absence let F1 ship."""
+    league = tmp_path / "league"
+    _write_live_tree(league, "octocat")
+    doc = build_leaderboard_from_store(str(league), updated_at="2026-07-16T00:00:00Z")
+    rows = [r for r in doc["rows"] if r["identity"] == "octocat"]
+    assert len(rows) == 1, "live-submitted entrant must have a board row"
+
+
+def test_duplicate_identity_dirs_rejected(tmp_path):
+    """Two directories cannot both resolve to the same identity."""
+    league = tmp_path / "league"
+    _write_live_tree(league, "alice")
+    # a second dir whose record also claims alice (parent 'alice2' != 'alice' -> mismatch)
+    _write_live_tree(league, "alice2", record=_sub("alice"))
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_submissions()
+
+
+# --- santa round-3 (H3, Reviewer B): malformed committed records must fail closed, not
+#     crash trusted board generation with an uncaught KeyError/JSONDecodeError. ---
+
+def test_malformed_json_record_raises_controlled_error(tmp_path):
+    """A committed submission.json with invalid JSON must raise a controlled ValueError on
+    load (fail-closed), not an uncaught JSONDecodeError deeper in board generation."""
+    league = tmp_path / "league"
+    d = league / "submissions" / "alice"
+    d.mkdir(parents=True)
+    (d / "submission.json").write_text("{ this is not valid json ")
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_submissions()
+
+
+def test_record_missing_required_keys_raises_on_load(tmp_path):
+    """A record missing required keys (identity/fingerprint/bot_sha256/pr_url/logs_url) must
+    be rejected on load with a controlled error, not indexed blindly by build_leaderboard_doc
+    (which would KeyError and take down the whole trusted board build)."""
+    league = tmp_path / "league"
+    d = league / "submissions" / "alice"
+    d.mkdir(parents=True)
+    # identity matches the dir, but everything else is missing
+    (d / "submission.json").write_text(json.dumps({"identity": "alice"}))
+    with pytest.raises((ValueError, KeyError)):
+        LeagueStore(str(league)).load_submissions()
+
+
+def test_one_malformed_record_does_not_silently_zero_the_board(tmp_path, capsys):
+    """A malformed record must not take down the whole board (santa round-5: that would be
+    an availability DoS). The trusted build QUARANTINES it — skips the bad row, keeps every
+    good entrant, and DIAGNOSES to stderr (not silent) so a maintainer can see and fix it.
+    The strict loader (LeagueStore.load_submissions) still RAISES for validators; that is
+    covered by test_strict_load_submissions_still_raises."""
+    league = tmp_path / "league"
+    _write_live_tree(league, "alice")
+    bad = league / "submissions" / "bob"
+    bad.mkdir(parents=True)
+    (bad / "submission.json").write_text(json.dumps({"identity": "bob"}))  # missing keys
+    doc = build_leaderboard_from_store(str(league), updated_at="2026-07-16T00:00:00Z")
+    ids = {r["identity"] for r in doc["rows"]}
+    assert "alice" in ids   # the good entrant still publishes
+    assert "bob" not in ids  # the malformed row is quarantined, not fatal
+    assert "bob" in capsys.readouterr().err  # diagnosed, not silently dropped
+
+
+# --- santa round-4 (Reviewer B): nested-type validation. Top-level key presence is not
+#     enough — a wrong-TYPED nested field (fingerprint as a string, unknown as an int)
+#     crashed trusted board generation with an uncaught AttributeError/TypeError. Load must
+#     fail closed on nested shape too. ---
+
+def _valid_record(identity):
+    return _sub(identity)
+
+
+def _write_record(league, identity, record):
+    d = league / "submissions" / identity
+    d.mkdir(parents=True, exist_ok=True)
+    # A publishable row requires committed bot bytes (santa round-6): always ship main.py,
+    # matching the canonical layout the match job + live writer produce.
+    (d / "main.py").write_text("def move(state):\n    return 'up'\n")
+    (d / "submission.json").write_text(json.dumps(record))
+
+
+def test_non_object_fingerprint_fails_closed(tmp_path):
+    league = tmp_path / "league"
+    rec = _valid_record("alice"); rec["fingerprint"] = "oops"
+    _write_record(league, "alice", rec)
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_submissions()
+
+
+def test_non_list_fingerprint_containers_fail_closed(tmp_path):
+    """fingerprint.unknown / skills / mcps / plugins must be lists — a scalar there crashed
+    board generation (unknown=7 -> 'int not iterable')."""
+    for bad_field, bad_value in [("unknown", 7), ("skills", "not-a-list"), ("mcps", 3), ("plugins", {})]:
+        league = tmp_path / f"league_{bad_field}"
+        rec = _valid_record("alice")
+        rec["fingerprint"][bad_field] = bad_value
+        _write_record(league, "alice", rec)
+        with pytest.raises(ValueError):
+            LeagueStore(str(league)).load_submissions()
+
+
+def test_valid_nested_record_still_loads(tmp_path):
+    """No false positive: a well-typed record still loads."""
+    league = tmp_path / "league"
+    _write_record(league, "alice", _valid_record("alice"))
+    assert set(LeagueStore(str(league)).load_submissions()) == {"alice"}
+
+
+# --- santa round-6 (both reviewers converged): top-level scalar fields must be validated at
+#     LOAD time. A wrong-typed/malformed bot_sha256/pr_url/logs_url passed load and then
+#     crashed the trusted build deep in schema validation (availability DoS) instead of a
+#     controlled per-record ValueError. ---
+
+def test_non_string_bot_sha256_fails_closed_on_load(tmp_path):
+    league = tmp_path / "league"
+    rec = _valid_record("alice"); rec["bot_sha256"] = 7
+    _write_record(league, "alice", rec)
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_submissions()
+
+
+def test_bad_bot_sha256_pattern_fails_closed_on_load(tmp_path):
+    league = tmp_path / "league"
+    rec = _valid_record("alice"); rec["bot_sha256"] = "NOT-HEX"
+    _write_record(league, "alice", rec)
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_submissions()
+
+
+def test_non_http_urls_fail_closed_on_load(tmp_path):
+    for field, bad in [("pr_url", 123), ("pr_url", "javascript:alert(1)"),
+                       ("logs_url", "ftp://x/y"), ("logs_url", "")]:
+        league = tmp_path / f"league_{field}_{abs(hash(str(bad)))}"
+        rec = _valid_record("alice"); rec[field] = bad
+        _write_record(league, "alice", rec)
+        with pytest.raises(ValueError):
+            LeagueStore(str(league)).load_submissions()
+
+
+def test_well_formed_scalars_still_load(tmp_path):
+    league = tmp_path / "league"
+    _write_record(league, "alice", _valid_record("alice"))  # valid 64-hex sha, https urls
+    assert set(LeagueStore(str(league)).load_submissions()) == {"alice"}
+
+
+# --- santa round-7 (Reviewer B): the published bot_sha256 must be BOUND to the actual
+#     committed main.py bytes, not the mutable submission.json claim. The store recomputes
+#     the hash from the sibling main.py and STAMPS the trusted value, so the row can never
+#     advertise a hash that isn't the scored bytes. ---
+
+import hashlib
+
+
+def test_bot_sha256_is_stamped_from_committed_main_py(tmp_path):
+    """A submission.json whose bot_sha256 disagrees with the sibling main.py bytes must not
+    publish the claimed hash — the store stamps the REAL hash of main.py."""
+    league = tmp_path / "league"
+    d = league / "submissions" / "alice"
+    d.mkdir(parents=True)
+    body = "def move(s):\n    return 'up'\n"
+    (d / "main.py").write_text(body)
+    real = hashlib.sha256(body.encode()).hexdigest()
+    rec = _sub("alice")
+    rec["bot_sha256"] = "b" * 64  # valid pattern, but NOT the hash of main.py
+    (d / "submission.json").write_text(json.dumps(rec))
+    loaded = LeagueStore(str(league)).load_submissions()
+    assert loaded["alice"]["bot_sha256"] == real, "must stamp the real main.py hash, not the claim"
+
+
+def test_bot_sha256_matching_committed_main_py_loads(tmp_path):
+    """No false positive: a record whose bot_sha256 already equals the committed main.py hash
+    loads unchanged."""
+    league = tmp_path / "league"
+    d = league / "submissions" / "alice"
+    d.mkdir(parents=True)
+    body = "def move(s):\n    return 'up'\n"
+    (d / "main.py").write_text(body)
+    real = hashlib.sha256(body.encode()).hexdigest()
+    rec = _sub("alice")
+    rec["bot_sha256"] = real
+    (d / "submission.json").write_text(json.dumps(rec))
+    loaded = LeagueStore(str(league)).load_submissions()
+    assert loaded["alice"]["bot_sha256"] == real
+
+
+# --- santa round-8 (both reviewers): the trusted publish path derives identity from the
+#     submission DIRECTORY name but never validated that name is a safe GitHub-login-shaped
+#     slug. A crafted directory (unicode/space/punctuation) would publish an odd identity. ---
+
+def test_unsafe_identity_directory_name_fails_closed(tmp_path):
+    for bad in ("has space", "weird;semicolon", "emoji☃", "path.dot.slug!"):
+        league = tmp_path / f"league_{abs(hash(bad))}"
+        d = league / "submissions" / bad
+        d.mkdir(parents=True)
+        rec = _sub(bad)  # body identity matches the dir so only the slug check can catch it
+        (d / "submission.json").write_text(json.dumps(rec))
+        with pytest.raises(ValueError):
+            LeagueStore(str(league)).load_submissions()
+
+
+def test_valid_github_login_identity_loads(tmp_path):
+    """GitHub logins (alnum + single hyphens) must still load."""
+    for ok in ("octocat", "some-user", "user123", "a"):
+        league = tmp_path / f"league_ok_{ok}"
+        _write_record(league, ok, _sub(ok))
+        assert set(LeagueStore(str(league)).load_submissions()) == {ok}
+
+
+# --- Symlink confinement (santa dual-review): a committed submission is UNTRUSTED input.
+#     The store loader reads submission.json and hashes main.py; if either is a symlink
+#     pointing OUTSIDE the submission tree, a crafted PR could make the trusted board build
+#     read arbitrary host files (info leak / deploy-time DoS). fingerprint/reader.py already
+#     applies a _within_root guard; the store loader must match that posture. ---
+
+def test_symlinked_record_escaping_tree_fails_closed(tmp_path):
+    """A submission.json symlinked to a file outside the submissions tree must be rejected,
+    not silently followed into arbitrary host content."""
+    league = tmp_path / "league"
+    d = league / "submissions" / "mallory"
+    d.mkdir(parents=True)
+    (d / "main.py").write_text("def move(s):\n    return 'up'\n")
+    secret = tmp_path / "outside_secret.json"
+    secret.write_text(json.dumps(_sub("mallory")))
+    (d / "submission.json").symlink_to(secret)
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_submissions()
+
+
+def test_symlinked_bot_escaping_tree_fails_closed(tmp_path):
+    """A main.py symlinked outside the tree must be rejected before it is read/hashed."""
+    league = tmp_path / "league"
+    d = league / "submissions" / "mallory"
+    d.mkdir(parents=True)
+    (d / "submission.json").write_text(json.dumps(_sub("mallory")))
+    secret = tmp_path / "outside_bot.py"
+    secret.write_text("import os\n")
+    (d / "main.py").symlink_to(secret)
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_submissions()
+
+
+# --- Directory-symlink bypass (santa round-2, BOTH reviewers CRITICAL): confining a
+#     record against its own entrant dir `d` is bypassable when `d` ITSELF is a symlink.
+#     iterdir()+is_dir() follows the dir symlink, so record.resolve() lands inside the
+#     symlink target and passes a per-`d` containment check. The loader must reject any
+#     symlinked entrant directory (and confine against the fixed submissions_dir root). ---
+
+def test_symlinked_entrant_directory_fails_closed(tmp_path):
+    league = tmp_path / "league"
+    (league / "submissions").mkdir(parents=True)
+    payload = tmp_path / "payload"
+    payload.mkdir()
+    (payload / "main.py").write_text("import os\n")
+    (payload / "submission.json").write_text(json.dumps(_sub("alice")))
+    # git can track a symlinked directory; simulate the committed tree
+    (league / "submissions" / "alice").symlink_to(payload, target_is_directory=True)
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_submissions()
+
+
+def test_symlinked_matches_file_fails_closed(tmp_path):
+    """A symlinked matches.jsonl must not be followed by the trusted read path."""
+    league = tmp_path / "league"
+    league.mkdir(parents=True)
+    outside = tmp_path / "outside_matches.jsonl"
+    outside.write_text('{"player_a":"a","player_b":"b","outcome":"a_wins","match_id":"x"}\n')
+    (league / "matches.jsonl").symlink_to(outside)
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_matches()
+
+
+def test_oversized_submission_record_fails_closed(tmp_path):
+    """An enormous submission.json must fail closed (bounded read), not OOM the build."""
+    league = tmp_path / "league"
+    d = league / "submissions" / "alice"
+    d.mkdir(parents=True)
+    (d / "main.py").write_text("def move(s):\n    return 'up'\n")
+    (d / "submission.json").write_text(" " * (2 * 1024 * 1024) + json.dumps(_sub("alice")))
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_submissions()
+
+
+def test_oversized_bot_file_fails_closed(tmp_path):
+    """An enormous main.py must fail closed before it is read/hashed."""
+    league = tmp_path / "league"
+    d = league / "submissions" / "alice"
+    d.mkdir(parents=True)
+    (d / "submission.json").write_text(json.dumps(_sub("alice")))
+    (d / "main.py").write_text("#" * (2 * 1024 * 1024))
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_submissions()
+
+
+# --- Ancestor/root symlink (santa round-3, both reviewers): leaf-file checks confine
+#     against submissions_dir, but if `league/submissions` (or the store root) is ITSELF a
+#     symlink, that "fixed root" is attacker-chosen. Reject a symlinked store boundary. ---
+
+def test_symlinked_submissions_dir_boundary_fails_closed(tmp_path):
+    league = tmp_path / "league"
+    league.mkdir()
+    payload = tmp_path / "payload"
+    (payload / "alice").mkdir(parents=True)
+    (payload / "alice" / "main.py").write_text("def move(s):\n    return 'up'\n")
+    (payload / "alice" / "submission.json").write_text(json.dumps(_sub("alice")))
+    (league / "submissions").symlink_to(payload, target_is_directory=True)
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_submissions()
+
+
+# --- matches.jsonl semantic validation (santa round-3): per-line JSON-SYNTAX fail-closed
+#     is not enough. A well-formed line that is not a valid match record ([], {}, bad enum)
+#     crashes the trusted board build downstream. load_matches must fail closed on it. ---
+
+def test_matches_line_non_object_fails_closed(tmp_path):
+    league = tmp_path / "league"
+    league.mkdir()
+    (league / "matches.jsonl").write_text("[]\n")
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_matches()
+
+
+def test_matches_line_missing_keys_fails_closed(tmp_path):
+    league = tmp_path / "league"
+    league.mkdir()
+    (league / "matches.jsonl").write_text('{"player_a": "a"}\n')
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_matches()
+
+
+def test_matches_line_bad_outcome_fails_closed(tmp_path):
+    league = tmp_path / "league"
+    league.mkdir()
+    (league / "matches.jsonl").write_text(
+        '{"player_a":"a","player_b":"b","outcome":"not_a_real_outcome","match_id":"x"}\n')
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_matches()
+
+
+def test_valid_matches_line_still_loads(tmp_path):
+    league = tmp_path / "league"
+    league.mkdir()
+    (league / "matches.jsonl").write_text(
+        '{"player_a":"a","player_b":"b","outcome":"a_wins","match_id":"x"}\n')
+    loaded = LeagueStore(str(league)).load_matches()
+    assert len(loaded) == 1 and loaded[0]["player_a"] == "a"
+
+
+# --- Forfeit/reason cross-field invariant (santa round-4): _validate_match_record must
+#     mirror MatchResult.__post_init__ (forfeit_reason required IFF outcome is a forfeit),
+#     or a well-formed committed line passes the loader then crashes _to_match_result during
+#     the trusted board build (availability DoS), defeating the fail-closed contract. ---
+
+def test_matches_forfeit_without_reason_fails_closed(tmp_path):
+    league = tmp_path / "league"
+    league.mkdir()
+    (league / "matches.jsonl").write_text(
+        '{"player_a":"a","player_b":"b","outcome":"forfeit_a","match_id":"x"}\n')
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_matches()
+
+
+def test_matches_reason_on_non_forfeit_fails_closed(tmp_path):
+    league = tmp_path / "league"
+    league.mkdir()
+    (league / "matches.jsonl").write_text(
+        '{"player_a":"a","player_b":"b","outcome":"a_wins","match_id":"x",'
+        '"forfeit_reason":"CRASH"}\n')
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_matches()
+
+
+def test_matches_valid_forfeit_with_reason_still_loads(tmp_path):
+    league = tmp_path / "league"
+    league.mkdir()
+    (league / "matches.jsonl").write_text(
+        '{"player_a":"a","player_b":"b","outcome":"forfeit_a","match_id":"x",'
+        '"forfeit_reason":"TIMEOUT"}\n')
+    loaded = LeagueStore(str(league)).load_matches()
+    assert len(loaded) == 1
+
+
+def test_build_from_store_survives_malformed_forfeit_line(tmp_path, capsys):
+    """End-to-end: the trusted board build must SURVIVE a forfeit line missing its reason —
+    quarantine it (skip + diagnose to stderr), not crash the whole board (santa round-5).
+    The strict loader still raises for validators (test_matches_forfeit_without_reason...)."""
+    from atv_bench.store import build_leaderboard_from_store
+    league = tmp_path / "league"
+    (league / "submissions").mkdir(parents=True)
+    _write_live_tree(league, "alice")
+    (league / "matches.jsonl").write_text(
+        '{"player_a":"a","player_b":"b","outcome":"forfeit_b","match_id":"x"}\n')
+    doc = build_leaderboard_from_store(str(league), updated_at="2026-07-15T18:00:00Z")
+    assert {r["identity"] for r in doc["rows"]} == {"alice"}  # good row survives
+    assert "quarantined" in capsys.readouterr().err  # bad match line diagnosed
+
+
+# --- Quarantine bad rows on the TRUSTED build (santa round-5, Reviewer B): the strict
+#     load_submissions/load_matches RAISE on a malformed merged record. That protects
+#     integrity but means ONE bad entry aborts the whole board build -> availability DoS
+#     (a merged bad submission bricks Pages deploy + blocks future publishes). The trusted
+#     board build must QUARANTINE the bad entrant/line (skip + diagnose) and still publish
+#     every good row. The strict loaders stay strict for validators. ---
+
+def test_build_from_store_quarantines_one_bad_submission(tmp_path):
+    from atv_bench.store import build_leaderboard_from_store
+    league = tmp_path / "league"
+    subs = league / "submissions"
+    subs.mkdir(parents=True)
+    # one good entrant
+    good = subs / "octocat"
+    good.mkdir()
+    (good / "main.py").write_text("def move(s):\n    return 'up'\n")
+    (good / "submission.json").write_text(json.dumps(_sub("octocat")))
+    # one malformed entrant (invalid JSON) that would otherwise abort the whole build
+    bad = subs / "mallory"
+    bad.mkdir()
+    (bad / "main.py").write_text("def move(s):\n    return 'up'\n")
+    (bad / "submission.json").write_text("{not valid json")
+    doc = build_leaderboard_from_store(str(league), updated_at="2026-07-15T18:00:00Z")
+    ids = {r["identity"] for r in doc["rows"]}
+    assert "octocat" in ids       # good row still published
+    assert "mallory" not in ids   # bad row quarantined, not fatal
+
+
+def test_build_from_store_quarantines_one_bad_match_line(tmp_path):
+    from atv_bench.store import build_leaderboard_from_store
+    league = tmp_path / "league"
+    subs = league / "submissions"
+    subs.mkdir(parents=True)
+    good = subs / "octocat"
+    good.mkdir()
+    (good / "main.py").write_text("def move(s):\n    return 'up'\n")
+    (good / "submission.json").write_text(json.dumps(_sub("octocat")))
+    # a good match line + a malformed one (missing keys): build must not crash
+    (league / "matches.jsonl").write_text(
+        '{"player_a":"octocat","player_b":"byok-anchor","outcome":"a_wins","match_id":"m1"}\n'
+        '{"garbage": true}\n')
+    doc = build_leaderboard_from_store(str(league), updated_at="2026-07-15T18:00:00Z")
+    ids = {r["identity"] for r in doc["rows"]}
+    assert "octocat" in ids
+
+
+def test_strict_load_submissions_still_raises(tmp_path):
+    """The strict loader (used by validators) must STILL raise — quarantine is only for
+    the trusted board build, not a weakening of the validation contract."""
+    league = tmp_path / "league"
+    bad = league / "submissions" / "mallory"
+    bad.mkdir(parents=True)
+    (bad / "submission.json").write_text("{not valid json")
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_submissions()
+
+
+# --- Mandatory backing bytes (santa round-6, Reviewer B): a publishable row MUST have a
+#     real regular main.py so the published bot_sha256 is always re-derived from committed
+#     bytes. A submission.json-only PR must not publish an attacker-claimed hash. ---
+
+def test_submission_without_main_py_is_not_published(tmp_path, capsys):
+    from atv_bench.store import build_leaderboard_from_store
+    league = tmp_path / "league"
+    subs = league / "submissions"
+    subs.mkdir(parents=True)
+    _write_live_tree(league, "octocat")  # good, has main.py
+    solo = subs / "ghost"
+    solo.mkdir()
+    (solo / "submission.json").write_text(json.dumps(_sub("ghost")))  # NO main.py
+    doc = build_leaderboard_from_store(str(league), updated_at="2026-07-15T18:00:00Z")
+    ids = {r["identity"] for r in doc["rows"]}
+    assert "octocat" in ids
+    assert "ghost" not in ids  # no backing bytes -> not a publishable row
+
+
+def test_strict_load_rejects_missing_main_py(tmp_path):
+    league = tmp_path / "league"
+    d = league / "submissions" / "ghost"
+    d.mkdir(parents=True)
+    (d / "submission.json").write_text(json.dumps(_sub("ghost")))
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_submissions()

@@ -9,17 +9,27 @@ both models 6/6 rejected the hosted Approach B on strategy; it had no owner.
 1. A contributor runs a local match with their harness, producing a **bot file** the
    harness edited (e.g. `main.py` for Battlesnake) + a **harness fingerprint**.
 2. `atv-bench submit --dry-run` builds the submission record (bot + fingerprint JSON);
-   the contributor commits it under `league/submissions/` and **opens the PR manually**
-   (live PR automation is not wired yet). The contributor never reports their own
-   win/loss (forgeable) — only the artifact.
+   the contributor commits it under `league/submissions/<identity>/` and opens the PR —
+   either automatically with `atv-bench submit --live --identity <login>` (fork → clone →
+   branch → push → `gh pr create`, first-timer fork bootstrapped) or by hand (manual
+   fallback in CONTRIBUTING.md). The contributor never reports their own win/loss
+   (forgeable) — only the artifact.
 3. A **GitHub Action** runs when a maintainer adds the `run-match` label to the PR
    (the label is the trust boundary gating untrusted bot execution):
    - **match job (untrusted):** executes the bot in the CodeClash Docker arena against
      the stored roster with fixed seeds. Runs with `permissions: {}`, no `GITHUB_TOKEN`,
      no Pages token, egress blocked, resource caps, non-root read-only container. Writes
      only a schema-validated **result artifact**.
-   - **publish job (trusted):** reads the artifact (never executes bot code), recomputes
-     ELO from full history (deterministic), builds the static leaderboard, deploys Pages.
+   - **publish job (trusted, on `workflow_run`):** reads the artifact (never executes bot
+     code), recomputes ELO from full history (deterministic), re-scans every merged
+     fingerprint for secret-shaped values (leak-safety on the publish path, not just at
+     probe time), and persists the match to the store on the default branch. It holds
+     `contents:write` only — no Pages scope.
+   - **deploy job (trusted, on `push` to the default branch — `league-deploy.yml`):** the
+     store commit triggers a rebuild + GitHub Pages deploy from that exact settled head
+     (a `pages` concurrency group makes the newest deploy win, so the board never
+     regresses to a stale snapshot). A merged submission PR triggers the same path, so a
+     new entrant's row appears on merge.
 4. The **static leaderboard** publishes each row: rank · ELO · fingerprint chips.
 
 **Onboarding timing (by design):** the publish job builds from the submissions committed
@@ -56,16 +66,46 @@ match_id = the stable `github.run_id`) before anything enters permanent ELO hist
   from the spec, so no bot-chosen string ever lands in an identity field. Enforced on
   every push by `tests/test_match_binding.py` + the `league.yml` tripwire in
   `tests/test_action_isolation.py`.
-- **Outcome IS bot-asserted (accepted v1 boundary).** The win/loss/draw the bot reports
-  is taken on trust. The opponent is a fixed baseline **anchor** whose rating is **pinned
-  at 1500 and excluded from ELO updates** (`elo.compute_leaderboard(anchors=[...])`, plan
-  #11/#12). Because the anchor never moves, a dishonestly-claimed win only inflates the
-  forger's own row versus that fixed yardstick — it **cannot move the anchor and therefore
-  cannot bleed into any other entrant's rating** (each entrant is scored against the same
-  1500 reference, independent of what other entrants asserted). The anchor column is a
-  participation signal, not a trust signal. Making the *arena* (not the bot) emit the
-  adjudicated outcome is the deferred match-orchestration follow-up; until then, public
-  match logs remain the dispute mechanism (Premise 4).
+- **Outcome is now ARENA-ADJUDICATED (trust boundary CLOSED).** The win/loss/draw is no
+  longer bot-asserted. The arena image's ENTRYPOINT is a **trusted referee**
+  (`python3 -m atv_bench.arena`) that runs a deterministic lightcycles/Tron game inside
+  the sandbox, drives the submitted bot as a **move-only subprocess** (one direction per
+  turn, per-turn timeout), and **authors** the outcome from real gameplay. A bot that
+  prints a fabricated result to stdout is emitting an invalid move and forfeits — it can
+  never inject an outcome. The opponent is a fixed baseline **anchor**, now a real
+  in-process reference player, still **pinned at 1500 and excluded from ELO updates**
+  (`elo.compute_leaderboard(anchors=[...])`, plan #11/#12), so it remains a fixed
+  yardstick every entrant is scored against. See `docs/FOLLOW_UPS.md` item 1 (RESOLVED),
+  `src/atv_bench/arena/`, and the proof artifacts in `docs/proof/item1-adjudication/`.
+  Public match logs remain the fingerprint-honesty dispute mechanism (Premise 4).
+
+## Required repository configuration (the fork-PR governance layer)
+
+GitHub runs a `pull_request`-triggered workflow from the **PR's own copy** of the workflow
+file. That is fundamental to the fork-PR model and means a malicious submission PR could
+rewrite the `pr-path-guard` gate or the `league.yml` scorer to no-op itself. No workflow can
+close this alone (the PR can rewrite that workflow too), so the deployment MUST set:
+
+1. **Branch protection on the default branch** with *Require status checks to pass* →
+   `hermetic` and `pr-path-guard` as **required** checks, *Require a pull request before
+   merging*, *Require review from Code Owners*, and *Do not allow bypassing the above
+   settings* (include administrators).
+2. **`.github/CODEOWNERS`** (in-repo) makes every trust-critical path — `.github/**` (the
+   workflows/gate/scorer), `league/matches.jsonl` (the durable store), and `src/**` (the
+   trusted publish/scoring code) — require an explicit maintainer approval. A PR that edits
+   any of them cannot merge without a code owner, which is exactly the manual inspection
+   GitHub's own fork-PR security guidance depends on. Community submission PRs (only
+   `league/submissions/<author>/{main.py,submission.json}`) match none of these and merge
+   through the automated gate alone.
+3. **Defense in depth in the trusted publisher.** `league-publish.yml` runs on
+   `workflow_run` from the default branch (a PR *cannot* rewrite it) and independently
+   re-resolves the triggering PR's author via the GitHub API, failing closed if the match
+   artifact's `submitter` does not match. So even a rewritten scorer that forges a
+   `match-meta.json` submitter is caught before it reaches permanent ELO history.
+
+Enforced/asserted by `tests/test_action_isolation.py`
+(`test_codeowners_protects_trust_critical_paths`,
+`test_publish_job_cross_checks_submitter_against_pr_author`) + `.github/CODEOWNERS`.
 
 ## Harness fingerprint (the credibility gate)
 
@@ -122,6 +162,14 @@ public match logs are the dispute mechanism.
 
 ## ELO (deterministic, forfeit-safe, variance-gated)
 
+- **Row identity is the GitHub login, by design.** This is a per-contributor / per-harness
+  league: a row's ELO is the recompute-from-full-history of every match that login has
+  played, so an entrant *improves their bot over time* and their rating reflects that arc —
+  it is deliberately NOT reset per bot edit. What IS bound to the exact bytes: (a) each
+  scored match is spec-bound to the bot_sha256 the sandbox actually ran (a forged/ swapped
+  bot for a given match is rejected), and (b) the row's *published* bot_sha256 is
+  re-derived at load from the committed `main.py`, so the displayed hash always matches the
+  current on-disk bot, never a self-attested claim.
 - **Recompute from full match history** on every publish (not incremental). Same history →
   byte-identical ELO JSON, order-independent — no flapping board on CI re-runs.
 - **Zero-opponent provisional:** the first-ever submitter gets `elo=1500, rated=false`,

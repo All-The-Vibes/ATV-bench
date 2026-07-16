@@ -37,3 +37,40 @@ jobs:
           assert on_disk == LEADERBOARD_SCHEMA, "leaderboard/schema.json drifted from code"
           print("schema in sync")
           PY
+
+  # Always-on community-PR confinement (santa round-7): a REQUIRED check on every PR, not a
+  # side effect of the labeled run-match workflow. A submission PR (one touching
+  # league/submissions/**) may ONLY add/modify its own
+  # league/submissions/<author>/{main.py,submission.json}. Renames, deletes, other entrants'
+  # dirs, league/matches.jsonl, and — critically — .github/workflows/** (the pwn-request
+  # vector where a PR rewrites the workflow that scores it) all fail closed BEFORE merge.
+  # A pure plumbing PR (no submissions/**) is not confined and passes for normal review.
+  pr-path-guard:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e '.'
+      - name: Confine community submission PRs to their own files
+        env:
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "$BASE_SHA" || true
+          # name-status (not name-only): surfaces rename/copy/delete so the gate can reject
+          # them, and both sides of a rename so it can't drag another entrant's bot in.
+          git diff --name-status "$BASE_SHA"..."$HEAD_SHA" > changes.txt \
+            || git diff --name-status "$BASE_SHA" "$HEAD_SHA" > changes.txt
+          echo "PR name-status:"; cat changes.txt
+          python -m atv_bench.cli validate-pr-paths --author "$AUTHOR" \
+            --name-status --paths-file changes.txt

@@ -19,9 +19,13 @@ uv run pytest -m "not live and not integration" -q   # should be all green
 ## Authentication
 
 `atv-bench submit --dry-run` runs a `gh`-based preflight (checking you're authenticated
-and have a fork) and writes your submission record. **Live PR automation is not wired
-yet** — you open the PR yourself (see [Manual PR fallback](#manual-pr-fallback)).
-Authenticate `gh` once so the preflight passes:
+and the league repo is reachable) and writes your submission record. `atv-bench submit
+--live --identity <you>` runs the same preflight and, if it passes, opens the PR
+end-to-end (fork → clone → branch → stage → commit → push → `gh pr create`, then backfills
+the real PR URL into the committed record). A missing fork is bootstrapped automatically,
+so first-time contributors need no manual setup. If you'd rather open the PR yourself, use
+`--dry-run` and the [Manual PR fallback](#manual-pr-fallback). Authenticate `gh` once
+either way:
 
 ```bash
 gh auth login   # choose GitHub.com, HTTPS
@@ -48,8 +52,10 @@ message pointing here.
      --identity <your-github-login> --out submission.json
    ```
    `--dry-run` runs preflight and writes `submission.json` (the store-ingestable
-   record). Then commit the bot + record under `league/submissions/` and open a PR
-   yourself — live PR automation is not wired yet (see **Manual PR fallback** below).
+   record). Then either open the PR automatically with `atv-bench submit ./main.py
+   --game battlesnake --live --identity <your-github-login>`, or commit the bot + record
+   under `league/submissions/<identity>/` and open a PR yourself (see **Manual PR
+   fallback** below).
 
 ### Clean branch
 
@@ -71,13 +77,16 @@ the sandbox enforces it again before execution.
 
 If `gh` isn't available or the automated flow fails, open the PR by hand. Run
 `atv-bench submit ./main.py --game battlesnake --dry-run --identity <you> --out submission.json`
-to produce the record, then fork `All-The-Vibes/ATV-bench` and add exactly two files:
+to produce the record, then fork `All-The-Vibes/ATV-bench` and add exactly two files
+**in one directory named for your identity**:
 
 - `league/submissions/<your-identity>/main.py` — your bot (single text file ≤ 256 KiB).
-- `league/submissions/<your-identity>.json` — the `submission.json` from `--dry-run`
-  (identity, game, bot_sha256, bot_filename, pr_url, logs_url, fingerprint). This is the
-  exact flat shape the league store ingests (`LeagueStore.add_submission` reads
-  `league/submissions/*.json`); do not hand-edit the fingerprint.
+- `league/submissions/<your-identity>/submission.json` — the `submission.json` from
+  `--dry-run` (identity, game, bot_sha256, bot_filename, pr_url, logs_url, fingerprint).
+  This is the exact nested shape the league store ingests (`LeagueStore.load_submissions`
+  reads `league/submissions/<identity>/submission.json` and anchors identity to the
+  directory name); do not hand-edit the fingerprint — the publish job re-scans it for
+  secret-shaped values and drops any it finds.
 
 Then open a PR. A maintainer reviews it and adds the `run-match` label to trigger the
 match job. (The label is the trust boundary that gates untrusted bot execution, so only
@@ -87,11 +96,21 @@ maintainers can add it.)
 
 ```
 PR opened → (first-timer: maintainer approves the run) → match job runs your bot
-          → result artifact → publish job recomputes ELO → leaderboard updates
+          → result + trusted-meta artifacts → league-publish (workflow_run) recomputes
+            ELO, persists the store, and deploys the leaderboard
 ```
 
 First-time contributors need a maintainer to approve the workflow run before the
 untrusted bot executes (a GitHub environment gate). Expect a short wait the first time.
+
+**Fork-safe by design.** The match job that runs your bot holds no token (a fork PR's
+`GITHUB_TOKEN` is read-only anyway) and only uploads two artifacts: the bot's result and
+a *trusted* meta record (your GitHub identity + the run id + the bot's byte hash, built
+from GitHub context, never from bot output). A separate trusted workflow
+(`league-publish.yml`) then runs in the base repo on `workflow_run`, where it has the
+write access needed to persist the store and deploy Pages — without ever checking out or
+executing your PR code. This is what lets **fork** submissions score end-to-end, not just
+same-repo branches.
 
 ## Extending the ecosystem
 

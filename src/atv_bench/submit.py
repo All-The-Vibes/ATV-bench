@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -18,6 +20,26 @@ from atv_bench.fingerprint.scan import is_secret
 # Bots are single small files (v1 arena bots). Guard shape/size before execution.
 _MAX_BOT_BYTES = 256 * 1024
 _REPO_URL = "https://github.com/All-The-Vibes/ATV-bench"
+_REPO_SLUG = "All-The-Vibes/ATV-bench"
+
+# A command runner: (cmd, **kwargs) -> (returncode, stdout, stderr). Injected so tests
+# never touch a real gh/git. `default_command_runner` wraps subprocess for the live path.
+CommandRunner = Callable[..., "tuple[int, str, str]"]
+
+
+def _is_atv_bench_origin(origin: str) -> bool:
+    """True iff a git remote URL's REPO NAME is exactly `ATV-bench` (case-insensitive).
+
+    Parses both HTTPS (`https://github.com/<owner>/ATV-bench[.git]`) and SSH
+    (`git@github.com:<owner>/ATV-bench[.git]`) forms and compares the final path segment
+    exactly — so a close-name repo like `owner/atv-bench-malicious` is rejected, not
+    substring-matched. Owner is intentionally NOT constrained (it is the user's fork).
+    """
+    tail = origin.rstrip("/").rsplit("/", 1)[-1]      # handles https and the ssh path part
+    tail = tail.rsplit(":", 1)[-1]                     # git@host:owner/repo -> repo if no slash
+    if tail.endswith(".git"):
+        tail = tail[:-4]
+    return tail.lower() == "atv-bench"
 
 
 @dataclass(frozen=True)
@@ -128,11 +150,183 @@ def submission_status_trail(is_first_time: bool) -> list[str]:
     read as silent latency.
     """
     trail = [
-        "1. PR opened against All-The-Vibes/ATV-bench (you open it; live automation is not wired yet)",
+        "1. PR opened against All-The-Vibes/ATV-bench (`atv-bench submit --live` opens it via gh, or open it manually)",
         "2. A maintainer adds the `run-match` label → the sandboxed match job runs your bot",
-        "3. Publish job recomputes ELO from history → the static leaderboard updates",
+        "3. Publish workflow recomputes ELO from history → the static leaderboard updates",
     ]
     if is_first_time:
         trail.insert(2, "→ First-time contributor: a maintainer must also approve the "
                         "workflow run before matches start (GitHub gate; expect a short wait).")
     return trail
+
+
+def default_command_runner(cmd: list[str], *, cwd: str | None = None,
+                           timeout: int = 120) -> "tuple[int, str, str]":
+    """Live command runner used by the real submit path. Never invoked in tests (they
+    inject their own). Captures output so a failing step yields an actionable Cause."""
+    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def gh_preflight_runner(check: PreflightCheck, *, runner: CommandRunner,
+                        bot_path: str, identity: str,
+                        workdir: str | None = None) -> "tuple[bool, str]":
+    """Real gh/git-backed implementation of a single preflight check.
+
+    Injected `runner` keeps it testable. Each check maps to a concrete, side-effect-free
+    probe; anything that fails returns (False, detail) so run_preflight surfaces the first
+    failure with its actionable AtvError. `workdir` is the submission working tree the live
+    PR is committed from — the cleanliness check must run there, not the process cwd (H4).
+    """
+    cid = check.id
+    if cid == "gh_installed":
+        ok = shutil.which("gh") is not None
+        return ok, "gh on PATH" if ok else "gh not found on PATH"
+    if cid == "gh_authed":
+        rc, out, err = runner(["gh", "auth", "status"])
+        return rc == 0, (out or "authenticated") if rc == 0 else (err or "not authenticated")
+    if cid == "repo_exists":
+        rc, out, err = runner(["gh", "repo", "view", _REPO_SLUG, "--json", "name"])
+        return rc == 0, _REPO_SLUG if rc == 0 else (err or "repo not reachable")
+    if cid == "fork_exists":
+        # F3: a first-time contributor has NO fork yet. This must be non-fatal — the live
+        # open path creates it idempotently (`gh repo fork`). We PROBE for information only
+        # and always return ok, so a missing fork never blocks the advertised bootstrap.
+        rc, out, err = runner(["gh", "repo", "view", f"{identity}/ATV-bench", "--json", "name"])
+        return True, "fork present" if rc == 0 else "no fork yet (submit will create one)"
+    if cid == "branch_clean":
+        # H4: check the SUBMISSION workdir, not the process cwd — the live PR commits from
+        # `workdir`, so a dirty tree THERE (not here) is what could leak unrelated files.
+        # R3: a first-timer's workdir may not exist / not be a repo yet (open_submission_pr
+        # clones the fork later). Treat a missing/non-repo workdir as bootstrap-needed (pass),
+        # not a dirty-tree failure — else the CLI's "preflight must pass" gate blocks the
+        # clone bootstrap. Only an EXISTING repo with a dirty tree fails here.
+        if workdir is not None and not Path(workdir).exists():
+            return True, "workdir absent — will be cloned by submit (bootstrap)"
+        rc, out, err = runner(["git", "status", "--porcelain"], cwd=workdir)
+        if rc != 0:
+            return True, "workdir is not a git repo yet — will be cloned by submit (bootstrap)"
+        clean = out.strip() == ""
+        return clean, "clean" if clean else "working tree has uncommitted changes"
+    if cid == "leak_scan":
+        # cheap defense-in-depth: the bot file bytes must not contain a secret-shaped token.
+        try:
+            text = Path(bot_path).read_text(encoding="utf-8", errors="ignore")
+        except OSError as e:
+            return False, f"cannot read bot: {e}"
+        for token in text.split():
+            if is_secret(token):
+                return False, "bot text contains a secret-shaped value"
+        return True, "no secret-shaped values in bot text"
+    if cid == "bot_shape":
+        try:
+            validate_bot_shape(bot_path)
+            return True, "bot shape/size valid"
+        except AtvError as e:
+            return False, e.cause or "invalid bot shape"
+    return False, f"unknown check {cid!r}"
+
+
+def _run_or_raise(runner: CommandRunner, cmd: list[str], *, cwd: str | None = None) -> str:
+    """Run a submission step; raise a fail-closed AtvError on any non-zero exit."""
+    rc, out, err = runner(cmd, cwd=cwd)
+    if rc != 0:
+        raise AtvError(ErrorCode.SUBMIT_PR_FAILED,
+                       cause=f"`{' '.join(cmd)}` failed (exit {rc}): {err.strip() or out.strip()}")
+    return out
+
+
+def open_submission_pr(*, record: dict[str, Any], bot_path: str, identity: str,
+                       runner: CommandRunner = default_command_runner,
+                       workdir: str, branch: str | None = None,
+                       repo_slug: str = _REPO_SLUG) -> dict[str, Any]:
+    """Open the submission PR live: fork → clone → branch → stage → commit → push →
+    `gh pr create` → backfill the record's real PR URL → re-push.
+
+    Every step goes through the injected `runner` so the whole flow is hermetically
+    testable. Fails closed: identity is required, and any non-zero gh/git step aborts with
+    a SUBMIT_PR_FAILED AtvError before a later step (never a half-open PR). Returns
+    {"pr_url": ...} parsed from `gh pr create` stdout.
+
+    First-timer safe (F3): a missing fork is bootstrapped by `gh repo fork`, and if
+    `workdir` is not already a git checkout it is cloned from the fork before branching.
+    The committed submission.json is rewritten with the real PR URL after the PR exists
+    (the pre-PR record can only carry a placeholder), then re-pushed so the merged record
+    links to the actual PR.
+
+    The bot + submission.json are materialized at the IDENTITY-PINNED path the match job
+    reads — league/submissions/<identity>/ — so the opened PR is directly scoreable.
+    """
+    if not identity.strip():
+        raise AtvError(ErrorCode.SUBMIT_PR_FAILED,
+                       cause="identity is required to open a submission PR (attribution + bot path)")
+    ident = identity.strip()
+    branch = branch or f"submit/{ident}"
+    wt = Path(workdir)
+
+    # Ensure the fork exists (idempotent — no-op if already forked). This is the bootstrap
+    # a first-time contributor needs; it is never a preflight prerequisite.
+    _run_or_raise(runner, ["gh", "repo", "fork", repo_slug, "--clone=false"])
+
+    # Ensure a working tree is present. A first-timer runs from an arbitrary cwd with no
+    # ATV-bench checkout. Probe `git rev-parse` INSIDE the target workdir (G2: never with
+    # cwd=None — that probes the process cwd and, run from any repo, falsely reports a
+    # checkout so the clone is skipped and a later `checkout -b` runs in a non-repo). An
+    # absent or non-repo workdir triggers a clone of the fork.
+    wt.mkdir(parents=True, exist_ok=True)
+    rc, _out, _err = runner(["git", "rev-parse", "--is-inside-work-tree"], cwd=str(wt))
+    if rc != 0:
+        _run_or_raise(runner, ["gh", "repo", "clone", f"{ident}/ATV-bench", str(wt)])
+    else:
+        # An EXISTING repo at workdir must actually be an ATV-bench checkout (santa round-4/5,
+        # Reviewer B): otherwise we would commit league/submissions/... into an unrelated repo
+        # and push it before `gh pr create` fails. Verify origin's REPO NAME is exactly
+        # ATV-bench (not a substring match — `octocat/atv-bench-malicious` must be rejected).
+        # An empty origin is tolerated (a bare/fresh checkout).
+        orc, oout, _oerr = runner(["git", "remote", "get-url", "origin"], cwd=str(wt))
+        origin = oout.strip()
+        if orc == 0 and origin and not _is_atv_bench_origin(origin):
+            raise AtvError(
+                ErrorCode.SUBMIT_PR_FAILED,
+                cause=(f"workdir {wt} is a git repo whose origin ({origin}) is not an "
+                       "ATV-bench fork; refusing to commit a submission into the wrong repo. "
+                       "Use --workdir pointing at your ATV-bench fork clone (or an empty dir)."))
+
+    # Stage the bot + record at the identity-pinned path BEFORE committing. We write files
+    # directly (the runner handles only gh/git), so tests observe a real materialized tree.
+    dest = wt / "league" / "submissions" / ident
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / "main.py").write_text(Path(bot_path).read_text())
+    (dest / "submission.json").write_text(json.dumps(record, indent=2, sort_keys=True))
+
+    _run_or_raise(runner, ["git", "checkout", "-b", branch], cwd=str(wt))
+    _run_or_raise(runner, ["git", "add", "league/submissions"], cwd=str(wt))
+    _run_or_raise(runner, ["git", "commit", "-m", f"league: submit bot for {ident}"], cwd=str(wt))
+    _run_or_raise(runner, ["git", "push", "-u", "origin", branch], cwd=str(wt))
+
+    out = _run_or_raise(runner, [
+        "gh", "pr", "create", "--repo", repo_slug,
+        "--title", f"League submission: {ident}",
+        "--body", f"Automated submission for `{ident}` (bot + harness fingerprint).",
+        "--head", f"{ident}:{branch}",
+    ], cwd=str(wt))
+    pr_url = out.strip().splitlines()[-1].strip() if out.strip() else ""
+
+    # Backfill the real PR URL into the committed record (the pre-PR record can only carry
+    # a placeholder) and re-push. The PR is ALREADY OPEN at this point, so a backfill
+    # failure must NOT raise a fail-closed SUBMIT_PR_FAILED (that would imply no PR exists,
+    # G3). Instead surface partial success: return the live pr_url with backfilled=False so
+    # the caller/user knows the PR is up but the URL wasn't stamped into the record.
+    backfilled_ok = False
+    if pr_url:
+        try:
+            updated = {**record, "pr_url": pr_url}
+            (dest / "submission.json").write_text(json.dumps(updated, indent=2, sort_keys=True))
+            _run_or_raise(runner, ["git", "add", "league/submissions"], cwd=str(wt))
+            _run_or_raise(runner, ["git", "commit", "-m", f"league: backfill PR url for {ident}"], cwd=str(wt))
+            _run_or_raise(runner, ["git", "push", "origin", branch], cwd=str(wt))
+            backfilled_ok = True
+        except AtvError:
+            backfilled_ok = False
+
+    return {"pr_url": pr_url, "branch": branch, "identity": ident, "backfilled": backfilled_ok}

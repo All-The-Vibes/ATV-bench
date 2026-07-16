@@ -129,3 +129,73 @@ def test_match_job_runs_a_built_local_image(wf):
         f"`docker run` image {run_image!r} must be exactly the built tag {build_tag!r}"
     )
     assert not run_image.endswith(":latest"), "arena run image must be pinned, not :latest"
+
+
+# ---- FOLLOW_UPS item 1: trusted-referee entrypoint + baked package drift ----
+#
+# The arena must ADJUDICATE, not trust bot stdout. That requires (a) the trusted referee
+# is the image ENTRYPOINT (not a bare `python3` that runs the bot's stdout as the result),
+# and (b) the trusted referee code is BAKED into the image and byte-identical to the
+# tested src/ package (no drift, and never read from the untrusted /work mount).
+
+ARENA_PKG = ROOT / "arena" / "pkg" / "atv_bench" / "arena"
+SRC_PKG = ROOT / "src" / "atv_bench" / "arena"
+
+
+def test_entrypoint_is_the_trusted_referee_not_bare_python():
+    # A bare `ENTRYPOINT ["python3"]` runs `/work/main.py` and passes ITS stdout through
+    # as the match result — the pre-item-1 trust hole. The entrypoint must invoke the
+    # referee module so the ADJUDICATED result is authored by trusted code.
+    text = DOCKERFILE.read_text()
+    ep_lines = [ln for ln in text.splitlines()
+                if ln.split("#", 1)[0].strip().upper().startswith("ENTRYPOINT")]
+    assert ep_lines, "arena/Dockerfile must declare an ENTRYPOINT"
+    ep = ep_lines[-1]
+    assert "atv_bench.arena" in ep, (
+        f"arena ENTRYPOINT must run the trusted referee (`python3 -m atv_bench.arena`), "
+        f"not a bare interpreter that trusts bot stdout. Got: {ep.strip()!r}"
+    )
+    # Guard against a regression to the exact old bare-python entrypoint.
+    assert ep.strip() != 'ENTRYPOINT ["python3"]', (
+        "ENTRYPOINT must not be a bare python3 (that trusts bot stdout as the result)"
+    )
+
+
+def test_referee_package_is_baked_into_the_image():
+    # The referee must live inside the image, copied from the trusted build context —
+    # never loaded from the untrusted read-only /work mount.
+    text = DOCKERFILE.read_text()
+    copy_lines = [ln for ln in text.splitlines()
+                  if ln.split("#", 1)[0].strip().upper().startswith("COPY")]
+    assert any("pkg/" in ln for ln in copy_lines), (
+        "arena/Dockerfile must COPY the trusted referee package (pkg/) into the image"
+    )
+    assert (ARENA_PKG / "__main__.py").exists(), "baked referee must include __main__.py entrypoint"
+    assert (ARENA_PKG / "engine.py").exists(), "baked referee must include the engine"
+    assert (ARENA_PKG / "referee.py").exists(), "baked referee must include the referee"
+
+
+def test_baked_referee_is_byte_identical_to_tested_src():
+    # DRY + no-drift: the baked copy MUST equal the src package that the unit tests
+    # exercise, so a change to the referee cannot ship an untested copy in the image.
+    for name in ("__init__.py", "engine.py", "referee.py", "__main__.py"):
+        baked = (ARENA_PKG / name).read_bytes()
+        src = (SRC_PKG / name).read_bytes()
+        assert baked == src, (
+            f"arena/pkg/atv_bench/arena/{name} has drifted from "
+            f"src/atv_bench/arena/{name} — re-sync so the image runs tested code"
+        )
+    # Top-level package marker also present so `-m atv_bench.arena` imports.
+    assert (ROOT / "arena" / "pkg" / "atv_bench" / "__init__.py").exists()
+
+
+def test_match_job_passes_trusted_identity_env_to_referee(wf):
+    # The referee stamps player_a/player_b/match_id from ATV_* env (trusted GitHub
+    # context), never from bot stdout. The run step must pass those into the container.
+    code = _match_run_code(wf)
+    joined = re.sub(r"\\\s*\n", " ", code)
+    run_match = re.search(r"docker run\b(.*?)(?:\n|$)", joined)
+    assert run_match, "match job must `docker run` the arena image"
+    seg = run_match.group(1)
+    for var in ("ATV_SUBMITTER", "ATV_OPPONENT", "ATV_MATCH_ID"):
+        assert var in seg, f"docker run must pass -e {var} to the trusted referee"

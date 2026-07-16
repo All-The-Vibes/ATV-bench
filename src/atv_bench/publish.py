@@ -20,7 +20,11 @@ from typing import Any
 
 from atv_bench.elo import ForfeitReason, Outcome
 from atv_bench.leaderboard import validate_leaderboard
-from atv_bench.store import LeagueStore, build_leaderboard_from_store
+from atv_bench.store import LeagueStore, build_leaderboard_from_store, _read_text_bounded
+
+# A match-result artifact is small JSON (a handful of fields). Bound the trusted read so
+# an oversized artifact fails closed instead of OOM-ing the trusted publish job.
+_MAX_ARTIFACT_BYTES = 256 * 1024
 
 _VALID_STATUSES = {"ok", "crash", "invalid_output"}
 _FORFEIT_OUTCOMES = {Outcome.FORFEIT_A.value, Outcome.FORFEIT_B.value}
@@ -54,13 +58,27 @@ class MatchSpec:
     submitter: str
     opponent: str
     match_id: str
+    # Trusted sha256 of the EXACT bot bytes the match job mounted (santa re-review #5).
+    # Optional: None means bot-identity binding is not enforced (local/hermetic use, or a
+    # workflow that does not export it). When set, the stored record is stamped with THIS
+    # value and a disagreeing bot-reported bot_sha256 is rejected — so a SCORED RESULT is
+    # provably tied to the bytes that produced it, never a later-swapped bot under the same
+    # login for THAT match. Scope note: the leaderboard ROW is keyed by login and its ELO is
+    # recompute-from-full-history BY DESIGN — a per-contributor/harness league where an
+    # entrant iterates their bot over time. The row's published bot_sha256 is separately
+    # re-derived from the committed main.py at load, so the displayed hash always matches the
+    # current on-disk bot; this is not a claim that ELO resets per bot edit.
+    bot_sha256: "str | None" = None
 
     @classmethod
     def from_env(cls) -> "MatchSpec":
         """Build the spec from the workflow-exported env (ATV_SUBMITTER/OPPONENT/MATCH_ID).
 
         Fails closed: a missing/blank value means the trusted context is absent, and we
-        must NOT fall back to trusting the bot's self-reported identities."""
+        must NOT fall back to trusting the bot's self-reported identities. ATV_BOT_SHA256
+        is OPTIONAL (an enhancement over the load-bearing identity+match_id binding): if
+        absent/blank the spec's bot_sha256 is None and byte-binding is simply not enforced,
+        rather than failing the whole publish."""
         vals = {}
         for field_name, env in (("submitter", "ATV_SUBMITTER"),
                                 ("opponent", "ATV_OPPONENT"),
@@ -74,6 +92,8 @@ class MatchSpec:
             # self-match could bind. Enforce the invariant locally at spec construction.
             raise ValueError(
                 f"submitter and opponent must differ (both {vals['submitter']!r})")
+        sha = os.environ.get("ATV_BOT_SHA256", "").strip()
+        vals["bot_sha256"] = sha or None
         return cls(**vals)
 
 
@@ -101,12 +121,28 @@ def bind_ok_to_spec(data: dict[str, Any], spec: MatchSpec) -> dict[str, Any]:
     if data.get("match_id") != spec.match_id:
         raise SpecMismatch(
             f"reported match_id {data.get('match_id')!r} != issued {spec.match_id!r}")
+    # Bot-identity binding (item 5): if the trusted spec carries a bot_sha256 AND the bot
+    # ALSO reports one, they must agree — a disagreement means the artifact claims bytes
+    # other than the ones the trusted job mounted. Reject to a forfeit. (A bot that reports
+    # NO sha is fine: the trusted value is stamped regardless below, so the record is bound
+    # to the real bytes either way.)
+    if spec.bot_sha256 is not None:
+        reported_sha = data.get("bot_sha256")
+        if reported_sha is not None and reported_sha != spec.bot_sha256:
+            raise SpecMismatch(
+                f"reported bot_sha256 {reported_sha!r} != issued {spec.bot_sha256!r}")
     # Canonicalize identities from the trusted spec (fixed orientation), and translate
     # the bot-asserted outcome so the WINNER is preserved rather than silently flipped.
     rec = dict(data)
     rec["player_a"] = spec.opponent
     rec["player_b"] = spec.submitter
     rec["match_id"] = spec.match_id
+    # Stamp the TRUSTED bot bytes hash (never the bot-reported one) so a scored match is
+    # provably tied to the submitted bytes. Omitted when the spec carries no sha.
+    if spec.bot_sha256 is not None:
+        rec["bot_sha256"] = spec.bot_sha256
+    else:
+        rec.pop("bot_sha256", None)
     rec["outcome"] = _translate_outcome(
         data["outcome"], bot_a=pa, canonical_a=spec.opponent)
     return rec
@@ -162,7 +198,7 @@ def validate_artifact(path: str) -> dict[str, Any]:
     builds without a trusted-job crash.
     """
     try:
-        data = json.loads(Path(path).read_text())
+        data = json.loads(_read_text_bounded(Path(path), _MAX_ARTIFACT_BYTES, "artifact"))
     except (json.JSONDecodeError, ValueError) as e:
         raise ValueError(f"artifact is not valid JSON: {e}")
     if not isinstance(data, dict):
@@ -254,6 +290,10 @@ def ingest_result(path: str, *, store_dir: str = _DEFAULT_STORE,
         }
         if data.get("forfeit_reason"):
             match["forfeit_reason"] = data["forfeit_reason"]
+        if data.get("bot_sha256"):
+            # Present only when a trusted spec stamped it (bind_ok_to_spec). Carries the
+            # bot-identity binding through into the durable match record.
+            match["bot_sha256"] = data["bot_sha256"]
         store.append_match(match)
         return True
     # crash / invalid_output -> forfeit loss for the crasher
