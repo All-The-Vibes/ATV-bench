@@ -15,6 +15,7 @@ empty board. The match job appends a validated result to `matches.jsonl` via
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from pathlib import Path
 from typing import Any
@@ -135,6 +136,16 @@ class LeagueStore:
                 )
             if identity in subs:
                 raise ValueError(f"duplicate submission identity: {identity!r}")
+            # Bind the PUBLISHED bot_sha256 to the actual committed bytes (santa round-7):
+            # the row hash must be the hash of the sibling main.py, not the mutable
+            # submission.json claim — else a contributor could display a hash that differs
+            # from the bytes that earned the ELO. Recompute from main.py when present and
+            # STAMP the trusted value over whatever the record claimed.
+            bot_file = d / "main.py"
+            if bot_file.is_file():
+                trusted_sha = hashlib.sha256(bot_file.read_bytes()).hexdigest()
+                if data.get("bot_sha256") != trusted_sha:
+                    data = {**data, "bot_sha256": trusted_sha}
             subs[identity] = data
         return subs
 

@@ -214,3 +214,43 @@ def test_well_formed_scalars_still_load(tmp_path):
     league = tmp_path / "league"
     _write_record(league, "alice", _valid_record("alice"))  # valid 64-hex sha, https urls
     assert set(LeagueStore(str(league)).load_submissions()) == {"alice"}
+
+
+# --- santa round-7 (Reviewer B): the published bot_sha256 must be BOUND to the actual
+#     committed main.py bytes, not the mutable submission.json claim. The store recomputes
+#     the hash from the sibling main.py and STAMPS the trusted value, so the row can never
+#     advertise a hash that isn't the scored bytes. ---
+
+import hashlib
+
+
+def test_bot_sha256_is_stamped_from_committed_main_py(tmp_path):
+    """A submission.json whose bot_sha256 disagrees with the sibling main.py bytes must not
+    publish the claimed hash — the store stamps the REAL hash of main.py."""
+    league = tmp_path / "league"
+    d = league / "submissions" / "alice"
+    d.mkdir(parents=True)
+    body = "def move(s):\n    return 'up'\n"
+    (d / "main.py").write_text(body)
+    real = hashlib.sha256(body.encode()).hexdigest()
+    rec = _sub("alice")
+    rec["bot_sha256"] = "b" * 64  # valid pattern, but NOT the hash of main.py
+    (d / "submission.json").write_text(json.dumps(rec))
+    loaded = LeagueStore(str(league)).load_submissions()
+    assert loaded["alice"]["bot_sha256"] == real, "must stamp the real main.py hash, not the claim"
+
+
+def test_bot_sha256_matching_committed_main_py_loads(tmp_path):
+    """No false positive: a record whose bot_sha256 already equals the committed main.py hash
+    loads unchanged."""
+    league = tmp_path / "league"
+    d = league / "submissions" / "alice"
+    d.mkdir(parents=True)
+    body = "def move(s):\n    return 'up'\n"
+    (d / "main.py").write_text(body)
+    real = hashlib.sha256(body.encode()).hexdigest()
+    rec = _sub("alice")
+    rec["bot_sha256"] = real
+    (d / "submission.json").write_text(json.dumps(rec))
+    loaded = LeagueStore(str(league)).load_submissions()
+    assert loaded["alice"]["bot_sha256"] == real
