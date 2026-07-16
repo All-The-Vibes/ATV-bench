@@ -75,6 +75,32 @@ def _within_dir(path: Path, root: Path) -> bool:
     return rp == rr or rr in rp.parents
 
 
+def _reject_symlinked_ancestors(boundary: Path, stop_at: Path) -> None:
+    """Fail closed if `boundary` or any path component up to `stop_at` is a symlink.
+
+    Leaf-file confinement (santa round-2) confines record/main.py against a FIXED
+    submissions_dir root — but if that root, or league/, or the store root ITSELF is a
+    committed symlink (league/submissions -> ../payload), the "fixed" root is attacker-
+    chosen and every downstream _within_dir check resolves against the target. Walk the
+    boundary and every ancestor down to (and including) stop_at and reject any symlink,
+    so the trusted publish path can never be re-pointed by a tracked directory symlink.
+    """
+    try:
+        boundary = boundary.absolute()
+        stop_at = stop_at.absolute()
+    except OSError as e:
+        raise ValueError(f"cannot resolve store boundary {boundary}: {e}") from e
+    cur = boundary
+    while True:
+        if cur.is_symlink():
+            raise ValueError(
+                f"store boundary component {cur} is a symlink (escape rejected)"
+            )
+        if cur == stop_at or cur == cur.parent:
+            break
+        cur = cur.parent
+
+
 class LeagueStore:
     """Filesystem-backed store for submissions + match history."""
 
@@ -115,6 +141,9 @@ class LeagueStore:
         subs: dict[str, dict[str, Any]] = {}
         if not self.submissions_dir.exists():
             return subs
+        # Boundary confinement (santa round-3): reject a symlinked submissions_dir / store
+        # root before trusting it as the containment anchor for leaf files below.
+        _reject_symlinked_ancestors(self.submissions_dir, self.root)
         for d in sorted(p for p in self.submissions_dir.iterdir() if p.is_dir()):
             # Directory-symlink confinement (santa round-2, both reviewers CRITICAL):
             # iterdir()+is_dir() FOLLOWS a directory symlink, so a git-tracked
@@ -262,6 +291,9 @@ class LeagueStore:
     def load_matches(self) -> list[dict[str, Any]]:
         if not self.matches_file.exists():
             return []
+        # Boundary confinement (santa round-3): reject a symlinked store root before it is
+        # trusted as the containment anchor for the matches file.
+        _reject_symlinked_ancestors(self.matches_file.parent, self.root)
         # Symlink confinement (santa round-2): matches.jsonl is committed into the store by
         # a merged PR. Refuse to follow a symlinked matches file into arbitrary host content
         # (the trusted read/append path must stay inside the store root).
@@ -279,10 +311,45 @@ class LeagueStore:
             # Per-line fail-closed: a malformed line must raise a controlled ValueError,
             # not surface as an uncaught JSONDecodeError deep in trusted board generation.
             try:
-                out.append(json.loads(line))
+                rec = json.loads(line)
             except json.JSONDecodeError as e:
                 raise ValueError(f"malformed matches.jsonl line: {e}") from e
+            # Semantic validation (santa round-3): JSON-syntax validity is not enough. A
+            # well-formed line that is not a valid match record ([], {}, missing keys, bad
+            # outcome enum) would crash the trusted build downstream (_to_match_result does
+            # m["player_a"]/Outcome(m["outcome"])). Fail closed HERE with a controlled error.
+            _validate_match_record(rec)
+            out.append(rec)
         return out
+
+
+def _validate_match_record(m: Any) -> None:
+    """Fail closed if a committed matches.jsonl record is not a valid match.
+
+    matches.jsonl is attacker-influenced (a merged PR commits it). A well-formed JSON line
+    that is not a proper match record ([], {}, missing keys, non-string ids, unknown
+    outcome/forfeit enum, non-int seed) must raise a controlled ValueError here, not crash
+    the trusted board build downstream in _to_match_result / compute_leaderboard.
+    """
+    if not isinstance(m, dict):
+        raise ValueError(f"matches.jsonl record is not a JSON object: {type(m).__name__}")
+    missing = _MATCH_KEYS - set(m)
+    if missing:
+        raise ValueError(f"matches.jsonl record missing keys: {sorted(missing)}")
+    for key in ("player_a", "player_b", "match_id"):
+        if not isinstance(m[key], str) or not m[key]:
+            raise ValueError(f"matches.jsonl record has invalid {key!r}")
+    if m["outcome"] not in {o.value for o in Outcome}:
+        raise ValueError(f"matches.jsonl record has invalid outcome {m['outcome']!r}")
+    reason = m.get("forfeit_reason")
+    if reason is not None and reason not in {r.value for r in ForfeitReason}:
+        raise ValueError(f"matches.jsonl record has invalid forfeit_reason {reason!r}")
+    seed = m.get("seed", 0)
+    if not isinstance(seed, int) or isinstance(seed, bool):
+        raise ValueError(f"matches.jsonl record has non-int seed {seed!r}")
+    game = m.get("game", "battlesnake")
+    if not isinstance(game, str):
+        raise ValueError(f"matches.jsonl record has non-string game {game!r}")
 
 
 def _to_match_result(m: dict[str, Any]) -> MatchResult:

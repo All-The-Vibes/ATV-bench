@@ -362,3 +362,57 @@ def test_oversized_bot_file_fails_closed(tmp_path):
     (d / "main.py").write_text("#" * (2 * 1024 * 1024))
     with pytest.raises(ValueError):
         LeagueStore(str(league)).load_submissions()
+
+
+# --- Ancestor/root symlink (santa round-3, both reviewers): leaf-file checks confine
+#     against submissions_dir, but if `league/submissions` (or the store root) is ITSELF a
+#     symlink, that "fixed root" is attacker-chosen. Reject a symlinked store boundary. ---
+
+def test_symlinked_submissions_dir_boundary_fails_closed(tmp_path):
+    league = tmp_path / "league"
+    league.mkdir()
+    payload = tmp_path / "payload"
+    (payload / "alice").mkdir(parents=True)
+    (payload / "alice" / "main.py").write_text("def move(s):\n    return 'up'\n")
+    (payload / "alice" / "submission.json").write_text(json.dumps(_sub("alice")))
+    (league / "submissions").symlink_to(payload, target_is_directory=True)
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_submissions()
+
+
+# --- matches.jsonl semantic validation (santa round-3): per-line JSON-SYNTAX fail-closed
+#     is not enough. A well-formed line that is not a valid match record ([], {}, bad enum)
+#     crashes the trusted board build downstream. load_matches must fail closed on it. ---
+
+def test_matches_line_non_object_fails_closed(tmp_path):
+    league = tmp_path / "league"
+    league.mkdir()
+    (league / "matches.jsonl").write_text("[]\n")
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_matches()
+
+
+def test_matches_line_missing_keys_fails_closed(tmp_path):
+    league = tmp_path / "league"
+    league.mkdir()
+    (league / "matches.jsonl").write_text('{"player_a": "a"}\n')
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_matches()
+
+
+def test_matches_line_bad_outcome_fails_closed(tmp_path):
+    league = tmp_path / "league"
+    league.mkdir()
+    (league / "matches.jsonl").write_text(
+        '{"player_a":"a","player_b":"b","outcome":"not_a_real_outcome","match_id":"x"}\n')
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_matches()
+
+
+def test_valid_matches_line_still_loads(tmp_path):
+    league = tmp_path / "league"
+    league.mkdir()
+    (league / "matches.jsonl").write_text(
+        '{"player_a":"a","player_b":"b","outcome":"a_wins","match_id":"x"}\n')
+    loaded = LeagueStore(str(league)).load_matches()
+    assert len(loaded) == 1 and loaded[0]["player_a"] == "a"
