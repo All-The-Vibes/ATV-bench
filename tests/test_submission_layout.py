@@ -277,3 +277,36 @@ def test_valid_github_login_identity_loads(tmp_path):
         league = tmp_path / f"league_ok_{ok}"
         _write_record(league, ok, _sub(ok))
         assert set(LeagueStore(str(league)).load_submissions()) == {ok}
+
+
+# --- Symlink confinement (santa dual-review): a committed submission is UNTRUSTED input.
+#     The store loader reads submission.json and hashes main.py; if either is a symlink
+#     pointing OUTSIDE the submission tree, a crafted PR could make the trusted board build
+#     read arbitrary host files (info leak / deploy-time DoS). fingerprint/reader.py already
+#     applies a _within_root guard; the store loader must match that posture. ---
+
+def test_symlinked_record_escaping_tree_fails_closed(tmp_path):
+    """A submission.json symlinked to a file outside the submissions tree must be rejected,
+    not silently followed into arbitrary host content."""
+    league = tmp_path / "league"
+    d = league / "submissions" / "mallory"
+    d.mkdir(parents=True)
+    (d / "main.py").write_text("def move(s):\n    return 'up'\n")
+    secret = tmp_path / "outside_secret.json"
+    secret.write_text(json.dumps(_sub("mallory")))
+    (d / "submission.json").symlink_to(secret)
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_submissions()
+
+
+def test_symlinked_bot_escaping_tree_fails_closed(tmp_path):
+    """A main.py symlinked outside the tree must be rejected before it is read/hashed."""
+    league = tmp_path / "league"
+    d = league / "submissions" / "mallory"
+    d.mkdir(parents=True)
+    (d / "submission.json").write_text(json.dumps(_sub("mallory")))
+    secret = tmp_path / "outside_bot.py"
+    secret.write_text("import os\n")
+    (d / "main.py").symlink_to(secret)
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_submissions()

@@ -33,6 +33,22 @@ _IDENTITY_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}")
 _MATCH_KEYS = {"player_a", "player_b", "outcome", "match_id"}
 
 
+def _within_dir(path: Path, root: Path) -> bool:
+    """True iff the fully-resolved `path` stays inside the resolved `root`.
+
+    A committed submission is UNTRUSTED input. If submission.json or main.py is a symlink
+    pointing outside the submission tree, following it would let a crafted PR make the
+    trusted board build read arbitrary host files (info leak / deploy-time DoS). We resolve
+    both and confine, mirroring fingerprint/reader.py's _within_root posture.
+    """
+    try:
+        rp = path.resolve()
+        rr = root.resolve()
+    except OSError:
+        return False
+    return rp == rr or rr in rp.parents
+
+
 class LeagueStore:
     """Filesystem-backed store for submissions + match history."""
 
@@ -79,6 +95,14 @@ class LeagueStore:
                 # A bot directory without a record is not yet a scored submission
                 # (e.g. a partial tree). Skip it rather than crash the whole board.
                 continue
+            # Symlink confinement (santa dual-review): a committed submission.json is
+            # untrusted. Reject a record that resolves outside its own entrant directory
+            # so a crafted symlink can't make the trusted build read arbitrary host files.
+            if not _within_dir(record, d):
+                raise ValueError(
+                    f"submission record for {d.name!r} resolves outside its directory "
+                    "(symlink escape rejected)"
+                )
             # H3 (santa round-3): a committed submission.json is hand-editable. Fail CLOSED
             # on malformed content — invalid JSON or a record missing required keys must
             # raise a controlled ValueError here, NOT surface later as an uncaught
@@ -155,6 +179,13 @@ class LeagueStore:
             # STAMP the trusted value over whatever the record claimed.
             bot_file = d / "main.py"
             if bot_file.is_file():
+                # Symlink confinement (santa dual-review): refuse to read/hash a main.py
+                # that resolves outside its entrant directory (untrusted-input escape).
+                if not _within_dir(bot_file, d):
+                    raise ValueError(
+                        f"bot file for {d.name!r} resolves outside its directory "
+                        "(symlink escape rejected)"
+                    )
                 trusted_sha = hashlib.sha256(bot_file.read_bytes()).hexdigest()
                 if data.get("bot_sha256") != trusted_sha:
                     data = {**data, "bot_sha256": trusted_sha}

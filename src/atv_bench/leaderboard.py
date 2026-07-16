@@ -24,8 +24,13 @@ SCHEMA_VERSION = 1
 # CI wider than the ELO-CI ceiling, is marked low-confidence and demoted.
 _LOW_CONFIDENCE_MATCHES = MIN_RATED_MATCHES
 # Per-row CI ceiling: the ELO confidence interval (points) tolerated for a stable row.
-# Sized from MAX_CI_WIDTH but on the row's own half-width scale.
-_MAX_PUBLISH_CI_WIDTH = MAX_CI_WIDTH * 2
+# This is a FULL width (hi - lo), the SAME quantity elo.variance_gate() thresholds, so
+# both gates MUST share the SAME number. variance_gate demotes a pair at MAX_CI_WIDTH;
+# the row gate below must demote at the same MAX_CI_WIDTH (not *2), or an n=10-12 window
+# opens where variance_gate calls a pair 'ci_too_wide' yet its row still publishes as
+# stable. hi-lo == 2*_ci_width(n), and variance_gate compares 2*_ci_width(n) too, so the
+# scales already match — no doubling belongs here.
+_MAX_PUBLISH_CI_WIDTH = MAX_CI_WIDTH
 
 # forfeit/unknown reason enums must match the probe + elo modules exactly.
 _UNKNOWN_REASONS = [
