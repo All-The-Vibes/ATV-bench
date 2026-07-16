@@ -65,9 +65,10 @@ two different PRs' publish jobs run concurrently. `league.yml:254` does a single
 losing race hits a non-fast-forward rejection, the job aborts, and that recorded match is
 silently dropped — skewing ELO.
 
-**Work:** use a **global** concurrency group (or a real lock) for the publish job, and
-make the store push a fetch + rebase + retry loop so a losing race re-applies instead of
-dropping a match.
+**Work (original suggestion — see the corrected resolution below):** make the store
+push resilient to a non-fast-forward race so a losing publish re-applies instead of
+dropping a match. (The original text floated a "global concurrency group or a real lock";
+re-review showed a GitHub concurrency group is the *wrong* tool here — see why below.)
 
 **Resolved (optimistic-concurrency, NO serializing group):** the persist step is a
 DEADLINE-bounded retry loop with backoff: fetch origin → `reset --hard origin/<default>`

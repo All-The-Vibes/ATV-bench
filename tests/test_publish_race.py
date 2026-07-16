@@ -180,3 +180,24 @@ def test_publish_board_timestamp_is_not_stale_previous_commit_time(wf):
         "board --updated-at must not be the previous commit's time (stale by one match); "
         "use a current timestamp"
     )
+
+
+def test_workflow_concurrency_does_not_cancel_scoreable_runs(wf):
+    # The WORKFLOW-level concurrency group must not create a pending-cancel path for
+    # scoreable runs. A per-PR group (keyed on pull_request.number / github.ref) with
+    # GitHub's pending-cancel behavior would cancel an older queued run-match when the
+    # same PR is re-labeled — silently dropping that match one level ABOVE the publish
+    # loop. Each labeled run is a distinct match, so the group must be unique per run
+    # (keyed on github.run_id) so it never cancels another run.
+    concurrency = wf.get("concurrency")
+    if concurrency is None:
+        return  # no group at all is also safe
+    group = str(concurrency.get("group", ""))
+    assert "run_id" in group or "run.id" in group, (
+        "workflow concurrency group must be keyed on github.run_id (unique per run) so it "
+        f"never cancels a queued scoreable run; got a cancellable group: {group!r}"
+    )
+    assert "pull_request.number" not in group and "github.ref" not in group, (
+        "workflow concurrency group must not be keyed per-PR/ref (pending-cancel would "
+        "drop a re-labeled PR's queued match)"
+    )

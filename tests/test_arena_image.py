@@ -104,11 +104,28 @@ def test_match_job_does_not_run_mutable_latest_tag(wf):
 
 
 def test_match_job_runs_a_built_local_image(wf):
-    # There must be a `docker run ... <image>` whose image tag also appears as the
-    # build output (`docker build -t <tag>`), proving the run uses what we built.
+    # The image passed to `docker run` must be EXACTLY the tag produced by `docker build
+    # -t <tag>` — proving the run uses what we built, not some other/unbuilt image. Parse
+    # the actual `docker run` image argument, not just "the tag appears somewhere".
     code = _match_run_code(wf)
     build_tags = re.findall(r"docker build[^\n]*-t\s+(\S+)", code)
     assert build_tags, "match job must tag the arena image it builds (`docker build -t <tag>`)"
-    run_tag = build_tags[0].strip('"').strip("'")
-    assert run_tag in code, "the built arena tag must be the image passed to `docker run`"
-    assert not run_tag.endswith(":latest"), "arena run tag must be pinned, not :latest"
+    build_tag = build_tags[0].strip('"').strip("'")
+    assert not build_tag.endswith(":latest"), "arena build tag must be pinned, not :latest"
+
+    # `docker run [flags...] <image> <cmd...>`: the image is the first non-flag,
+    # non-`docker`/`run` token that isn't an option or an option's value. The run script
+    # uses backslash line-continuations, so join then tokenize.
+    joined = re.sub(r"\\\s*\n", " ", code)
+    run_match = re.search(r"docker run\b(.*?)(?:\n|$)", joined)
+    assert run_match, "match job must `docker run` the arena image"
+    run_segment = run_match.group(1)
+    # The arena image token is the one that starts with the build tag's repo.
+    repo = build_tag.split(":", 1)[0]
+    run_images = re.findall(rf"{re.escape(repo)}:\S+", run_segment)
+    assert run_images, f"`docker run` must use the built image {repo}:… (got: {run_segment.strip()[:120]})"
+    run_image = run_images[0]
+    assert run_image == build_tag, (
+        f"`docker run` image {run_image!r} must be exactly the built tag {build_tag!r}"
+    )
+    assert not run_image.endswith(":latest"), "arena run image must be pinned, not :latest"

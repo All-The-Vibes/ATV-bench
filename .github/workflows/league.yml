@@ -20,8 +20,15 @@ on:
   pull_request:
     types: [labeled]        # a maintainer adds `run-match` after review
 
+# Concurrency is keyed PER RUN (github.run_id), which is unique — so this group NEVER
+# cancels another run. A per-PR group would drop matches: GitHub keeps only one PENDING
+# run per group and cancels an older pending run when a newer queues ("any existing
+# pending job... will be canceled"; cancel-in-progress:false protects only the
+# IN-PROGRESS run, not pending ones), so labeling the same PR `run-match` twice in quick
+# succession would cancel the first queued, scoreable match. Each labeled run is a
+# distinct match that must complete, so every run gets its own group and none is cancelled.
 concurrency:
-  group: league-${{ github.event.pull_request.number || github.ref }}
+  group: league-run-${{ github.run_id }}
   cancel-in-progress: false
 
 jobs:
@@ -258,6 +265,10 @@ jobs:
             --updated-at "$(git show -s --format=%cI HEAD)"
 
       - name: Persist match history back to the default branch (durable store)
+        # explicit bash: the loop uses `$RANDOM` (a bash builtin) for jitter. GitHub
+        # defaults to bash on Linux, but pin it so a runner-default change can't break the
+        # backoff — mirrors the match job's `shell: bash` pin.
+        shell: bash
         env:
           PYTHONPATH: src
           ATV_SUBMITTER: ${{ github.event.pull_request.user.login }}
@@ -299,6 +310,12 @@ jobs:
           deadline=$(( $(date +%s) + 420 ))   # ~7 min budget, inside the 10-min job timeout
           attempt=0
           while :; do
+            # Check the deadline at the TOP so a long backoff sleep can't carry the clock
+            # past the budget into another full attempt. Fail closed (exit 1) if exhausted.
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "store push did not succeed within the deadline after $attempt attempts" >&2
+              exit 1
+            fi
             attempt=$((attempt + 1))
 
             # Reset hard to the latest trusted branch, INCLUDING untracked store files, so
@@ -334,12 +351,9 @@ jobs:
               exit 0
             fi
 
-            if [ "$(date +%s)" -ge "$deadline" ]; then
-              echo "store push failed before deadline after $attempt attempts" >&2
-              exit 1
-            fi
             # Exponential backoff capped at 30s, plus jitter, so concurrent publishers
-            # de-synchronize instead of colliding on every round.
+            # de-synchronize instead of colliding on every round. The deadline is checked
+            # at the top of the loop, so a backoff that overshoots it exits cleanly there.
             backoff=$(( attempt * attempt ))
             [ "$backoff" -gt 30 ] && backoff=30
             sleep "$(( backoff + (RANDOM % 5) ))"
