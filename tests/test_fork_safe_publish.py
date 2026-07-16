@@ -103,14 +103,16 @@ def test_publish_workflow_runs_only_on_success(publish_wf):
 
 def test_publish_workflow_has_write_scopes(publish_wf):
     """The trusted workflow_run context has a full token even for fork PRs — it needs
-    write scopes to persist the store and deploy Pages."""
+    contents:write to persist the store. Pages deploy moved to league-deploy.yml (G4,
+    santa round-2), so the publish job no longer holds pages/id-token scope."""
     job = next(iter(publish_wf["jobs"].values()))
     perms = job.get("permissions", {}) or publish_wf.get("permissions", {})
     assert perms.get("contents") == "write", "publish must have contents:write"
-    assert perms.get("pages") == "write", "publish must have pages:write"
-    assert perms.get("id-token") == "write", "publish must have id-token:write (Pages OIDC)"
     # actions:read is required to download artifacts from the triggering run
     assert perms.get("actions") == "read", "publish must have actions:read to fetch artifacts"
+    # Pages scopes moved out with the deploy step (no fence→upload TOCTOU here anymore).
+    assert "pages" not in perms, "publish no longer deploys Pages; scope moved to league-deploy.yml"
+    assert "id-token" not in perms, "publish no longer needs Pages OIDC scope"
 
 
 def test_publish_workflow_never_executes_bot(publish_wf):
@@ -156,19 +158,20 @@ def test_publish_workflow_persists_with_retry_loop(publish_wf):
     assert "publish ingest" in body, "persist loop must re-ingest (optimistic re-apply)"
 
 
-def test_publish_workflow_rebuilds_before_deploy(publish_wf):
-    """The settled-store rebuild (santa #6) must precede the Pages upload here."""
+def test_publish_workflow_persists_but_does_not_deploy(publish_wf):
+    """G4 (santa round-2): Pages deploy moved to league-deploy.yml (push-triggered) to close
+    the fence→upload TOCTOU. The publish job must still persist the store (durable history)
+    but must NOT upload/deploy Pages — that is the deploy workflow's job, triggered by the
+    push this persist step makes."""
     job = next(iter(publish_wf["jobs"].values()))
     steps = job["steps"]
 
     def code(s):
         return "\n".join(ln.split("#", 1)[0] for ln in str(s.get("run", "")).splitlines())
 
-    upload_idx = next((i for i, s in enumerate(steps)
-                       if "upload-pages-artifact" in str(s.get("uses", ""))), -1)
-    assert upload_idx != -1, "publish must upload a Pages artifact"
-    rebuild_idx = next((i for i, s in enumerate(steps)
-                        if ("git fetch" in code(s) or "git pull" in code(s))
-                        and "publish build" in code(s) and "git push" not in code(s)), -1)
-    assert rebuild_idx != -1 and rebuild_idx < upload_idx, \
-        "a settled-store rebuild must run before upload-pages-artifact"
+    assert any("ingest" in code(s) and "git push" in code(s) for s in steps), \
+        "publish must still ingest + persist the match to the store"
+    assert not any("upload-pages-artifact" in str(s.get("uses", "")) for s in steps), \
+        "publish must NOT upload Pages artifact (deploy moved to league-deploy.yml)"
+    assert not any("deploy-pages" in str(s.get("uses", "")) for s in steps), \
+        "publish must NOT deploy Pages (deploy moved to league-deploy.yml)"

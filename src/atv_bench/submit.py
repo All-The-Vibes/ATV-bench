@@ -242,10 +242,13 @@ def open_submission_pr(*, record: dict[str, Any], bot_path: str, identity: str,
     _run_or_raise(runner, ["gh", "repo", "fork", repo_slug, "--clone=false"])
 
     # Ensure a working tree is present. A first-timer runs from an arbitrary cwd with no
-    # ATV-bench checkout — probe with `git rev-parse` and clone the fork if it is not a repo.
-    rc, _out, _err = runner(["git", "rev-parse", "--is-inside-work-tree"], cwd=str(wt) if wt.exists() else None)
+    # ATV-bench checkout. Probe `git rev-parse` INSIDE the target workdir (G2: never with
+    # cwd=None — that probes the process cwd and, run from any repo, falsely reports a
+    # checkout so the clone is skipped and a later `checkout -b` runs in a non-repo). An
+    # absent or non-repo workdir triggers a clone of the fork.
+    wt.mkdir(parents=True, exist_ok=True)
+    rc, _out, _err = runner(["git", "rev-parse", "--is-inside-work-tree"], cwd=str(wt))
     if rc != 0:
-        wt.mkdir(parents=True, exist_ok=True)
         _run_or_raise(runner, ["gh", "repo", "clone", f"{ident}/ATV-bench", str(wt)])
 
     # Stage the bot + record at the identity-pinned path BEFORE committing. We write files
@@ -269,12 +272,20 @@ def open_submission_pr(*, record: dict[str, Any], bot_path: str, identity: str,
     pr_url = out.strip().splitlines()[-1].strip() if out.strip() else ""
 
     # Backfill the real PR URL into the committed record (the pre-PR record can only carry
-    # a placeholder) and re-push so the merged submission.json links to the actual PR.
+    # a placeholder) and re-push. The PR is ALREADY OPEN at this point, so a backfill
+    # failure must NOT raise a fail-closed SUBMIT_PR_FAILED (that would imply no PR exists,
+    # G3). Instead surface partial success: return the live pr_url with backfilled=False so
+    # the caller/user knows the PR is up but the URL wasn't stamped into the record.
+    backfilled_ok = False
     if pr_url:
-        backfilled = {**record, "pr_url": pr_url}
-        (dest / "submission.json").write_text(json.dumps(backfilled, indent=2, sort_keys=True))
-        _run_or_raise(runner, ["git", "add", "league/submissions"], cwd=str(wt))
-        _run_or_raise(runner, ["git", "commit", "-m", f"league: backfill PR url for {ident}"], cwd=str(wt))
-        _run_or_raise(runner, ["git", "push", "origin", branch], cwd=str(wt))
+        try:
+            updated = {**record, "pr_url": pr_url}
+            (dest / "submission.json").write_text(json.dumps(updated, indent=2, sort_keys=True))
+            _run_or_raise(runner, ["git", "add", "league/submissions"], cwd=str(wt))
+            _run_or_raise(runner, ["git", "commit", "-m", f"league: backfill PR url for {ident}"], cwd=str(wt))
+            _run_or_raise(runner, ["git", "push", "origin", branch], cwd=str(wt))
+            backfilled_ok = True
+        except AtvError:
+            backfilled_ok = False
 
-    return {"pr_url": pr_url, "branch": branch, "identity": ident}
+    return {"pr_url": pr_url, "branch": branch, "identity": ident, "backfilled": backfilled_ok}

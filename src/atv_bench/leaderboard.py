@@ -124,7 +124,7 @@ def _summary(fp: dict[str, Any]) -> str:
     bits = []
     if fp.get("gstack"):
         bits.append("gstack")
-    n_sk, n_mcp, n_pl = len(fp.get("skills", [])), len(fp.get("mcps", [])), len(fp.get("plugins", []))
+    n_sk, n_mcp, n_pl = _safe_count(fp, "skills"), _safe_count(fp, "mcps"), _safe_count(fp, "plugins")
     bits.append(f"{n_sk} skills")
     if n_mcp:
         bits.append(f"{n_mcp} MCP")
@@ -145,23 +145,44 @@ def _sanitized_details(fp: dict[str, Any]) -> dict[str, Any]:
     unknown = list(fp.get("unknown", []) or [])
     clean: dict[str, list[str]] = {}
     for field in ("skills", "mcps", "plugins"):
+        raw = fp.get(field, [])
         kept: list[str] = []
-        for name in fp.get(field, []) or []:
-            if isinstance(name, str) and is_safe_name(name):
-                kept.append(name)
-            else:
-                unknown.append({"field": field, "reason": "name_failed_safety_scan"})
+        if isinstance(raw, list):
+            for name in raw:
+                if isinstance(name, str) and is_safe_name(name):
+                    kept.append(name)
+                else:
+                    unknown.append({"field": field, "reason": "name_failed_safety_scan"})
+        else:
+            # G1 (santa round-2): a non-list value (e.g. a string) must be rejected
+            # WHOLESALE, never iterated — iterating a string scans it character by
+            # character and leaks the safe chars of a secret onto the board.
+            unknown.append({"field": field, "reason": "name_failed_safety_scan"})
         clean[field] = kept
     clean["unknown"] = unknown
     return clean
 
 
+def _safe_str_field(fp: dict[str, Any], key: str, default: str = "unknown") -> str:
+    """A scalar string row field re-scanned for leak-safety (harness, probe_version).
+
+    Any non-string or secret-shaped value collapses to `default` rather than publishing.
+    """
+    value = fp.get(key, default)
+    if not isinstance(value, str) or is_secret(value):
+        return default
+    return value
+
+
 def _safe_harness_name(fp: dict[str, Any]) -> str:
     """Harness is copied to a top-level row field; a secret-shaped value must not publish."""
-    harness = fp.get("harness", "unknown")
-    if not isinstance(harness, str) or is_secret(harness):
-        return "unknown"
-    return harness
+    return _safe_str_field(fp, "harness", "unknown")
+
+
+def _safe_count(fp: dict[str, Any], field: str) -> int:
+    """Count only a genuine list field; a string/other value counts as 0 (G1: never len())."""
+    raw = fp.get(field, [])
+    return len(raw) if isinstance(raw, list) else 0
 
 
 def build_leaderboard_doc(
@@ -229,7 +250,7 @@ def build_leaderboard_doc(
             "fingerprint_summary": _summary(fp),
             "details": _sanitized_details(fp),
             "bot_sha256": sub["bot_sha256"],
-            "fingerprint_probe_version": fp.get("probe_version", "unknown"),
+            "fingerprint_probe_version": _safe_str_field(fp, "probe_version", "unknown"),
             "pr_url": sub["pr_url"],
             "logs_url": sub["logs_url"],
         })

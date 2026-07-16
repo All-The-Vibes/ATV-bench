@@ -236,3 +236,68 @@ def test_open_pr_backfills_real_pr_url_in_committed_record(tmp_path):
     # a second push must carry the backfilled record
     push_calls = [c for c in runner.calls if "push" in " ".join(c)]
     assert len(push_calls) >= 2, "backfilled record must be pushed (a second push after pr create)"
+
+
+# --- santa round-2: gaps the round-1 F3 fix missed ---
+
+def test_rev_parse_probe_runs_in_target_workdir_not_cwd(tmp_path):
+    """G2 (Reviewer B, CRITICAL): when workdir does not exist, the rev-parse probe was run
+    with cwd=None (the process cwd). Run from inside ANY git repo, that falsely reports a
+    checkout and skips the clone, so `git checkout -b` later runs in a non-repo. The probe
+    must target the workdir itself; a non-existent/absent workdir must trigger a clone."""
+    record = _record(tmp_path)
+    wt = tmp_path / "does_not_exist_yet"
+    calls_cwd = []
+
+    class _CwdRunner(_RecordingRunner):
+        def __call__(self, cmd, **kwargs):
+            calls_cwd.append((list(cmd), kwargs.get("cwd")))
+            return super().__call__(cmd, **kwargs)
+
+    runner = _CwdRunner({
+        "pr create": (0, "https://github.com/x/y/pull/1\n", ""),
+        "rev-parse": (128, "", "fatal: not a git repository"),
+    })
+    open_submission_pr(record=record, bot_path=_write_bot(tmp_path),
+                       identity="octocat", runner=runner, workdir=str(wt))
+    # the rev-parse probe must NOT be invoked with cwd=None (the process cwd); it must
+    # target the intended workdir (or the clone must run because workdir is absent)
+    rev = [(c, cwd) for c, cwd in calls_cwd if "rev-parse" in " ".join(c)]
+    assert rev, "must probe for an existing checkout"
+    for _cmd, cwd in rev:
+        assert cwd != None, "rev-parse must not run in the process cwd (cwd=None)"  # noqa: E711
+    assert runner.ran("gh repo clone") or runner.ran("git clone"), \
+        "absent workdir must trigger a clone, not fall through to checkout in a non-repo"
+
+
+def test_backfill_failure_after_pr_create_is_surfaced_not_silent(tmp_path):
+    """G3 (Reviewer B): the PR-url backfill commits+pushes AFTER `gh pr create` succeeds.
+    If that second push fails, the flow must not raise a bare fail-closed error implying no
+    PR exists — the PR is already open. Surface partial success (return the pr_url) so the
+    caller knows the PR is live even though backfill didn't land."""
+    record = _record(tmp_path)
+    wt = tmp_path / "wt"
+    pr = "https://github.com/All-The-Vibes/ATV-bench/pull/55"
+    # first push ok; the SECOND push (after pr create) fails
+    calls = {"n": 0}
+
+    class _SecondPushFails(_RecordingRunner):
+        def __call__(self, cmd, **kwargs):
+            joined = " ".join(cmd)
+            if "pr create" in joined:
+                self.calls.append(list(cmd))
+                return (0, pr + "\n", "")
+            if joined.startswith("git push") or " push " in joined or joined.endswith("push"):
+                calls["n"] += 1
+                self.calls.append(list(cmd))
+                if calls["n"] >= 2:
+                    return (1, "", "backfill push rejected")
+                return (0, "", "")
+            return super().__call__(cmd, **kwargs)
+
+    runner = _SecondPushFails()
+    result = open_submission_pr(record=record, bot_path=_write_bot(tmp_path),
+                                identity="octocat", runner=runner, workdir=str(wt))
+    # PR is live: the caller must learn the URL, not get a misleading SUBMIT_PR_FAILED
+    assert result["pr_url"] == pr
+    assert result.get("backfilled") is False

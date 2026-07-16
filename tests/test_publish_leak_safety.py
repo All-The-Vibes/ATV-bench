@@ -85,3 +85,47 @@ def test_clean_fingerprint_unchanged(tmp_path):
     assert row["details"]["mcps"] == ["github", "grafana"]
     assert row["details"]["unknown"] == []
     assert row["harness_name"] == "claude-code"
+
+
+# --- santa round-2: gaps the round-1 F2 fix missed ---
+
+def test_string_valued_skills_field_does_not_leak_char_by_char(tmp_path):
+    """G1 (both reviewers, CRITICAL): a hand-edited record with a STRING skills field
+    (not a list) was iterated character-by-character; safe chars of a secret slipped
+    through. A non-list field must be rejected wholesale, never iterated."""
+    subs = {"m": _sub("m", skills="ghp_0123456789abcdefABCD0123456789abcdEF")}
+    doc = build_leaderboard_doc([], subs, updated_at="2026-07-16T00:00:00Z")
+    row = _row(doc, "m")
+    # no character fragment of the secret may appear as a published skill
+    assert row["details"]["skills"] == [], f"string field leaked: {row['details']['skills']}"
+    assert any(u["reason"] == "name_failed_safety_scan" for u in row["details"]["unknown"])
+
+
+def test_string_valued_field_not_counted_in_summary(tmp_path):
+    """The summary must not report len() of a string field as a skill count."""
+    subs = {"m": _sub("m", skills="ghp_SECRET_LOOKING_VALUE_012345")}
+    doc = build_leaderboard_doc([], subs, updated_at="2026-07-16T00:00:00Z")
+    row = _row(doc, "m")
+    # a 28-char string must not read as "28 skills"
+    assert "28 skills" not in row["fingerprint_summary"]
+    assert "0 skills" in row["fingerprint_summary"]
+
+
+def test_secret_shaped_probe_version_not_published(tmp_path):
+    """G1b (Reviewer A): fingerprint_probe_version is copied to a published row field from
+    the hand-editable record and was not scanned. A secret-shaped value must not publish."""
+    sub = _sub("m")
+    sub["fingerprint"]["probe_version"] = "sk-DEADBEEFDEADBEEFDEADBEEFDEADBEEF"
+    doc = build_leaderboard_doc([], {"m": sub}, updated_at="2026-07-16T00:00:00Z")
+    row = _row(doc, "m")
+    assert not row["fingerprint_probe_version"].startswith("sk-")
+
+
+def test_non_list_mcps_and_plugins_rejected(tmp_path):
+    subs = {"m": _sub("m", mcps="AKIAIOSFODNN7EXAMPLE", plugins={"nope": 1})}
+    doc = build_leaderboard_doc([], subs, updated_at="2026-07-16T00:00:00Z")
+    row = _row(doc, "m")
+    assert row["details"]["mcps"] == []
+    assert row["details"]["plugins"] == []
+    reasons = [u["reason"] for u in row["details"]["unknown"]]
+    assert reasons.count("name_failed_safety_scan") >= 2

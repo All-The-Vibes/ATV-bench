@@ -1,0 +1,84 @@
+# ATV-bench Community League — Pages DEPLOY workflow (settled-store, race-free).
+#
+# G4/G5 (santa round-2): Pages deploy used to live inside league-publish.yml (the
+# workflow_run publish job). That left two problems:
+#   - G4: a head-SHA fence proved the artifact was built from the settled head, but the
+#     separate upload-pages-artifact step ran later, so origin could advance again between
+#     the final re-check and the upload — a slower older run could still deploy a stale board.
+#   - G5: a merged submission PR did not trigger any rebuild, so a first-time entrant's row
+#     did not appear until the NEXT match landed.
+#
+# THE FIX: deploy on PUSH to the default branch (scoped to league/** changes). The commit
+# that triggers this run IS the settled store head, so the deployed board is built from
+# exactly that commit — no fence loop, no TOCTOU. A `pages` concurrency group with
+# cancel-in-progress makes the newest settled-store push supersede any older in-flight
+# deploy (last-write-wins). And because the persist push (league-publish.yml) AND a merged
+# submission PR both land on the default branch, both now converge the board automatically.
+#
+# Trusted by construction: it runs only on already-merged default-branch code, never checks
+# out or executes PR head / bot code, and never does an editable install (no build hooks).
+
+name: league-deploy
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "league/**"
+      - "leaderboard/**"
+      - ".github/workflows/league-deploy.yml"
+
+# Newest settled-store deploy wins: an older in-flight deploy is cancelled so the board
+# never regresses to a stale snapshot (closes the G4 residual window).
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: write
+      id-token: write   # required by actions/deploy-pages OIDC (Pages only)
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout the settled default branch (the triggering commit)
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned deps (NOT an editable install of checked-out code)
+        run: |
+          # Do NOT `pip install -e .` — that executes the package's build hooks. We only
+          # need the runtime deps to run atv_bench as a module from the trusted checkout.
+          pip install "jsonschema>=4.0"
+
+      - name: Build the board from the settled store (this commit)
+        shell: bash
+        env:
+          PYTHONPATH: src
+        run: |
+          # The checked-out commit is the settled store head that triggered this deploy,
+          # so ./site is built from exactly the state being deployed — no head-SHA fence
+          # needed (the trigger already fences us to this commit).
+          python -m atv_bench.publish build \
+            --out ./site --store league \
+            --updated-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

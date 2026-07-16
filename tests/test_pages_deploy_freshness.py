@@ -1,17 +1,24 @@
-"""Stale-Pages-deploy tripwire (santa re-review #6) — runs on EVERY push.
+"""Pages-deploy freshness + G4/G5 (santa rounds 1-2).
 
-The persist retry loop makes the `league/` STORE push race-safe, but the PR shipped a
-Pages deploy that was NOT: each publish built `./site` inside its own loop attempt from
-its own snapshot, then `upload-pages-artifact` + `deploy-pages` ran AFTER the loop with no
-final rebuild from the settled default-branch head. If an older publisher's deploy
-finishes last, GitHub Pages regresses to a stale board even though the store is correct.
+History:
+- santa #6: the original PR deployed a per-attempt snapshot with no settled-store rebuild.
+- F4 (round 1): added a head-SHA fence loop inside league-publish.yml before upload.
+- G4 (round 2, Reviewer B): the fence still left a residual TOCTOU — origin could advance
+  between the final SHA re-check and the separate upload-pages-artifact step, so a slower
+  older publish could still deploy a stale board.
+- G5 (round 2, Reviewer B): a merged submission PR did not trigger a rebuild, so a first-
+  time entrant's row did not appear until the NEXT match landed.
 
-THE FIX: after the store push settles, rebuild `./site` from a fresh
-`origin/<default_branch>` immediately before `upload-pages-artifact`, so the deployed board
-always reflects the latest settled store (this match plus any that landed concurrently).
+THE CANONICAL FIX (both reviewers' top suggestion): move Pages DEPLOY out of the
+event-driven publish job into a dedicated workflow triggered by `push` to the default
+branch (paths: league/**). The triggering commit IS the settled store head, so:
+- G4: the deployed artifact is built from the exact commit that triggered the run; a
+  `pages` concurrency group with cancel-in-progress makes the newest push supersede any
+  older in-flight deploy (last-write-wins) — no stale board.
+- G5: a merged submission PR pushes to the default branch, which triggers a rebuild+deploy,
+  so the new entrant's row appears on merge without waiting for another match.
 
-Mirrors the test_publish_race / test_action_isolation tripwire pattern: comment-stripped,
-real-behavior assertions against the parsed workflow.
+These tests assert the deploy topology. Comment-stripped, real-behavior assertions.
 """
 from __future__ import annotations
 
@@ -20,24 +27,31 @@ from pathlib import Path
 import pytest
 import yaml
 
-WORKFLOW = Path(__file__).parent.parent / ".github" / "workflows" / "league-publish.yml"
+WF_DIR = Path(__file__).parent.parent / ".github" / "workflows"
+PUBLISH_WORKFLOW = WF_DIR / "league-publish.yml"
+DEPLOY_WORKFLOW = WF_DIR / "league-deploy.yml"
 
 
 @pytest.fixture(scope="module")
-def wf():
-    assert WORKFLOW.exists(), "league-publish.yml workflow must exist"
-    return yaml.safe_load(WORKFLOW.read_text())
+def deploy_wf():
+    assert DEPLOY_WORKFLOW.exists(), (
+        "league-deploy.yml must exist: Pages deploy moved to a dedicated push-triggered "
+        "workflow so the deployed board reflects the settled store head (G4/G5)"
+    )
+    return yaml.safe_load(DEPLOY_WORKFLOW.read_text())
 
 
-def _publish_steps(wf):
-    return wf["jobs"]["publish"]["steps"]
+@pytest.fixture(scope="module")
+def publish_wf():
+    return yaml.safe_load(PUBLISH_WORKFLOW.read_text())
 
 
-def _step_index(steps, predicate):
-    for i, step in enumerate(steps):
-        if predicate(step):
-            return i
-    return -1
+def _on(wf):
+    return wf.get("on") or wf.get(True)  # PyYAML parses bare `on:` as boolean True
+
+
+def _steps(wf, job):
+    return wf["jobs"][job]["steps"]
 
 
 def _uses(step, action_prefix):
@@ -45,7 +59,6 @@ def _uses(step, action_prefix):
 
 
 def _code(step):
-    """A step's run shell with comment lines stripped (real behavior only)."""
     lines = []
     for ln in str(step.get("run", "")).splitlines():
         c = ln.split("#", 1)[0]
@@ -54,101 +67,70 @@ def _code(step):
     return "\n".join(lines)
 
 
-def test_has_a_rebuild_before_pages_upload(wf):
-    """There must be a step that rebuilds ./site from the settled store AFTER the persist
-    push and BEFORE upload-pages-artifact — otherwise the deployed board can be stale.
+# --- G4/G5: deploy is triggered by the push to the default branch (settled store) ---
 
-    The rebuild must be a DEDICATED step, distinct from the persist loop (whose in-loop
-    build reflects only that attempt's snapshot, not the final settled head)."""
-    steps = _publish_steps(wf)
-    upload_idx = _step_index(steps, lambda s: _uses(s, "actions/upload-pages-artifact"))
-    assert upload_idx != -1, "publish job must upload a Pages artifact"
-
-    persist_idx = _step_index(steps, lambda s: "git push" in _code(s))
-    assert persist_idx != -1, "publish job must have a persist (git push) step"
-
-    # A settled-rebuild step: fetches/resets to origin default and rebuilds ./site, and it
-    # is NOT the persist step itself (must run after the push settles).
-    def is_settled_rebuild(s):
-        code = _code(s)
-        fetches = "git fetch" in code or "git pull" in code
-        rebuilds = "publish build" in code and "./site" in code
-        pushes = "git push" in code
-        return fetches and rebuilds and not pushes
-
-    rebuild_idx = _step_index(steps, is_settled_rebuild)
-    assert rebuild_idx != -1, (
-        "publish job must have a DEDICATED step that rebuilds ./site from a fresh "
-        "origin/<default_branch> before uploading the Pages artifact (a rebuild that is "
-        "part of the push loop reflects only that attempt's snapshot, not the settled head)"
+def test_deploy_workflow_triggers_on_push_to_default_branch(deploy_wf):
+    on = _on(deploy_wf)
+    assert "push" in on, "deploy must trigger on push (the settled store commit)"
+    branches = on["push"].get("branches", [])
+    assert any(b in ("main", "master") for b in branches), (
+        "deploy must trigger on push to the default branch, where the store settles"
     )
-    assert persist_idx < rebuild_idx < upload_idx, (
-        "the settled-store rebuild must run AFTER the persist push and BEFORE "
-        "upload-pages-artifact"
+    # scoped to store changes so unrelated pushes don't redeploy
+    paths = on["push"].get("paths", [])
+    assert any("league" in p for p in paths), "deploy should be scoped to league/ changes"
+
+
+def test_deploy_workflow_has_pages_concurrency_group_newest_wins(deploy_wf):
+    """A pages concurrency group with cancel-in-progress makes the newest push supersede an
+    older in-flight deploy — last-write-wins closes the residual stale-deploy window (G4)."""
+    conc = deploy_wf.get("concurrency")
+    assert conc, "deploy workflow must declare a concurrency group"
+    if isinstance(conc, str):
+        pytest.fail("concurrency must set cancel-in-progress: true (map form), not a bare group")
+    assert conc.get("cancel-in-progress") is True, (
+        "cancel-in-progress: true so a newer settled-store deploy cancels an older stale one"
     )
 
 
-def test_rebuild_resets_to_origin_default_branch(wf):
-    """The final rebuild must derive from the fetched trusted branch head, not this job's
-    possibly-behind local snapshot."""
-    steps = _publish_steps(wf)
+def test_deploy_builds_from_the_triggering_commit(deploy_wf):
+    """The deploy builds ./site from the checked-out triggering commit — no head-SHA fence
+    loop needed because the trigger commit IS the settled head being deployed."""
+    steps = _steps(deploy_wf, "deploy")
+    assert any(_uses(s, "actions/checkout") for s in steps), "must check out the repo"
+    build = next((s for s in steps if "publish build" in _code(s)), None)
+    assert build is not None, "deploy must rebuild ./site from the store"
+    assert "./site" in _code(build)
+    assert any(_uses(s, "actions/upload-pages-artifact") for s in steps)
+    assert any(_uses(s, "actions/deploy-pages") for s in steps)
 
-    def is_settled_rebuild(s):
-        code = _code(s)
-        return (("git fetch" in code or "git pull" in code)
-                and "publish build" in code and "git push" not in code)
 
-    idx = _step_index(steps, is_settled_rebuild)
-    assert idx != -1
-    code = _code(steps[idx])
-    assert "reset --hard" in code and "origin/" in code, (
-        "the pre-deploy rebuild must reset --hard to origin/<default_branch> so the "
-        "deployed board reflects the settled store, including concurrently-landed matches"
+def test_deploy_never_executes_bot_or_pr_code(deploy_wf):
+    """Trusted deploy: it runs on push to the default branch (already-merged, reviewed
+    code) and must NOT do an editable install (build hooks) of the checked-out tree."""
+    steps = _steps(deploy_wf, "deploy")
+    for s in steps:
+        assert "pip install -e" not in _code(s), "no editable install (executes build hooks)"
+
+
+# --- the publish (workflow_run) job no longer owns Pages deploy ---
+
+def test_publish_workflow_no_longer_deploys_pages(publish_wf):
+    """Deploy moved out of the event-driven publish job (G4): keeping it there reintroduced
+    the fence→upload TOCTOU. The publish job now only PERSISTS the store; the push that
+    persist creates triggers league-deploy.yml."""
+    steps = _steps(publish_wf, "publish")
+    assert not any(_uses(s, "actions/deploy-pages") for s in steps), (
+        "publish job must not deploy Pages; the dedicated push-triggered deploy workflow does"
+    )
+    assert not any(_uses(s, "actions/upload-pages-artifact") for s in steps), (
+        "publish job must not upload the Pages artifact anymore"
     )
 
 
-def test_upload_uses_the_rebuilt_site_dir(wf):
-    """The upload-pages-artifact must point at ./site (the rebuilt dir)."""
-    steps = _publish_steps(wf)
-    upload = next(s for s in steps if _uses(s, "actions/upload-pages-artifact"))
-    path = str(upload.get("with", {}).get("path", ""))
-    assert path.strip("./").rstrip("/") == "site", (
-        f"upload-pages-artifact must publish ./site (the rebuilt dir), got {path!r}"
-    )
-
-
-def test_deploy_is_fenced_on_the_settled_head_sha(wf):
-    """F4 (santa round-1, Reviewer B): the single-shot rebuild is still TOCTOU — origin can
-    advance between the rebuild and the deploy, so an older run can deploy a snapshot built
-    before a newer store head landed.
-
-    THE FENCE: the pre-deploy rebuild must capture the head SHA it built from and re-verify
-    origin has not moved before uploading — a loop that re-fetches and re-checks the head so
-    the deployed artifact provably matches the settled origin head. A single fetch+reset+build
-    with no re-check does not close the window.
-    """
-    steps = _publish_steps(wf)
-
-    def is_settled_rebuild(s):
-        code = _code(s)
-        return (("git fetch" in code or "git pull" in code)
-                and "publish build" in code and "git push" not in code)
-
-    idx = _step_index(steps, is_settled_rebuild)
-    assert idx != -1, "must have a settled-store rebuild step"
-    code = _code(steps[idx])
-
-    # It must read origin's head SHA (rev-parse) to fence the deploy against a concurrent
-    # store advance.
-    assert "rev-parse" in code, (
-        "the pre-deploy rebuild must capture origin/<default>'s head SHA (git rev-parse) to "
-        "fence the deploy against a concurrent store advance"
-    )
-    # A fence re-verifies: a loop that repeats fetch/build until the head is stable, or an
-    # explicit equality comparison of the built-from SHA against a fresh origin head.
-    has_compare = ("while" in code and "rev-parse" in code) or ('= "$' in code)
-    assert has_compare, (
-        "the pre-deploy rebuild must RE-CHECK origin's head after building (compare the "
-        "built-from SHA against a fresh origin head, re-fetching+rebuilding if it moved) so "
-        "the deployed board is provably built from the settled head, not a stale snapshot"
+def test_publish_still_persists_the_store(publish_wf):
+    """The persist loop (durable history) must remain in the publish job."""
+    steps = _steps(publish_wf, "publish")
+    assert any("git push" in _code(s) and "ingest" in _code(s) for s in steps), (
+        "publish must still ingest + persist the match to the store"
     )
