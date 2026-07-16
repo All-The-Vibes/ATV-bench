@@ -50,3 +50,57 @@ def test_empty_or_invalid_author_rejected():
     for bad in ("", "has space", "a/b"):
         res = validate_pr_paths(bad, ["league/submissions/x/main.py"])
         assert res["ok"] is False
+
+
+# --- name-status handling + always-on submission-PR confinement (santa round-7, Reviewer
+#     B): the gate must reject renames/deletes (not just added/modified paths) and treat a
+#     PR as a "submission PR" (subject to confinement) iff it touches league/submissions/**.
+#     A submission PR that ALSO touches workflows / matches.jsonl / other dirs is the attack.
+
+from atv_bench.validate import validate_pr_changes
+
+
+def test_changes_add_modify_own_files_allowed():
+    res = validate_pr_changes("octocat", [
+        "A\tleague/submissions/octocat/main.py",
+        "M\tleague/submissions/octocat/submission.json",
+    ])
+    assert res["ok"] is True
+
+
+def test_changes_rename_rejected():
+    # a rename of another entrant's bot into your dir must be rejected (R status, 2 paths)
+    res = validate_pr_changes("octocat", [
+        "R100\tleague/submissions/victim/main.py\tleague/submissions/octocat/main.py",
+    ])
+    assert res["ok"] is False
+
+
+def test_changes_delete_rejected():
+    res = validate_pr_changes("octocat", ["D\tleague/matches.jsonl"])
+    assert res["ok"] is False
+
+
+def test_changes_workflow_edit_on_submission_pr_rejected():
+    # a submission PR that also edits a workflow file is the pwn-request vector
+    res = validate_pr_changes("octocat", [
+        "M\tleague/submissions/octocat/main.py",
+        "M\t.github/workflows/league.yml",
+    ])
+    assert res["ok"] is False
+
+
+def test_changes_non_submission_pr_is_not_confined():
+    # a pure maintainer/plumbing PR (touches no league/submissions/**) is NOT a submission
+    # PR and is not confined by this gate (it goes through normal review, not the league).
+    res = validate_pr_changes("maintainer", [
+        "M\tsrc/atv_bench/store.py",
+        "M\t.github/workflows/ci.yml",
+    ])
+    assert res["ok"] is True
+    assert res["is_submission_pr"] is False
+
+
+def test_changes_submission_pr_flag_set():
+    res = validate_pr_changes("octocat", ["A\tleague/submissions/octocat/main.py"])
+    assert res["is_submission_pr"] is True

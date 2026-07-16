@@ -227,22 +227,43 @@ def validate_pr_paths_cmd(
     author: str = typer.Option(..., "--author", help="PR author GitHub login."),
     paths_file: Path = typer.Option(
         None, "--paths-file",
-        help="File with one changed path per line (default: read stdin).",
+        help="File with changed paths (default: read stdin).",
+    ),
+    name_status: bool = typer.Option(
+        False, "--name-status",
+        help="Input is `git diff --name-status` output (rejects renames/deletes and "
+             "confines only submission PRs). Preferred for the always-on CI gate.",
     ),
 ) -> None:
-    """Fail closed if a community PR touches anything outside its own submission tree.
+    """Fail closed if a community submission PR touches anything outside its own tree.
 
-    Wire into CI as a gate on community submission PRs: `git diff --name-only base...head`
-    -> this command. Rejects direct league/matches.jsonl edits, other-entrant directories,
-    and stray files, so a merged PR cannot forge history or poison another row.
+    Wire into CI as an ALWAYS-ON required check on every PR:
+      git diff --name-status <base>...<head> | atv-bench validate-pr-paths --author <login> --name-status
+    With --name-status: a PR touching league/submissions/** is a submission PR and is
+    confined to its own league/submissions/<author>/{main.py,submission.json}; renames,
+    deletes, and any other path (incl .github/workflows/**, league/matches.jsonl) fail
+    closed. A pure plumbing PR (no submissions/**) passes for normal review.
+    Legacy --name-only mode (no flag) confines against a plain path list.
     """
-    from atv_bench.validate import validate_pr_paths
+    from atv_bench.validate import validate_pr_paths, validate_pr_changes
     if paths_file is not None:
         text = paths_file.read_text()
     else:
         text = sys.stdin.read()
-    changed = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    report = validate_pr_paths(author, changed)
+    lines = [ln.rstrip("\n") for ln in text.splitlines() if ln.strip()]
+    if name_status:
+        report = validate_pr_changes(author, lines)
+        if report["ok"]:
+            kind = "submission PR (confined to own files)" if report["is_submission_pr"] \
+                else "non-submission PR (not confined)"
+            typer.echo(f"✓ PR by {author}: {kind}")
+        else:
+            typer.echo("✗ PR is not confined to its own submission tree:")
+            for e in report["errors"]:
+                typer.echo(f"  - {e}")
+            raise typer.Exit(1)
+        return
+    report = validate_pr_paths(author, [ln.strip() for ln in lines])
     if report["ok"]:
         typer.echo(f"✓ PR by {author} touches only its own submission files")
     else:

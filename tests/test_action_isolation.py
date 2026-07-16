@@ -345,3 +345,19 @@ def test_workflow_only_triggers_on_pull_request(wf):
     assert "workflow_dispatch" not in on, \
         "workflow_dispatch has no scoreable path (no PR-authored submitter); remove it"
     assert "pull_request" in on
+
+
+def test_ci_has_always_on_pr_path_guard():
+    """santa round-7 (Reviewer B): community-PR confinement must be an ALWAYS-ON required
+    check on every PR (ci.yml), not only a side effect of the labeled run-match workflow —
+    else a PR editing matches.jsonl / another entrant / .github/workflows/** merges unguarded."""
+    import yaml as _yaml
+    from pathlib import Path
+    ci = _yaml.safe_load(Path(".github/workflows/ci.yml").read_text())
+    jobs = ci["jobs"]
+    assert "pr-path-guard" in jobs, "ci.yml must have an always-on pr-path-guard job"
+    body = _yaml.safe_dump(jobs["pr-path-guard"])
+    assert "validate-pr-paths" in body and "--name-status" in body, \
+        "the guard must run validate-pr-paths in name-status mode"
+    assert "pull_request" in _yaml.safe_dump(ci.get("on") or ci.get(True)), \
+        "ci must trigger on pull_request"

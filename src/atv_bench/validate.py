@@ -56,6 +56,54 @@ def validate_pr_paths(author: str, changed_paths: list[str]) -> dict[str, Any]:
     return {"ok": not errors, "errors": errors}
 
 
+_SUBMISSIONS_PREFIX = "league/submissions/"
+
+
+def validate_pr_changes(author: str, name_status_lines: list[str]) -> dict[str, Any]:
+    """Confine a community submission PR, from `git diff --name-status` output (santa
+    round-7). Stronger than validate_pr_paths (which sees only --name-only path strings):
+
+    - Detects a "submission PR" = one that touches league/submissions/** at all. Only such
+      PRs are confined here; a pure maintainer/plumbing PR (no submissions/**) is passed
+      through (is_submission_pr=False) for normal review.
+    - Rejects RENAMES and DELETES (R*/C*/D status) outright: a rename can drag another
+      entrant's bot into your directory, and a delete can remove history/other rows. A
+      submission PR may only ADD or MODIFY its own two files.
+    - Rejects a submission PR that ALSO edits anything outside its own submission files —
+      crucially .github/workflows/** (the pwn-request vector where a PR rewrites the very
+      workflow that scores it) or league/matches.jsonl.
+
+    Each line is a tab-separated `git diff --name-status` record: `<STATUS>\t<path>` for
+    add/modify/delete, or `<STATUS>\t<old>\t<new>` for rename/copy.
+    """
+    errors: list[str] = []
+    if not isinstance(author, str) or not _AUTHOR_RE.fullmatch(author):
+        return {"ok": False, "errors": [f"invalid PR author login: {author!r}"],
+                "is_submission_pr": False}
+    changed_paths: list[str] = []
+    is_submission_pr = False
+    for raw in name_status_lines:
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        parts = raw.split("\t")
+        status = parts[0].strip()
+        paths = [p.strip() for p in parts[1:] if p.strip()]
+        if any(p.startswith(_SUBMISSIONS_PREFIX) for p in paths):
+            is_submission_pr = True
+        # Rename/copy (R*/C*) and delete (D) are never allowed on a submission PR: a rename
+        # can pull another entrant's bytes into your dir; a delete can drop history/rows.
+        code = status[:1]
+        if code in ("R", "C", "D"):
+            errors.append(f"disallowed change status {status!r} for paths {paths}")
+            continue
+        changed_paths.extend(paths)
+    # Only confine a PR that actually touches the submissions tree; plumbing PRs pass.
+    if is_submission_pr:
+        inner = validate_pr_paths(author, changed_paths)
+        errors.extend(inner["errors"])
+    return {"ok": not errors, "errors": errors, "is_submission_pr": is_submission_pr}
+
+
 def validate_harness_fingerprint(manifest: dict[str, Any]) -> dict[str, Any]:
     """Check a harness reader's output is schema-complete and leak-safe.
 

@@ -101,3 +101,20 @@ def test_validate_pr_paths_rejects_matches_edit(tmp_path):
                                  "--paths-file", str(pf)])
     assert result.exit_code == 1
     assert "outside" in result.stdout
+
+
+def test_validate_pr_paths_name_status_rejects_workflow_edit(tmp_path):
+    pf = tmp_path / "changes.txt"
+    pf.write_text("M\tleague/submissions/octocat/main.py\n"
+                  "M\t.github/workflows/league.yml\n")
+    result = runner.invoke(app, ["validate-pr-paths", "--author", "octocat",
+                                 "--name-status", "--paths-file", str(pf)])
+    assert result.exit_code == 1
+
+
+def test_validate_pr_paths_name_status_allows_plumbing_pr(tmp_path):
+    pf = tmp_path / "changes.txt"
+    pf.write_text("M\tsrc/atv_bench/store.py\n")
+    result = runner.invoke(app, ["validate-pr-paths", "--author", "maintainer",
+                                 "--name-status", "--paths-file", str(pf)])
+    assert result.exit_code == 0
