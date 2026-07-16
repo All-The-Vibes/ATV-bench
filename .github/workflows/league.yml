@@ -271,11 +271,22 @@ jobs:
           #
           # santa re-review #3: a single-shot push drops the match on a non-fast-forward
           # race (another PR's publish pushed first). We use OPTIMISTIC CONCURRENCY, which
-          # is race-safe without a serializing GitHub concurrency group (see the job-level
-          # note above for why such a group would itself drop matches): on each attempt,
-          # reset to the freshly-fetched trusted branch, RE-INGEST this match on top
-          # (idempotent — matches.jsonl dedups on the stable github.run_id match_id),
-          # rebuild, then push. A rejected push just loops and re-applies.
+          # is race-safe WITHOUT a serializing GitHub concurrency group. A constant-group
+          # `concurrency:` would itself DROP matches: GitHub keeps only one PENDING run per
+          # group and "any existing pending job... will be canceled" when a newer run
+          # queues (cancel-in-progress:false protects only the IN-PROGRESS run, not pending
+          # ones) — so a burst of publishes silently loses the cancelled ones. Instead, on
+          # each attempt we reset to the freshly-fetched trusted branch, RE-INGEST this
+          # match on top (idempotent — matches.jsonl dedups on the stable github.run_id
+          # match_id), rebuild, then push. A rejected push re-fetches and re-applies.
+          #
+          # The retry is DEADLINE-bounded with exponential backoff + jitter (not a small
+          # fixed count): under a bursty label storm only one publish wins per push round,
+          # so a fixed 5-attempt cap could exhaust and fail a job with its match unpushed.
+          # Retrying until a generous deadline (well inside the 10-min job timeout) means
+          # every scored match persists rather than needing a manual re-run; if the
+          # deadline IS hit the step fails closed (exit 1, loud + re-runnable), never
+          # silently dropping a match.
           #
           # NOTE: league/matches.jsonl is UNTRACKED until the first match, and
           # `git diff --quiet -- league/` IGNORES untracked files. So we always stage
@@ -285,24 +296,28 @@ jobs:
           git config user.name "atv-bench-bot"
           git config user.email "atv-bench-bot@users.noreply.github.com"
 
+          deadline=$(( $(date +%s) + 420 ))   # ~7 min budget, inside the 10-min job timeout
           attempt=0
-          max_attempts=5
-          while [ "$attempt" -lt "$max_attempts" ]; do
+          while :; do
             attempt=$((attempt + 1))
 
             # Reset hard to the latest trusted branch, INCLUDING untracked store files, so
             # each attempt re-applies from a clean, current origin state (never stale local
-            # files). -x removes ignored files too; league/ has none, this is belt-and-braces.
+            # files). Scoped to league/; -fd (no -x) so a future gitignored path elsewhere
+            # is never wiped, and the gitignored build output ./site (outside league/) is
+            # untouched.
             git fetch origin "$DEFAULT_BRANCH"
             git reset --hard "origin/$DEFAULT_BRANCH"
-            git clean -fdx league/
+            git clean -fd league/
 
-            # Re-apply THIS match onto the fresh store, then rebuild the board.
+            # Re-apply THIS match onto the fresh store, then rebuild the board. --updated-at
+            # is the CURRENT time so the board reflects the match just recorded (not the
+            # previous store commit's time).
             python -m atv_bench.publish ingest ./artifacts/match-result.json \
               --store league --require-spec
             python -m atv_bench.publish build \
               --out ./site --store league \
-              --updated-at "$(git show -s --format=%cI HEAD)"
+              --updated-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
             # Stage EVERYTHING under league/ (tracked + untracked matches.jsonl), then
             # detect changes on the STAGED tree (git diff --cached sees untracked-now-added
@@ -318,11 +333,18 @@ jobs:
               echo "store push succeeded on attempt $attempt"
               exit 0
             fi
-            echo "push rejected (race on attempt $attempt); re-fetching and retrying"
-          done
 
-          echo "store push failed after $max_attempts attempts" >&2
-          exit 1
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "store push failed before deadline after $attempt attempts" >&2
+              exit 1
+            fi
+            # Exponential backoff capped at 30s, plus jitter, so concurrent publishers
+            # de-synchronize instead of colliding on every round.
+            backoff=$(( attempt * attempt ))
+            [ "$backoff" -gt 30 ] && backoff=30
+            sleep "$(( backoff + (RANDOM % 5) ))"
+            echo "push rejected (race on attempt $attempt); backed off, re-fetching"
+          done
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

@@ -153,3 +153,30 @@ def test_publish_job_does_not_use_a_pending_cancelling_concurrency_group(wf):
         "pending runs in a group, silently dropping a scored match. Rely on the "
         "idempotent fetch+re-ingest+retry loop instead."
     )
+
+
+def test_publish_persist_retry_is_deadline_bounded_not_a_small_fixed_cap(wf):
+    # A small fixed attempt cap (e.g. 5) can exhaust under a bursty label storm — only one
+    # publisher wins per push round — and fail a job with its match unpushed. The retry
+    # must be bounded by a DEADLINE (with backoff), so every scored match persists within
+    # the job's time budget rather than needing a manual re-run.
+    code = _persist_code(wf)
+    assert "deadline" in code or "date +%s" in code, (
+        "retry must be deadline-bounded (time budget), not a small fixed attempt count, "
+        "so a bursty publish storm cannot exhaust retries and drop a match"
+    )
+    assert "sleep" in code, (
+        "retry must back off between attempts (sleep) so concurrent publishers "
+        "de-synchronize instead of colliding every round"
+    )
+
+
+def test_publish_board_timestamp_is_not_stale_previous_commit_time(wf):
+    # `--updated-at "$(git show -s --format=%cI HEAD)"` inside the loop (after reset --hard,
+    # before the new commit) reflects the PREVIOUS store commit, leaving the board one
+    # match behind. The build must stamp a current time instead.
+    code = _persist_code(wf)
+    assert "git show -s --format=%cI HEAD" not in code, (
+        "board --updated-at must not be the previous commit's time (stale by one match); "
+        "use a current timestamp"
+    )

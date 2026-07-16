@@ -69,14 +69,23 @@ silently dropped — skewing ELO.
 make the store push a fetch + rebase + retry loop so a losing race re-applies instead of
 dropping a match.
 
-**Resolved:** the `publish` job now has a job-level `concurrency: { group:
-league-publish, cancel-in-progress: false }` (a CONSTANT group, not keyed on the PR) so
-publishes across different PRs serialize instead of racing. Defense-in-depth: the persist
-step is now a fetch + `reset --hard origin/<default>` + **re-ingest-and-rebuild** + push
-**retry loop** (5 attempts). Because the store is recompute-from-history (matches.jsonl is
-the append-only truth), each retry re-applies THIS match onto the freshly-fetched store
-and rebuilds — a losing race re-applies rather than dropping the match, and never hits a
-rebase conflict on derived files. Tripwire: `tests/test_publish_race.py`.
+**Resolved (optimistic-concurrency, NO serializing group):** the persist step is a
+DEADLINE-bounded retry loop with backoff: fetch origin → `reset --hard origin/<default>`
++ `git clean -fd league/` → **re-ingest THIS match** (idempotent: matches.jsonl dedups on
+the stable `github.run_id` match_id) → rebuild → `git add -A league/` → push; a rejected
+push backs off and re-applies. This is race-safe **without** a GitHub concurrency group.
+
+Note we deliberately do **NOT** use a job-level `concurrency` group. A constant group
+would *reintroduce* the drop: GitHub keeps only one *pending* run per group and cancels an
+older pending run when a newer queues (per the docs, "any existing pending job… will be
+canceled"; `cancel-in-progress: false` protects only the *in-progress* run), so a burst of
+publishes silently loses the cancelled ones. The optimistic-retry loop instead guarantees
+every scored match persists within the job's time budget, and fails **closed** (exit 1,
+loud + re-runnable) if the deadline is ever hit — it never silently drops a match. Two
+subtle bugs were fixed here in re-review: `git diff --quiet -- league/` ignores the
+*untracked* first-match file (now stage `git add -A` then check `git diff --cached`), and
+the board `--updated-at` used the previous commit's time (now current time). Tripwire:
+`tests/test_publish_race.py`.
 
 ## 5. ok-artifact not bound to immutable bot identity (ENHANCEMENT)
 
