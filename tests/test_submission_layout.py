@@ -254,3 +254,26 @@ def test_bot_sha256_matching_committed_main_py_loads(tmp_path):
     (d / "submission.json").write_text(json.dumps(rec))
     loaded = LeagueStore(str(league)).load_submissions()
     assert loaded["alice"]["bot_sha256"] == real
+
+
+# --- santa round-8 (both reviewers): the trusted publish path derives identity from the
+#     submission DIRECTORY name but never validated that name is a safe GitHub-login-shaped
+#     slug. A crafted directory (unicode/space/punctuation) would publish an odd identity. ---
+
+def test_unsafe_identity_directory_name_fails_closed(tmp_path):
+    for bad in ("has space", "weird;semicolon", "emoji☃", "path.dot.slug!"):
+        league = tmp_path / f"league_{abs(hash(bad))}"
+        d = league / "submissions" / bad
+        d.mkdir(parents=True)
+        rec = _sub(bad)  # body identity matches the dir so only the slug check can catch it
+        (d / "submission.json").write_text(json.dumps(rec))
+        with pytest.raises(ValueError):
+            LeagueStore(str(league)).load_submissions()
+
+
+def test_valid_github_login_identity_loads(tmp_path):
+    """GitHub logins (alnum + single hyphens) must still load."""
+    for ok in ("octocat", "some-user", "user123", "a"):
+        league = tmp_path / f"league_ok_{ok}"
+        _write_record(league, ok, _sub(ok))
+        assert set(LeagueStore(str(league)).load_submissions()) == {ok}

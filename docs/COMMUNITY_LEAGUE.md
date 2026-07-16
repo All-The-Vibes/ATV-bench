@@ -134,6 +134,14 @@ public match logs are the dispute mechanism.
 
 ## ELO (deterministic, forfeit-safe, variance-gated)
 
+- **Row identity is the GitHub login, by design.** This is a per-contributor / per-harness
+  league: a row's ELO is the recompute-from-full-history of every match that login has
+  played, so an entrant *improves their bot over time* and their rating reflects that arc —
+  it is deliberately NOT reset per bot edit. What IS bound to the exact bytes: (a) each
+  scored match is spec-bound to the bot_sha256 the sandbox actually ran (a forged/ swapped
+  bot for a given match is rejected), and (b) the row's *published* bot_sha256 is
+  re-derived at load from the committed `main.py`, so the displayed hash always matches the
+  current on-disk bot, never a self-attested claim.
 - **Recompute from full match history** on every publish (not incremental). Same history →
   byte-identical ELO JSON, order-independent — no flapping board on CI re-runs.
 - **Zero-opponent provisional:** the first-ever submitter gets `elo=1500, rated=false`,

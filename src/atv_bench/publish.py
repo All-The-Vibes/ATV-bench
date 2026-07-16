@@ -57,8 +57,13 @@ class MatchSpec:
     # Trusted sha256 of the EXACT bot bytes the match job mounted (santa re-review #5).
     # Optional: None means bot-identity binding is not enforced (local/hermetic use, or a
     # workflow that does not export it). When set, the stored record is stamped with THIS
-    # value and a disagreeing bot-reported bot_sha256 is rejected — so a scored result is
-    # provably tied to the submitted bytes, never a later-swapped bot under the same login.
+    # value and a disagreeing bot-reported bot_sha256 is rejected — so a SCORED RESULT is
+    # provably tied to the bytes that produced it, never a later-swapped bot under the same
+    # login for THAT match. Scope note: the leaderboard ROW is keyed by login and its ELO is
+    # recompute-from-full-history BY DESIGN — a per-contributor/harness league where an
+    # entrant iterates their bot over time. The row's published bot_sha256 is separately
+    # re-derived from the committed main.py at load, so the displayed hash always matches the
+    # current on-disk bot; this is not a claim that ELO resets per bot edit.
     bot_sha256: "str | None" = None
 
     @classmethod

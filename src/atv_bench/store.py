@@ -26,6 +26,10 @@ from atv_bench.leaderboard import build_leaderboard_doc
 _SUBMISSION_KEYS = {"identity", "game", "bot_sha256", "fingerprint", "pr_url", "logs_url"}
 # Matches the leaderboard schema's bot_sha256 pattern (64 lowercase hex).
 _SHA256_RE = re.compile(r"[a-f0-9]{64}")
+# A GitHub-login-shaped identity: 1-39 chars, alphanumeric with single internal hyphens.
+# The trusted publish path derives identity from the submission directory name, so this
+# guards a crafted directory (unicode/space/punctuation) from publishing an odd identity.
+_IDENTITY_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}")
 _MATCH_KEYS = {"player_a", "player_b", "outcome", "match_id"}
 
 
@@ -133,6 +137,14 @@ class LeagueStore:
                 raise ValueError(
                     f"submission identity {identity!r} does not match directory {d.name!r}; "
                     "identity must equal the submission directory name"
+                )
+            # Validate identity is a GitHub-login-shaped slug (santa round-8): the trusted
+            # path derives it from the directory name, so a crafted dir (spaces, unicode,
+            # punctuation) must not publish an odd identity into a public row.
+            if not _IDENTITY_RE.fullmatch(identity):
+                raise ValueError(
+                    f"submission identity {identity!r} is not a valid GitHub-login slug "
+                    "(1-39 alphanumerics with single internal hyphens)"
                 )
             if identity in subs:
                 raise ValueError(f"duplicate submission identity: {identity!r}")
