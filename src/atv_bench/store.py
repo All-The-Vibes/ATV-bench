@@ -32,6 +32,32 @@ _SHA256_RE = re.compile(r"[a-f0-9]{64}")
 _IDENTITY_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}")
 _MATCH_KEYS = {"player_a", "player_b", "outcome", "match_id"}
 
+# Bounded reads on trusted-path inputs (santa round-2): submission.json / main.py /
+# matches.jsonl are all attacker-influenced (a merged PR commits them). Reading an
+# unbounded file into memory before validation lets an oversized input OOM the trusted
+# build. Cap each read and treat oversize as a controlled ValueError, not a MemoryError.
+_MAX_RECORD_BYTES = 256 * 1024        # submission.json: metadata, kilobytes at most
+_MAX_BOT_BYTES = 1024 * 1024          # main.py: a bot script, ~1 MiB ceiling
+_MAX_MATCHES_BYTES = 32 * 1024 * 1024  # matches.jsonl: full history, generous but bounded
+
+
+def _read_text_bounded(path: Path, limit: int, label: str) -> str:
+    """Read at most `limit` bytes of text; fail closed if the file exceeds it.
+
+    Guards the trusted build against an oversized attacker-controlled file exhausting
+    memory before validation runs. Reads limit+1 and rejects if the extra byte exists.
+    """
+    return _read_bytes_bounded(path, limit, label).decode("utf-8", errors="strict")
+
+
+def _read_bytes_bounded(path: Path, limit: int, label: str) -> bytes:
+    """Read at most `limit` bytes; fail closed (ValueError) if the file exceeds it."""
+    with path.open("rb") as fh:
+        blob = fh.read(limit + 1)
+    if len(blob) > limit:
+        raise ValueError(f"{label} exceeds the {limit}-byte limit (oversize rejected)")
+    return blob
+
 
 def _within_dir(path: Path, root: Path) -> bool:
     """True iff the fully-resolved `path` stays inside the resolved `root`.
@@ -90,18 +116,29 @@ class LeagueStore:
         if not self.submissions_dir.exists():
             return subs
         for d in sorted(p for p in self.submissions_dir.iterdir() if p.is_dir()):
+            # Directory-symlink confinement (santa round-2, both reviewers CRITICAL):
+            # iterdir()+is_dir() FOLLOWS a directory symlink, so a git-tracked
+            # `submissions/alice -> ../payload` would resolve its files inside the target
+            # and pass a per-`d` containment check. Reject any symlinked entrant directory,
+            # and confine every file against the FIXED submissions_dir root (not the
+            # attacker-influenced `d`), so no escape survives.
+            if d.is_symlink() or not _within_dir(d, self.submissions_dir):
+                raise ValueError(
+                    f"submission directory {d.name!r} is a symlink or resolves outside "
+                    "the submissions tree (escape rejected)"
+                )
             record = d / self._RECORD_FILENAME
             if not record.is_file():
                 # A bot directory without a record is not yet a scored submission
                 # (e.g. a partial tree). Skip it rather than crash the whole board.
                 continue
             # Symlink confinement (santa dual-review): a committed submission.json is
-            # untrusted. Reject a record that resolves outside its own entrant directory
-            # so a crafted symlink can't make the trusted build read arbitrary host files.
-            if not _within_dir(record, d):
+            # untrusted. Reject a record that is a symlink or resolves outside the
+            # submissions tree so a crafted symlink can't read arbitrary host files.
+            if record.is_symlink() or not _within_dir(record, self.submissions_dir):
                 raise ValueError(
-                    f"submission record for {d.name!r} resolves outside its directory "
-                    "(symlink escape rejected)"
+                    f"submission record for {d.name!r} resolves outside the submissions "
+                    "tree (symlink escape rejected)"
                 )
             # H3 (santa round-3): a committed submission.json is hand-editable. Fail CLOSED
             # on malformed content — invalid JSON or a record missing required keys must
@@ -109,7 +146,9 @@ class LeagueStore:
             # JSONDecodeError/KeyError deep inside trusted board generation (a DoS on the
             # whole board). We do not silently skip either — a maintainer must see + fix it.
             try:
-                data = json.loads(record.read_text())
+                data = json.loads(
+                    _read_text_bounded(record, _MAX_RECORD_BYTES, f"submission.json for {d.name!r}")
+                )
             except json.JSONDecodeError as e:
                 raise ValueError(f"malformed submission.json for {d.name!r}: {e}") from e
             if not isinstance(data, dict):
@@ -180,13 +219,16 @@ class LeagueStore:
             bot_file = d / "main.py"
             if bot_file.is_file():
                 # Symlink confinement (santa dual-review): refuse to read/hash a main.py
-                # that resolves outside its entrant directory (untrusted-input escape).
-                if not _within_dir(bot_file, d):
+                # that is a symlink or resolves outside the submissions tree.
+                if bot_file.is_symlink() or not _within_dir(bot_file, self.submissions_dir):
                     raise ValueError(
-                        f"bot file for {d.name!r} resolves outside its directory "
+                        f"bot file for {d.name!r} resolves outside the submissions tree "
                         "(symlink escape rejected)"
                     )
-                trusted_sha = hashlib.sha256(bot_file.read_bytes()).hexdigest()
+                # Bounded read (santa round-2): an oversized main.py must fail closed, not
+                # OOM the trusted build, before it is hashed into the published row.
+                bot_bytes = _read_bytes_bounded(bot_file, _MAX_BOT_BYTES, f"main.py for {d.name!r}")
+                trusted_sha = hashlib.sha256(bot_bytes).hexdigest()
                 if data.get("bot_sha256") != trusted_sha:
                     data = {**data, "bot_sha256": trusted_sha}
             subs[identity] = data
@@ -206,17 +248,40 @@ class LeagueStore:
             for existing in self.load_matches():
                 if existing.get("match_id") == mid:
                     return
+        # Symlink confinement (santa round-2): never append through a symlinked matches
+        # file into arbitrary host content, even when dedup was skipped (empty match_id).
+        if self.matches_file.exists() and (
+            self.matches_file.is_symlink() or not _within_dir(self.matches_file, self.root)
+        ):
+            raise ValueError(
+                "matches.jsonl is a symlink or resolves outside the store (escape rejected)"
+            )
         with self.matches_file.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(match, sort_keys=True) + "\n")
 
     def load_matches(self) -> list[dict[str, Any]]:
         if not self.matches_file.exists():
             return []
+        # Symlink confinement (santa round-2): matches.jsonl is committed into the store by
+        # a merged PR. Refuse to follow a symlinked matches file into arbitrary host content
+        # (the trusted read/append path must stay inside the store root).
+        if self.matches_file.is_symlink() or not _within_dir(self.matches_file, self.root):
+            raise ValueError(
+                "matches.jsonl is a symlink or resolves outside the store (escape rejected)"
+            )
+        # Bounded read: an oversized history file must fail closed, not OOM the build.
+        text = _read_text_bounded(self.matches_file, _MAX_MATCHES_BYTES, "matches.jsonl")
         out = []
-        for line in self.matches_file.read_text().splitlines():
+        for line in text.splitlines():
             line = line.strip()
-            if line:
+            if not line:
+                continue
+            # Per-line fail-closed: a malformed line must raise a controlled ValueError,
+            # not surface as an uncaught JSONDecodeError deep in trusted board generation.
+            try:
                 out.append(json.loads(line))
+            except json.JSONDecodeError as e:
+                raise ValueError(f"malformed matches.jsonl line: {e}") from e
         return out
 
 

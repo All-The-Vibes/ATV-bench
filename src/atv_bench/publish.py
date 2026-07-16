@@ -20,7 +20,11 @@ from typing import Any
 
 from atv_bench.elo import ForfeitReason, Outcome
 from atv_bench.leaderboard import validate_leaderboard
-from atv_bench.store import LeagueStore, build_leaderboard_from_store
+from atv_bench.store import LeagueStore, build_leaderboard_from_store, _read_text_bounded
+
+# A match-result artifact is small JSON (a handful of fields). Bound the trusted read so
+# an oversized artifact fails closed instead of OOM-ing the trusted publish job.
+_MAX_ARTIFACT_BYTES = 256 * 1024
 
 _VALID_STATUSES = {"ok", "crash", "invalid_output"}
 _FORFEIT_OUTCOMES = {Outcome.FORFEIT_A.value, Outcome.FORFEIT_B.value}
@@ -194,7 +198,7 @@ def validate_artifact(path: str) -> dict[str, Any]:
     builds without a trusted-job crash.
     """
     try:
-        data = json.loads(Path(path).read_text())
+        data = json.loads(_read_text_bounded(Path(path), _MAX_ARTIFACT_BYTES, "artifact"))
     except (json.JSONDecodeError, ValueError) as e:
         raise ValueError(f"artifact is not valid JSON: {e}")
     if not isinstance(data, dict):

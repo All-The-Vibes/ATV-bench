@@ -310,3 +310,55 @@ def test_symlinked_bot_escaping_tree_fails_closed(tmp_path):
     (d / "main.py").symlink_to(secret)
     with pytest.raises(ValueError):
         LeagueStore(str(league)).load_submissions()
+
+
+# --- Directory-symlink bypass (santa round-2, BOTH reviewers CRITICAL): confining a
+#     record against its own entrant dir `d` is bypassable when `d` ITSELF is a symlink.
+#     iterdir()+is_dir() follows the dir symlink, so record.resolve() lands inside the
+#     symlink target and passes a per-`d` containment check. The loader must reject any
+#     symlinked entrant directory (and confine against the fixed submissions_dir root). ---
+
+def test_symlinked_entrant_directory_fails_closed(tmp_path):
+    league = tmp_path / "league"
+    (league / "submissions").mkdir(parents=True)
+    payload = tmp_path / "payload"
+    payload.mkdir()
+    (payload / "main.py").write_text("import os\n")
+    (payload / "submission.json").write_text(json.dumps(_sub("alice")))
+    # git can track a symlinked directory; simulate the committed tree
+    (league / "submissions" / "alice").symlink_to(payload, target_is_directory=True)
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_submissions()
+
+
+def test_symlinked_matches_file_fails_closed(tmp_path):
+    """A symlinked matches.jsonl must not be followed by the trusted read path."""
+    league = tmp_path / "league"
+    league.mkdir(parents=True)
+    outside = tmp_path / "outside_matches.jsonl"
+    outside.write_text('{"player_a":"a","player_b":"b","outcome":"a_wins","match_id":"x"}\n')
+    (league / "matches.jsonl").symlink_to(outside)
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_matches()
+
+
+def test_oversized_submission_record_fails_closed(tmp_path):
+    """An enormous submission.json must fail closed (bounded read), not OOM the build."""
+    league = tmp_path / "league"
+    d = league / "submissions" / "alice"
+    d.mkdir(parents=True)
+    (d / "main.py").write_text("def move(s):\n    return 'up'\n")
+    (d / "submission.json").write_text(" " * (2 * 1024 * 1024) + json.dumps(_sub("alice")))
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_submissions()
+
+
+def test_oversized_bot_file_fails_closed(tmp_path):
+    """An enormous main.py must fail closed before it is read/hashed."""
+    league = tmp_path / "league"
+    d = league / "submissions" / "alice"
+    d.mkdir(parents=True)
+    (d / "submission.json").write_text(json.dumps(_sub("alice")))
+    (d / "main.py").write_text("#" * (2 * 1024 * 1024))
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_submissions()
