@@ -59,11 +59,11 @@ deferred; this fix makes the scoring path live.)
 
 ## 4. Concurrent-publish store race drops matches (BUG) — ✅ RESOLVED
 
-`league.yml:24` scopes concurrency per-PR (`group: league-${{ pr.number || ref }}`), so
-two different PRs' publish jobs run concurrently. `league.yml:254` does a single-shot
-`git push origin HEAD:<default_branch>` with **no fetch / pull --rebase / retry**. The
-losing race hits a non-fast-forward rejection, the job aborts, and that recorded match is
-silently dropped — skewing ELO.
+_Original bug statement (line refs describe the PRE-FIX file, kept for history):_ the
+workflow scoped concurrency per-PR (`group: league-${{ pr.number || ref }}`) and the
+persist step did a single-shot `git push origin HEAD:<default_branch>` with **no fetch /
+rebase / retry**. The losing race hit a non-fast-forward rejection, the job aborted, and
+that recorded match was silently dropped — skewing ELO.
 
 **Work (original suggestion — see the corrected resolution below):** make the store
 push resilient to a non-fast-forward race so a losing publish re-applies instead of
@@ -99,3 +99,57 @@ this is about binding the artifact to the *bot identity*.
 
 **Work:** include `bot_sha256` / PR head SHA in the `MatchSpec` and reject on mismatch,
 so a result is provably from the submitted bytes.
+
+## 6. Stale Pages deploy race (BUG — pre-existing, out of scope for #2/#3)
+
+Surfaced by santa-loop final-check (Reviewer B, gpt-5.4). The persist retry loop makes the
+`league/` STORE push race-safe, but the **Pages deploy** is not. Each publish job builds
+`./site` inside the loop from its own snapshot, then `upload-pages-artifact` +
+`deploy-pages` run AFTER the loop with no final rebuild from the settled default-branch
+head. If an older publisher's deploy finishes last, GitHub Pages regresses to a stale
+board even though the store is correct. Not a regression from the #2/#3 fixes — the deploy
+path is unchanged from the original PR.
+
+**Work:** after the store push settles, rebuild `./site` from a fresh
+`origin/<default_branch>` immediately before `upload-pages-artifact`, OR move Pages
+deployment into a separate default-branch workflow (`workflow_run` on the store commit) so
+the deployed board always reflects the latest settled store. Add a tripwire asserting the
+deployed artifact is rebuilt from the settled state.
+
+## 7. Forked-PR read-only token blocks the documented contributor flow (BUG — pre-existing)
+
+Surfaced by santa-loop final-check (Reviewer B). `CONTRIBUTING.md` documents "fork → open
+PR → maintainer labels `run-match`", but the workflow runs on `pull_request` and the
+trusted publish job needs `contents: write` + `pages: write` + `id-token: write`. GitHub
+gives `pull_request` runs from FORKED repos a **read-only** `GITHUB_TOKEN`, so the normal
+external-contributor path can score in-workspace but cannot persist `league/` or deploy
+Pages. Works only for same-repo branches today. Not a regression from #2/#3.
+
+**Work:** move the privileged persist/deploy phase onto a trusted follow-up trigger
+(`workflow_run` / `pull_request_target` with strict no-PR-code discipline, or a
+maintainer-run default-branch workflow) that can legitimately write on fork submissions
+without executing untrusted code.
+
+## 8. Integration-test flag parity drift (TEST — pre-existing)
+
+Surfaced by santa-loop final-check (Reviewer B). `tests/test_action_malicious_bot.py` uses
+`--memory 256m` and `python:3.12-alpine`, which no longer match the workflow's `512m` and
+the real arena image (`arena/Dockerfile`). The gated integration test's "exact sandbox
+flags" parity claim is weakened. Not a scoring/security defect.
+
+**Work:** sync the gated test's docker flags + image with the actual `league.yml` match
+step (ideally derive both from one source) so the parity claim stays true.
+
+---
+
+## Santa-loop convergence note (PR #1 re-review)
+
+The re-review ran to the 3-iteration fix limit + a confirmation round. Rounds 1–3 fixed
+every in-scope defect in the #2/#3 work (untracked-first-match drop, job-level and
+workflow-level concurrency footguns, vacuous/stale tests, deadline-bounded retry, board
+timestamp) — Reviewer A (Opus) returned PASS on rounds 2, 3, and the confirmation round,
+and all fixes are mutation-verified. The confirmation round's remaining FAIL (Reviewer B)
+raised items 6–8 above: genuinely real but **broader, pre-existing** issues in the deploy
+path and contributor flow, NOT regressions from the #2/#3 fixes. Per the escalation rule
+(new problems in new places after 3 rounds = stop looping, don't expand scope mid-loop),
+these are tracked here for a dedicated follow-up rather than fixed in this pass.
