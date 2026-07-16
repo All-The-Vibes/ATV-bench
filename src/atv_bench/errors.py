@@ -20,6 +20,7 @@ class ErrorCode(str, enum.Enum):
     LEAK_DETECTED = "leak_detected"
     BOT_SHAPE_INVALID = "bot_shape_invalid"
     FINGERPRINT_LEAK = "fingerprint_leak"
+    SUBMIT_PR_FAILED = "submit_pr_failed"
 
 
 # problem + fix + docs anchor per code.
@@ -63,6 +64,11 @@ _SPECS: dict[ErrorCode, tuple[str, str, str]] = {
         "A fingerprint value passed to submit still looks like a secret; refusing to publish it.",
         "This is a bug guard — re-run the probe via `atv-bench fingerprint`; do not hand-edit the manifest.",
         "COMMUNITY_LEAGUE.md#harness-fingerprint-the-credibility-gate",
+    ),
+    ErrorCode.SUBMIT_PR_FAILED: (
+        "A step of the live submission (fork / branch / commit / push / PR create) failed.",
+        "Read the Cause line for the failing gh/git command; fix it or fall back to the manual PR flow.",
+        "CONTRIBUTING.md#manual-pr-fallback",
     ),
 }
 

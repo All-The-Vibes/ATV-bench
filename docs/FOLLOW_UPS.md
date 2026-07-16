@@ -22,12 +22,21 @@ boundary" section in `docs/COMMUNITY_LEAGUE.md`.
 result inside the sandbox, so the outcome is derived from real gameplay rather than bot
 stdout — the "live trusted match-orchestration" layer end-to-end.
 
-## 2. Live `gh` PR submission automation
+## 2. Live `gh` PR submission automation — ✅ RESOLVED
 
 `atv-bench submit` builds the submission record; the contributor opens the PR manually
 today (documented in `docs/COMMUNITY_LEAGUE.md` and the submit status trail). Wire the
 live `gh pr create` path (fork, branch, push, open PR) behind the existing 7-check
 preflight.
+
+**Resolved:** `atv-bench submit --live --identity <login> <bot>` now runs the gh-backed
+7-check preflight (`gh_preflight_runner`) and, only if it passes, opens the PR end-to-end
+via `open_submission_pr`: `gh repo fork` → `git checkout -b` → stage bot + submission.json
+at the identity-pinned `league/submissions/<login>/` path → commit → push →
+`gh pr create`. Fails closed — any non-zero gh/git step aborts with an actionable
+`SUBMIT_PR_FAILED` AtvError before a later step, never a half-open PR. All gh/git calls go
+through an injected command runner so the flow is hermetically tested
+(`tests/test_submit_live.py`); the default `--dry-run`/manual fallback is unchanged.
 
 ---
 
