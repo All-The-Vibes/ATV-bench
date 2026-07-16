@@ -88,7 +88,7 @@ subtle bugs were fixed here in re-review: `git diff --quiet -- league/` ignores 
 the board `--updated-at` used the previous commit's time (now current time). Tripwire:
 `tests/test_publish_race.py`.
 
-## 5. ok-artifact not bound to immutable bot identity (ENHANCEMENT)
+## 5. ok-artifact not bound to immutable bot identity (ENHANCEMENT) — ✅ RESOLVED
 
 PR #1 closed identity + match_id forgery, but the `MatchSpec` is `(login, anchor,
 run_id)` only. The executed bytes are **not** structurally bound to `bot_sha256` / PR
@@ -100,7 +100,14 @@ this is about binding the artifact to the *bot identity*.
 **Work:** include `bot_sha256` / PR head SHA in the `MatchSpec` and reject on mismatch,
 so a result is provably from the submitted bytes.
 
-## 6. Stale Pages deploy race (BUG — pre-existing, out of scope for #2/#3)
+**Resolved:** `MatchSpec` gained an optional trusted `bot_sha256` (computed by the match
+job from the exact staged bytes via `sha256sum submission/main.py`, handed to the trusted
+publish side). `bind_ok_to_spec` stamps the trusted hash onto the record and rejects a
+disagreeing bot-reported `bot_sha256` to a CRASH forfeit — never trusts the claim, never
+drops the match. Optional field = full back-compat. Tripwire:
+`tests/test_bot_identity_binding.py`.
+
+## 6. Stale Pages deploy race (BUG — pre-existing, out of scope for #2/#3) — ✅ RESOLVED
 
 Surfaced by santa-loop final-check (Reviewer B, gpt-5.4). The persist retry loop makes the
 `league/` STORE push race-safe, but the **Pages deploy** is not. Each publish job builds
@@ -116,7 +123,13 @@ deployment into a separate default-branch workflow (`workflow_run` on the store 
 the deployed board always reflects the latest settled store. Add a tripwire asserting the
 deployed artifact is rebuilt from the settled state.
 
-## 7. Forked-PR read-only token blocks the documented contributor flow (BUG — pre-existing)
+**Resolved:** a dedicated step now fetches + `reset --hard origin/<default_branch>` and
+rebuilds `./site` from the settled store immediately before `upload-pages-artifact`, so the
+deployed board reflects the latest settled state (this match plus any concurrently landed)
+rather than a per-attempt snapshot. Now lives in the trusted `league-publish.yml` workflow
+(see item 7). Tripwire: `tests/test_pages_deploy_freshness.py`.
+
+## 7. Forked-PR read-only token blocks the documented contributor flow (BUG — pre-existing) — ✅ RESOLVED
 
 Surfaced by santa-loop final-check (Reviewer B). `CONTRIBUTING.md` documents "fork → open
 PR → maintainer labels `run-match`", but the workflow runs on `pull_request` and the
@@ -130,7 +143,20 @@ Pages. Works only for same-repo branches today. Not a regression from #2/#3.
 maintainer-run default-branch workflow) that can legitimately write on fork submissions
 without executing untrusted code.
 
-## 8. Integration-test flag parity drift (TEST — pre-existing)
+**Resolved:** the privileged persist/deploy phase moved to a new `league-publish.yml`
+workflow triggered on `workflow_run` (the `league` match workflow completing). A
+workflow_run workflow runs in the TRUSTED base-repo context with a full write token even
+for fork PRs, and this one never checks out or executes PR code — it consumes only (a) the
+bot's result artifact and (b) a *trusted* `match-meta` artifact (submitter/opponent/
+match_id/bot_sha256, authored by the match job from GitHub context, never bot stdout),
+downloaded cross-run via `workflow_run.id`. It gates on `workflow_run.conclusion ==
+'success'`, ingests with `--require-spec`, runs the same optimistic-concurrency persist
+loop (#3) and settled-store rebuild (#6). The untrusted match job in `league.yml` now
+holds no write scope at all. Tripwire: `tests/test_fork_safe_publish.py` (plus the
+publish-side assertions in `test_action_isolation.py` / `test_publish_race.py` /
+`test_pages_deploy_freshness.py` retargeted to the new workflow).
+
+## 8. Integration-test flag parity drift (TEST — pre-existing) — ✅ RESOLVED
 
 Surfaced by santa-loop final-check (Reviewer B). `tests/test_action_malicious_bot.py` uses
 `--memory 256m` and `python:3.12-alpine`, which no longer match the workflow's `512m` and
@@ -139,6 +165,11 @@ flags" parity claim is weakened. Not a scoring/security defect.
 
 **Work:** sync the gated test's docker flags + image with the actual `league.yml` match
 step (ideally derive both from one source) so the parity claim stays true.
+
+**Resolved:** the integration test now uses `--memory 512m` and builds+runs the in-repo
+arena image (`arena/Dockerfile`), matching the workflow. A new `test_sandbox_flag_parity.py`
+tripwire parses the real match step from `league.yml` and fails on every push if the
+memory cap, core isolation flags, or image drift from the integration test again.
 
 ---
 

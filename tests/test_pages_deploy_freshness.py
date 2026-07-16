@@ -20,12 +20,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-WORKFLOW = Path(__file__).parent.parent / ".github" / "workflows" / "league.yml"
+WORKFLOW = Path(__file__).parent.parent / ".github" / "workflows" / "league-publish.yml"
 
 
 @pytest.fixture(scope="module")
 def wf():
-    assert WORKFLOW.exists(), "league.yml workflow must exist"
+    assert WORKFLOW.exists(), "league-publish.yml workflow must exist"
     return yaml.safe_load(WORKFLOW.read_text())
 
 

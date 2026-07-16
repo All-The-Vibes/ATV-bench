@@ -87,11 +87,21 @@ maintainers can add it.)
 
 ```
 PR opened → (first-timer: maintainer approves the run) → match job runs your bot
-          → result artifact → publish job recomputes ELO → leaderboard updates
+          → result + trusted-meta artifacts → league-publish (workflow_run) recomputes
+            ELO, persists the store, and deploys the leaderboard
 ```
 
 First-time contributors need a maintainer to approve the workflow run before the
 untrusted bot executes (a GitHub environment gate). Expect a short wait the first time.
+
+**Fork-safe by design.** The match job that runs your bot holds no token (a fork PR's
+`GITHUB_TOKEN` is read-only anyway) and only uploads two artifacts: the bot's result and
+a *trusted* meta record (your GitHub identity + the run id + the bot's byte hash, built
+from GitHub context, never from bot output). A separate trusted workflow
+(`league-publish.yml`) then runs in the base repo on `workflow_run`, where it has the
+write access needed to persist the store and deploy Pages — without ever checking out or
+executing your PR code. This is what lets **fork** submissions score end-to-end, not just
+same-repo branches.
 
 ## Extending the ecosystem
 

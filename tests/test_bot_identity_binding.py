@@ -174,13 +174,17 @@ def wf():
 
 
 def test_match_job_exports_trusted_bot_sha256_output(wf):
-    """The match job must publish the sha of the bytes it mounted as a job OUTPUT, so the
-    trusted publish job can bind to it without trusting bot stdout."""
-    outputs = wf["jobs"]["match"].get("outputs") or {}
-    assert "bot_sha256" in outputs, "match job must declare a bot_sha256 output"
-    assert "steps.extract.outputs.bot_sha256" in str(outputs["bot_sha256"]), (
-        "bot_sha256 output must come from the extract step that stages the bot bytes"
-    )
+    """The match job must compute the sha of the bytes it mounted and hand it to the
+    trusted publish side. Post santa #7 this travels in the match-meta artifact (the
+    publish workflow_run event carries no PR context), authored from the extract step's
+    trusted output."""
+    match = wf["jobs"]["match"]
+    steps = match["steps"]
+    meta = next((s for s in steps if "match-meta.json" in str(s.get("run", ""))), None)
+    assert meta is not None, "match job must write the trusted match-meta.json"
+    assert "BOT_SHA256" in meta.get("env", {}), "match-meta must carry the bot_sha256"
+    assert "steps.extract.outputs.bot_sha256" in str(meta["env"]["BOT_SHA256"]), \
+        "bot_sha256 must come from the extract step that stages the bot bytes"
 
 
 def test_extract_step_computes_sha_of_staged_bytes(wf):
@@ -196,13 +200,12 @@ def test_extract_step_computes_sha_of_staged_bytes(wf):
     )
 
 
-def test_publish_ingest_receives_bot_sha256_from_match_output(wf):
-    """Both publish ingest paths (first ingest + persist-loop re-ingest) must pass the
-    trusted match output through as ATV_BOT_SHA256."""
-    raw = WORKFLOW.read_text()
-    assert raw.count("ATV_BOT_SHA256:") >= 2, (
-        "both the ingest step and the persist re-ingest step must export ATV_BOT_SHA256"
-    )
-    assert "needs.match.outputs.bot_sha256" in raw, (
-        "ATV_BOT_SHA256 must be sourced from the trusted match job output"
+def test_publish_ingest_receives_bot_sha256_from_meta():
+    """The trusted publish workflow must export ATV_BOT_SHA256 sourced from the match-meta
+    (loaded into steps.meta.outputs), so the scored record is bound to the submitted bytes."""
+    publish_wf = Path(__file__).parent.parent / ".github" / "workflows" / "league-publish.yml"
+    raw = publish_wf.read_text()
+    assert "ATV_BOT_SHA256:" in raw, "publish workflow must export ATV_BOT_SHA256"
+    assert "steps.meta.outputs.bot_sha256" in raw, (
+        "ATV_BOT_SHA256 must be sourced from the trusted match-meta artifact"
     )
