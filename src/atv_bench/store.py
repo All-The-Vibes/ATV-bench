@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import hashlib
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -138,6 +139,13 @@ class LeagueStore:
         path.write_text(json.dumps(submission, indent=2, sort_keys=True))
 
     def load_submissions(self) -> dict[str, dict[str, Any]]:
+        """Strict loader (validators): RAISE on the first malformed entrant.
+
+        Anything invalid — symlink escape, malformed/oversize record, bad types, identity
+        mismatch — fails closed with a controlled ValueError so a validator surfaces it.
+        For the trusted board build, use load_submissions_quarantined() instead, which
+        skips bad rows so one merged bad entrant can't abort the whole board.
+        """
         subs: dict[str, dict[str, Any]] = {}
         if not self.submissions_dir.exists():
             return subs
@@ -145,123 +153,169 @@ class LeagueStore:
         # root before trusting it as the containment anchor for leaf files below.
         _reject_symlinked_ancestors(self.submissions_dir, self.root)
         for d in sorted(p for p in self.submissions_dir.iterdir() if p.is_dir()):
-            # Directory-symlink confinement (santa round-2, both reviewers CRITICAL):
-            # iterdir()+is_dir() FOLLOWS a directory symlink, so a git-tracked
-            # `submissions/alice -> ../payload` would resolve its files inside the target
-            # and pass a per-`d` containment check. Reject any symlinked entrant directory,
-            # and confine every file against the FIXED submissions_dir root (not the
-            # attacker-influenced `d`), so no escape survives.
-            if d.is_symlink() or not _within_dir(d, self.submissions_dir):
-                raise ValueError(
-                    f"submission directory {d.name!r} is a symlink or resolves outside "
-                    "the submissions tree (escape rejected)"
-                )
-            record = d / self._RECORD_FILENAME
-            if not record.is_file():
-                # A bot directory without a record is not yet a scored submission
-                # (e.g. a partial tree). Skip it rather than crash the whole board.
-                continue
-            # Symlink confinement (santa dual-review): a committed submission.json is
-            # untrusted. Reject a record that is a symlink or resolves outside the
-            # submissions tree so a crafted symlink can't read arbitrary host files.
-            if record.is_symlink() or not _within_dir(record, self.submissions_dir):
-                raise ValueError(
-                    f"submission record for {d.name!r} resolves outside the submissions "
-                    "tree (symlink escape rejected)"
-                )
-            # H3 (santa round-3): a committed submission.json is hand-editable. Fail CLOSED
-            # on malformed content — invalid JSON or a record missing required keys must
-            # raise a controlled ValueError here, NOT surface later as an uncaught
-            # JSONDecodeError/KeyError deep inside trusted board generation (a DoS on the
-            # whole board). We do not silently skip either — a maintainer must see + fix it.
-            try:
-                data = json.loads(
-                    _read_text_bounded(record, _MAX_RECORD_BYTES, f"submission.json for {d.name!r}")
-                )
-            except json.JSONDecodeError as e:
-                raise ValueError(f"malformed submission.json for {d.name!r}: {e}") from e
-            if not isinstance(data, dict):
-                raise ValueError(f"submission record for {d.name!r} is not a JSON object")
-            missing = _SUBMISSION_KEYS - set(data)
-            if missing:
-                raise ValueError(
-                    f"submission record for {d.name!r} missing required keys: {sorted(missing)}"
-                )
-            # Nested-type validation (santa round-4): top-level key presence is not enough.
-            # A wrong-TYPED nested field (fingerprint as a string, unknown/skills/mcps/plugins
-            # as a scalar) crashed trusted board generation with an uncaught AttributeError/
-            # TypeError. Fail closed HERE so a malformed merged record can never DoS the board.
-            fp = data.get("fingerprint")
-            if not isinstance(fp, dict):
-                raise ValueError(
-                    f"submission record for {d.name!r} has a non-object fingerprint"
-                )
-            for list_field in ("skills", "mcps", "plugins", "unknown"):
-                if list_field in fp and not isinstance(fp[list_field], list):
-                    raise ValueError(
-                        f"submission record for {d.name!r} fingerprint.{list_field} "
-                        f"must be a list, got {type(fp[list_field]).__name__}"
-                    )
-            # Top-level published scalars (santa round-6): a wrong-typed/malformed
-            # bot_sha256/pr_url/logs_url passed load then crashed the trusted build deep in
-            # schema validation (availability DoS). Validate them HERE so a bad merged record
-            # fails closed with a clear per-record message, matching the leaderboard schema
-            # patterns (bot_sha256 = 64 lowercase hex; urls = http(s)).
-            sha = data.get("bot_sha256")
-            if not isinstance(sha, str) or not _SHA256_RE.fullmatch(sha):
-                raise ValueError(
-                    f"submission record for {d.name!r} has an invalid bot_sha256 "
-                    "(must be 64 lowercase hex chars)"
-                )
-            for url_field in ("pr_url", "logs_url"):
-                url = data.get(url_field)
-                if not isinstance(url, str) or not url.startswith(("http://", "https://")):
-                    raise ValueError(
-                        f"submission record for {d.name!r} has an invalid {url_field} "
-                        "(must be an http(s) URL)"
-                    )
-            identity = data.get("identity")
-            # Anchor identity to the DIRECTORY name: a submission's identity is bound to
-            # its path (league/submissions/<identity>/), which the PR diff attributes to
-            # an author. Rejecting a body whose identity != directory stops a hand-edited
-            # mallory/submission.json from claiming another entrant's identity.
-            if identity != d.name:
-                raise ValueError(
-                    f"submission identity {identity!r} does not match directory {d.name!r}; "
-                    "identity must equal the submission directory name"
-                )
-            # Validate identity is a GitHub-login-shaped slug (santa round-8): the trusted
-            # path derives it from the directory name, so a crafted dir (spaces, unicode,
-            # punctuation) must not publish an odd identity into a public row.
-            if not _IDENTITY_RE.fullmatch(identity):
-                raise ValueError(
-                    f"submission identity {identity!r} is not a valid GitHub-login slug "
-                    "(1-39 alphanumerics with single internal hyphens)"
-                )
+            loaded = self._load_one_submission(d)
+            if loaded is None:
+                continue  # a partial tree (no record yet) is not an error
+            identity, data = loaded
             if identity in subs:
                 raise ValueError(f"duplicate submission identity: {identity!r}")
-            # Bind the PUBLISHED bot_sha256 to the actual committed bytes (santa round-7):
-            # the row hash must be the hash of the sibling main.py, not the mutable
-            # submission.json claim — else a contributor could display a hash that differs
-            # from the bytes that earned the ELO. Recompute from main.py when present and
-            # STAMP the trusted value over whatever the record claimed.
-            bot_file = d / "main.py"
-            if bot_file.is_file():
-                # Symlink confinement (santa dual-review): refuse to read/hash a main.py
-                # that is a symlink or resolves outside the submissions tree.
-                if bot_file.is_symlink() or not _within_dir(bot_file, self.submissions_dir):
-                    raise ValueError(
-                        f"bot file for {d.name!r} resolves outside the submissions tree "
-                        "(symlink escape rejected)"
-                    )
-                # Bounded read (santa round-2): an oversized main.py must fail closed, not
-                # OOM the trusted build, before it is hashed into the published row.
-                bot_bytes = _read_bytes_bounded(bot_file, _MAX_BOT_BYTES, f"main.py for {d.name!r}")
-                trusted_sha = hashlib.sha256(bot_bytes).hexdigest()
-                if data.get("bot_sha256") != trusted_sha:
-                    data = {**data, "bot_sha256": trusted_sha}
             subs[identity] = data
         return subs
+
+    def load_submissions_quarantined(self) -> tuple[dict[str, dict[str, Any]], list[str]]:
+        """Resilient loader (trusted board build, santa round-5): SKIP + diagnose bad rows.
+
+        The strict loader raises on the first malformed entrant, which means one merged bad
+        submission would abort the whole board build — an availability DoS (bricks Pages
+        deploy, blocks future publishes). Here we quarantine each bad entrant directory:
+        skip it, record a diagnostic, and still publish every valid row. Returns
+        (valid_submissions, quarantine_diagnostics).
+        """
+        subs: dict[str, dict[str, Any]] = {}
+        errors: list[str] = []
+        if not self.submissions_dir.exists():
+            return subs, errors
+        try:
+            _reject_symlinked_ancestors(self.submissions_dir, self.root)
+        except ValueError as e:
+            # A poisoned boundary is not row-local — nothing under it can be trusted.
+            return subs, [str(e)]
+        for d in sorted(p for p in self.submissions_dir.iterdir() if p.is_dir()):
+            try:
+                loaded = self._load_one_submission(d)
+            except (ValueError, OSError) as e:
+                errors.append(f"quarantined submission {d.name!r}: {e}")
+                continue
+            if loaded is None:
+                continue
+            identity, data = loaded
+            if identity in subs:
+                errors.append(f"quarantined duplicate submission identity: {identity!r}")
+                continue
+            subs[identity] = data
+        return subs, errors
+
+    def _load_one_submission(self, d: Path) -> tuple[str, dict[str, Any]] | None:
+        """Load + fully validate a single entrant directory, or RAISE ValueError.
+
+        Returns (identity, record) on success, or None if the directory has no record yet
+        (a partial tree, not an error). Every trust check lives here so both the strict and
+        the quarantining loaders share one validation path (no weaker second code path).
+        """
+        # Directory-symlink confinement (santa round-2, both reviewers CRITICAL):
+        # iterdir()+is_dir() FOLLOWS a directory symlink, so a git-tracked
+        # `submissions/alice -> ../payload` would resolve its files inside the target
+        # and pass a per-`d` containment check. Reject any symlinked entrant directory,
+        # and confine every file against the FIXED submissions_dir root (not the
+        # attacker-influenced `d`), so no escape survives.
+        if d.is_symlink() or not _within_dir(d, self.submissions_dir):
+            raise ValueError(
+                f"submission directory {d.name!r} is a symlink or resolves outside "
+                "the submissions tree (escape rejected)"
+            )
+        record = d / self._RECORD_FILENAME
+        if not record.is_file():
+            # A bot directory without a record is not yet a scored submission
+            # (e.g. a partial tree). Skip it rather than crash the whole board.
+            return None
+        # Symlink confinement (santa dual-review): a committed submission.json is
+        # untrusted. Reject a record that is a symlink or resolves outside the
+        # submissions tree so a crafted symlink can't read arbitrary host files.
+        if record.is_symlink() or not _within_dir(record, self.submissions_dir):
+            raise ValueError(
+                f"submission record for {d.name!r} resolves outside the submissions "
+                "tree (symlink escape rejected)"
+            )
+        # H3 (santa round-3): a committed submission.json is hand-editable. Fail CLOSED
+        # on malformed content — invalid JSON or a record missing required keys must
+        # raise a controlled ValueError here, NOT surface later as an uncaught
+        # JSONDecodeError/KeyError deep inside trusted board generation (a DoS on the
+        # whole board). We do not silently skip either — a maintainer must see + fix it.
+        try:
+            data = json.loads(
+                _read_text_bounded(record, _MAX_RECORD_BYTES, f"submission.json for {d.name!r}")
+            )
+        except json.JSONDecodeError as e:
+            raise ValueError(f"malformed submission.json for {d.name!r}: {e}") from e
+        if not isinstance(data, dict):
+            raise ValueError(f"submission record for {d.name!r} is not a JSON object")
+        missing = _SUBMISSION_KEYS - set(data)
+        if missing:
+            raise ValueError(
+                f"submission record for {d.name!r} missing required keys: {sorted(missing)}"
+            )
+        # Nested-type validation (santa round-4): top-level key presence is not enough.
+        # A wrong-TYPED nested field (fingerprint as a string, unknown/skills/mcps/plugins
+        # as a scalar) crashed trusted board generation with an uncaught AttributeError/
+        # TypeError. Fail closed HERE so a malformed merged record can never DoS the board.
+        fp = data.get("fingerprint")
+        if not isinstance(fp, dict):
+            raise ValueError(
+                f"submission record for {d.name!r} has a non-object fingerprint"
+            )
+        for list_field in ("skills", "mcps", "plugins", "unknown"):
+            if list_field in fp and not isinstance(fp[list_field], list):
+                raise ValueError(
+                    f"submission record for {d.name!r} fingerprint.{list_field} "
+                    f"must be a list, got {type(fp[list_field]).__name__}"
+                )
+        # Top-level published scalars (santa round-6): a wrong-typed/malformed
+        # bot_sha256/pr_url/logs_url passed load then crashed the trusted build deep in
+        # schema validation (availability DoS). Validate them HERE so a bad merged record
+        # fails closed with a clear per-record message, matching the leaderboard schema
+        # patterns (bot_sha256 = 64 lowercase hex; urls = http(s)).
+        sha = data.get("bot_sha256")
+        if not isinstance(sha, str) or not _SHA256_RE.fullmatch(sha):
+            raise ValueError(
+                f"submission record for {d.name!r} has an invalid bot_sha256 "
+                "(must be 64 lowercase hex chars)"
+            )
+        for url_field in ("pr_url", "logs_url"):
+            url = data.get(url_field)
+            if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+                raise ValueError(
+                    f"submission record for {d.name!r} has an invalid {url_field} "
+                    "(must be an http(s) URL)"
+                )
+        identity = data.get("identity")
+        # Anchor identity to the DIRECTORY name: a submission's identity is bound to
+        # its path (league/submissions/<identity>/), which the PR diff attributes to
+        # an author. Rejecting a body whose identity != directory stops a hand-edited
+        # mallory/submission.json from claiming another entrant's identity.
+        if identity != d.name:
+            raise ValueError(
+                f"submission identity {identity!r} does not match directory {d.name!r}; "
+                "identity must equal the submission directory name"
+            )
+        # Validate identity is a GitHub-login-shaped slug (santa round-8): the trusted
+        # path derives it from the directory name, so a crafted dir (spaces, unicode,
+        # punctuation) must not publish an odd identity into a public row.
+        if not _IDENTITY_RE.fullmatch(identity):
+            raise ValueError(
+                f"submission identity {identity!r} is not a valid GitHub-login slug "
+                "(1-39 alphanumerics with single internal hyphens)"
+            )
+        # Bind the PUBLISHED bot_sha256 to the actual committed bytes (santa round-7):
+        # the row hash must be the hash of the sibling main.py, not the mutable
+        # submission.json claim — else a contributor could display a hash that differs
+        # from the bytes that earned the ELO. Recompute from main.py when present and
+        # STAMP the trusted value over whatever the record claimed.
+        bot_file = d / "main.py"
+        if bot_file.is_file():
+            # Symlink confinement (santa dual-review): refuse to read/hash a main.py
+            # that is a symlink or resolves outside the submissions tree.
+            if bot_file.is_symlink() or not _within_dir(bot_file, self.submissions_dir):
+                raise ValueError(
+                    f"bot file for {d.name!r} resolves outside the submissions tree "
+                    "(symlink escape rejected)"
+                )
+            # Bounded read (santa round-2): an oversized main.py must fail closed, not
+            # OOM the trusted build, before it is hashed into the published row.
+            bot_bytes = _read_bytes_bounded(bot_file, _MAX_BOT_BYTES, f"main.py for {d.name!r}")
+            trusted_sha = hashlib.sha256(bot_bytes).hexdigest()
+            if data.get("bot_sha256") != trusted_sha:
+                data = {**data, "bot_sha256": trusted_sha}
+        return identity, data
 
     # --- matches ---
     def append_match(self, match: dict[str, Any]) -> None:
@@ -321,6 +375,38 @@ class LeagueStore:
             _validate_match_record(rec)
             out.append(rec)
         return out
+
+    def load_matches_quarantined(self) -> tuple[list[dict[str, Any]], list[str]]:
+        """Resilient matches loader (trusted board build, santa round-5): skip + diagnose.
+
+        Like load_matches but a malformed line (JSON-syntax OR semantic) is quarantined
+        (skipped with a diagnostic) rather than aborting the whole board build. A poisoned/
+        symlinked/oversized FILE is still fatal (not row-local), so those propagate.
+        """
+        good: list[dict[str, Any]] = []
+        errors: list[str] = []
+        if not self.matches_file.exists():
+            return good, errors
+        # File-level problems are fatal (not row-local): a symlinked/oversize file means the
+        # file itself can't be trusted, so let these propagate rather than quarantine.
+        _reject_symlinked_ancestors(self.matches_file.parent, self.root)
+        if self.matches_file.is_symlink() or not _within_dir(self.matches_file, self.root):
+            raise ValueError(
+                "matches.jsonl is a symlink or resolves outside the store (escape rejected)"
+            )
+        text = _read_text_bounded(self.matches_file, _MAX_MATCHES_BYTES, "matches.jsonl")
+        for idx, line in enumerate(text.splitlines(), start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+                _validate_match_record(rec)
+            except (ValueError, json.JSONDecodeError) as e:
+                errors.append(f"quarantined matches.jsonl line {idx}: {e}")
+                continue
+            good.append(rec)
+        return good, errors
 
 
 def _validate_match_record(m: Any) -> None:
@@ -386,17 +472,34 @@ def build_leaderboard_from_store(store_dir: str, *, updated_at: str) -> dict[str
     occurrence wins; a stable append order keeps this deterministic. Note match_id is
     the workflow's stable github.run_id, so a publish re-run reuses the same id and does
     not double-count; a genuinely new run gets a new id and is a distinct match.
+
+    Resilience (santa round-5): a single malformed merged entrant/match must NOT abort the
+    whole board build (that would let one bad community submission brick Pages deploy and
+    block future publishes — an availability DoS). Bad rows are QUARANTINED (skipped and
+    reported to stderr) so every valid row still publishes. Only a file-level poisoning
+    (symlinked/oversized store file, symlinked boundary) — which is not row-local — stays
+    fatal.
     """
     store = LeagueStore(store_dir)
-    submissions = store.load_submissions()
+    submissions, sub_errors = store.load_submissions_quarantined()
+    match_records, match_errors = store.load_matches_quarantined()
+    for diag in (*sub_errors, *match_errors):
+        print(f"[leaderboard] {diag}", file=sys.stderr)
     seen: set[str] = set()
     matches = []
-    for m in store.load_matches():
+    for m in match_records:
         mid = m.get("match_id")
         # only dedup records that carry a match_id; a blank id can't collide meaningfully
         if isinstance(mid, str) and mid:
             if mid in seen:
                 continue
             seen.add(mid)
-        matches.append(_to_match_result(m))
+        # A quarantined-clean record already passed _validate_match_record, but a match
+        # referencing an entrant whose submission was quarantined is fine: compute_leaderboard
+        # seeds unknown players. Defensive: skip any record that still fails MatchResult.
+        try:
+            matches.append(_to_match_result(m))
+        except (ValueError, KeyError) as e:
+            print(f"[leaderboard] quarantined match record {m.get('match_id')!r}: {e}",
+                  file=sys.stderr)
     return build_leaderboard_doc(matches, submissions, updated_at=updated_at)

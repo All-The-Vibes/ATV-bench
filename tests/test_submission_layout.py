@@ -125,16 +125,22 @@ def test_record_missing_required_keys_raises_on_load(tmp_path):
         LeagueStore(str(league)).load_submissions()
 
 
-def test_one_malformed_record_does_not_silently_zero_the_board(tmp_path):
-    """A malformed record must not be silently skipped either (that would drop a real
-    entrant). It must fail closed so a maintainer sees and fixes it."""
+def test_one_malformed_record_does_not_silently_zero_the_board(tmp_path, capsys):
+    """A malformed record must not take down the whole board (santa round-5: that would be
+    an availability DoS). The trusted build QUARANTINES it — skips the bad row, keeps every
+    good entrant, and DIAGNOSES to stderr (not silent) so a maintainer can see and fix it.
+    The strict loader (LeagueStore.load_submissions) still RAISES for validators; that is
+    covered by test_strict_load_submissions_still_raises."""
     league = tmp_path / "league"
     _write_live_tree(league, "alice")
     bad = league / "submissions" / "bob"
     bad.mkdir(parents=True)
     (bad / "submission.json").write_text(json.dumps({"identity": "bob"}))  # missing keys
-    with pytest.raises((ValueError, KeyError)):
-        build_leaderboard_from_store(str(league), updated_at="2026-07-16T00:00:00Z")
+    doc = build_leaderboard_from_store(str(league), updated_at="2026-07-16T00:00:00Z")
+    ids = {r["identity"] for r in doc["rows"]}
+    assert "alice" in ids   # the good entrant still publishes
+    assert "bob" not in ids  # the malformed row is quarantined, not fatal
+    assert "bob" in capsys.readouterr().err  # diagnosed, not silently dropped
 
 
 # --- santa round-4 (Reviewer B): nested-type validation. Top-level key presence is not
@@ -452,13 +458,73 @@ def test_matches_valid_forfeit_with_reason_still_loads(tmp_path):
     assert len(loaded) == 1
 
 
-def test_build_from_store_survives_malformed_forfeit_line(tmp_path):
-    """End-to-end: the trusted board build must raise a CONTROLLED ValueError (not an
-    uncaught crash) when history contains a forfeit line missing its reason."""
+def test_build_from_store_survives_malformed_forfeit_line(tmp_path, capsys):
+    """End-to-end: the trusted board build must SURVIVE a forfeit line missing its reason —
+    quarantine it (skip + diagnose to stderr), not crash the whole board (santa round-5).
+    The strict loader still raises for validators (test_matches_forfeit_without_reason...)."""
     from atv_bench.store import build_leaderboard_from_store
     league = tmp_path / "league"
     (league / "submissions").mkdir(parents=True)
+    _write_live_tree(league, "alice")
     (league / "matches.jsonl").write_text(
         '{"player_a":"a","player_b":"b","outcome":"forfeit_b","match_id":"x"}\n')
+    doc = build_leaderboard_from_store(str(league), updated_at="2026-07-15T18:00:00Z")
+    assert {r["identity"] for r in doc["rows"]} == {"alice"}  # good row survives
+    assert "quarantined" in capsys.readouterr().err  # bad match line diagnosed
+
+
+# --- Quarantine bad rows on the TRUSTED build (santa round-5, Reviewer B): the strict
+#     load_submissions/load_matches RAISE on a malformed merged record. That protects
+#     integrity but means ONE bad entry aborts the whole board build -> availability DoS
+#     (a merged bad submission bricks Pages deploy + blocks future publishes). The trusted
+#     board build must QUARANTINE the bad entrant/line (skip + diagnose) and still publish
+#     every good row. The strict loaders stay strict for validators. ---
+
+def test_build_from_store_quarantines_one_bad_submission(tmp_path):
+    from atv_bench.store import build_leaderboard_from_store
+    league = tmp_path / "league"
+    subs = league / "submissions"
+    subs.mkdir(parents=True)
+    # one good entrant
+    good = subs / "octocat"
+    good.mkdir()
+    (good / "main.py").write_text("def move(s):\n    return 'up'\n")
+    (good / "submission.json").write_text(json.dumps(_sub("octocat")))
+    # one malformed entrant (invalid JSON) that would otherwise abort the whole build
+    bad = subs / "mallory"
+    bad.mkdir()
+    (bad / "main.py").write_text("def move(s):\n    return 'up'\n")
+    (bad / "submission.json").write_text("{not valid json")
+    doc = build_leaderboard_from_store(str(league), updated_at="2026-07-15T18:00:00Z")
+    ids = {r["identity"] for r in doc["rows"]}
+    assert "octocat" in ids       # good row still published
+    assert "mallory" not in ids   # bad row quarantined, not fatal
+
+
+def test_build_from_store_quarantines_one_bad_match_line(tmp_path):
+    from atv_bench.store import build_leaderboard_from_store
+    league = tmp_path / "league"
+    subs = league / "submissions"
+    subs.mkdir(parents=True)
+    good = subs / "octocat"
+    good.mkdir()
+    (good / "main.py").write_text("def move(s):\n    return 'up'\n")
+    (good / "submission.json").write_text(json.dumps(_sub("octocat")))
+    # a good match line + a malformed one (missing keys): build must not crash
+    (league / "matches.jsonl").write_text(
+        '{"player_a":"octocat","player_b":"byok-anchor","outcome":"a_wins","match_id":"m1"}\n'
+        '{"garbage": true}\n')
+    doc = build_leaderboard_from_store(str(league), updated_at="2026-07-15T18:00:00Z")
+    ids = {r["identity"] for r in doc["rows"]}
+    assert "octocat" in ids
+
+
+def test_strict_load_submissions_still_raises(tmp_path):
+    """The strict loader (used by validators) must STILL raise — quarantine is only for
+    the trusted board build, not a weakening of the validation contract."""
+    league = tmp_path / "league"
+    bad = league / "submissions" / "mallory"
+    bad.mkdir(parents=True)
+    (bad / "submission.json").write_text("{not valid json")
     with pytest.raises(ValueError):
-        build_leaderboard_from_store(str(league), updated_at="2026-07-15T18:00:00Z")
+        LeagueStore(str(league)).load_submissions()
