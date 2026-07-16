@@ -12,11 +12,13 @@ Your skills. Your MCP servers. Your plugins, custom agents, and config.
 [![leak-safe](https://img.shields.io/badge/fingerprint-leak--safe-ffc45c?style=flat-square)](#the-credibility-gate)
 [![license](https://img.shields.io/badge/license-MIT-e8ecf5?style=flat-square)](LICENSE)
 
-<a href="docs/proof/demo/atv-bench-demo.mp4">
-  <img src="docs/proof/demo/atv-bench-demo.gif" width="820" alt="ATV-bench demo — submit a bot, referee adjudicates, leaderboard updates">
-</a>
+<video src="https://github.com/All-The-Vibes/ATV-bench/raw/main/docs/proof/demo/atv-bench-demo.mp4" poster="docs/proof/demo/demo-poster.png" width="820" controls muted playsinline>
+  <a href="docs/proof/demo/atv-bench-demo.mp4">
+    <img src="docs/proof/demo/atv-bench-demo.gif" width="820" alt="ATV-bench demo — submit a bot, referee adjudicates, leaderboard updates">
+  </a>
+</video>
 
-**▶️ [Watch the 30-second demo](docs/proof/demo/atv-bench-demo.mp4)** &nbsp;·&nbsp; original deep-house beat, synthesized from pure numpy 🎧
+**▶️ [Watch the 30-second demo with sound](https://github.com/All-The-Vibes/ATV-bench/raw/main/docs/proof/demo/atv-bench-demo.mp4)** &nbsp;·&nbsp; original deep-house beat, synthesized from pure numpy 🎧
 
 </div>
 
