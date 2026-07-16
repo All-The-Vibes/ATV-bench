@@ -63,6 +63,10 @@ def test_add_submission_writes_nested_layout(tmp_path):
     store = LeagueStore(str(league))
     store.add_submission(_sub("alice"))
     assert (league / "submissions" / "alice" / "submission.json").is_file()
+    # A publishable row also needs committed bot bytes (santa round-6); the live writer /
+    # match job always ship main.py alongside the record.
+    (league / "submissions" / "alice" / "main.py").write_text(
+        "def move(state):\n    return 'up'\n")
     # round-trips
     assert set(store.load_submissions()) == {"alice"}
 
@@ -155,6 +159,9 @@ def _valid_record(identity):
 def _write_record(league, identity, record):
     d = league / "submissions" / identity
     d.mkdir(parents=True, exist_ok=True)
+    # A publishable row requires committed bot bytes (santa round-6): always ship main.py,
+    # matching the canonical layout the match job + live writer produce.
+    (d / "main.py").write_text("def move(state):\n    return 'up'\n")
     (d / "submission.json").write_text(json.dumps(record))
 
 
@@ -526,5 +533,33 @@ def test_strict_load_submissions_still_raises(tmp_path):
     bad = league / "submissions" / "mallory"
     bad.mkdir(parents=True)
     (bad / "submission.json").write_text("{not valid json")
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_submissions()
+
+
+# --- Mandatory backing bytes (santa round-6, Reviewer B): a publishable row MUST have a
+#     real regular main.py so the published bot_sha256 is always re-derived from committed
+#     bytes. A submission.json-only PR must not publish an attacker-claimed hash. ---
+
+def test_submission_without_main_py_is_not_published(tmp_path, capsys):
+    from atv_bench.store import build_leaderboard_from_store
+    league = tmp_path / "league"
+    subs = league / "submissions"
+    subs.mkdir(parents=True)
+    _write_live_tree(league, "octocat")  # good, has main.py
+    solo = subs / "ghost"
+    solo.mkdir()
+    (solo / "submission.json").write_text(json.dumps(_sub("ghost")))  # NO main.py
+    doc = build_leaderboard_from_store(str(league), updated_at="2026-07-15T18:00:00Z")
+    ids = {r["identity"] for r in doc["rows"]}
+    assert "octocat" in ids
+    assert "ghost" not in ids  # no backing bytes -> not a publishable row
+
+
+def test_strict_load_rejects_missing_main_py(tmp_path):
+    league = tmp_path / "league"
+    d = league / "submissions" / "ghost"
+    d.mkdir(parents=True)
+    (d / "submission.json").write_text(json.dumps(_sub("ghost")))
     with pytest.raises(ValueError):
         LeagueStore(str(league)).load_submissions()

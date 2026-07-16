@@ -105,6 +105,26 @@ jobs:
             echo "$CRASH" > match-result.json
             echo "no bot at $BOT (identity-pinned path required)"; exit 0
           fi
+          # Symlink confinement (santa round-6): -f/wc/cp all FOLLOW symlinks, and the
+          # PR-path gate only checks path STRINGS. A submitter could make their own
+          # main.py a symlink to ../victim/main.py and have the trusted job hash/run the
+          # victim's bytes under the submitter's login (identity forgery). Reject any bot
+          # that is a symlink, or whose realpath escapes the submitter's own directory,
+          # BEFORE it is sized, copied, hashed, or executed. Fail closed to a scored crash.
+          SUB_DIR="pr-src/league/submissions/${SUBMITTER}"
+          if [ -L "$BOT" ]; then
+            echo "$CRASH" > match-result.json
+            echo "bot main.py is a symlink (rejected)"; exit 0
+          fi
+          REAL_BOT="$(realpath "$BOT")"
+          REAL_DIR="$(realpath "$SUB_DIR")"
+          case "$REAL_BOT" in
+            "$REAL_DIR"/*) : ;;  # inside the submitter's own directory — OK
+            *)
+              echo "$CRASH" > match-result.json
+              echo "bot main.py resolves outside ${SUB_DIR} (escape rejected)"; exit 0
+              ;;
+          esac
           SZ=$(wc -c < "$BOT")
           if [ "$SZ" -gt 262144 ]; then echo "$CRASH" > match-result.json; echo "bot too large"; exit 0; fi
           cp "$BOT" submission/main.py

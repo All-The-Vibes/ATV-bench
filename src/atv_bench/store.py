@@ -127,7 +127,7 @@ class LeagueStore:
     def _submission_path(self, identity: str) -> Path:
         return self.submissions_dir / identity / self._RECORD_FILENAME
 
-    def add_submission(self, submission: dict[str, Any]) -> None:
+    def add_submission(self, submission: dict[str, Any], *, bot_source: str | None = None) -> None:
         missing = _SUBMISSION_KEYS - set(submission)
         if missing:
             raise ValueError(f"submission missing keys: {sorted(missing)}")
@@ -137,6 +137,10 @@ class LeagueStore:
         path = self._submission_path(identity)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(submission, indent=2, sort_keys=True))
+        # A publishable row requires committed bot bytes (santa round-6): co-write the
+        # sibling main.py so a store-seeded submission has the same publishable shape as a
+        # live-submitted / match-job one. Its bytes back the re-derived bot_sha256 on load.
+        (path.parent / "main.py").write_text(bot_source or "def move(state):\n    return 'up'\n")
 
     def load_submissions(self) -> dict[str, dict[str, Any]]:
         """Strict loader (validators): RAISE on the first malformed entrant.
@@ -298,23 +302,29 @@ class LeagueStore:
         # Bind the PUBLISHED bot_sha256 to the actual committed bytes (santa round-7):
         # the row hash must be the hash of the sibling main.py, not the mutable
         # submission.json claim — else a contributor could display a hash that differs
-        # from the bytes that earned the ELO. Recompute from main.py when present and
-        # STAMP the trusted value over whatever the record claimed.
+        # from the bytes that earned the ELO. A publishable row therefore REQUIRES a real,
+        # regular main.py (santa round-6): a submission.json-only entrant would otherwise
+        # publish an attacker-claimed bot_sha256 with no backing bytes. Recompute from the
+        # committed main.py and STAMP the trusted value over whatever the record claimed.
         bot_file = d / "main.py"
-        if bot_file.is_file():
-            # Symlink confinement (santa dual-review): refuse to read/hash a main.py
-            # that is a symlink or resolves outside the submissions tree.
-            if bot_file.is_symlink() or not _within_dir(bot_file, self.submissions_dir):
-                raise ValueError(
-                    f"bot file for {d.name!r} resolves outside the submissions tree "
-                    "(symlink escape rejected)"
-                )
-            # Bounded read (santa round-2): an oversized main.py must fail closed, not
-            # OOM the trusted build, before it is hashed into the published row.
-            bot_bytes = _read_bytes_bounded(bot_file, _MAX_BOT_BYTES, f"main.py for {d.name!r}")
-            trusted_sha = hashlib.sha256(bot_bytes).hexdigest()
-            if data.get("bot_sha256") != trusted_sha:
-                data = {**data, "bot_sha256": trusted_sha}
+        if not bot_file.is_file():
+            raise ValueError(
+                f"submission {d.name!r} has no main.py; a publishable row requires the "
+                "committed bot bytes its bot_sha256 is derived from"
+            )
+        # Symlink confinement (santa dual-review): refuse to read/hash a main.py
+        # that is a symlink or resolves outside the submissions tree.
+        if bot_file.is_symlink() or not _within_dir(bot_file, self.submissions_dir):
+            raise ValueError(
+                f"bot file for {d.name!r} resolves outside the submissions tree "
+                "(symlink escape rejected)"
+            )
+        # Bounded read (santa round-2): an oversized main.py must fail closed, not
+        # OOM the trusted build, before it is hashed into the published row.
+        bot_bytes = _read_bytes_bounded(bot_file, _MAX_BOT_BYTES, f"main.py for {d.name!r}")
+        trusted_sha = hashlib.sha256(bot_bytes).hexdigest()
+        if data.get("bot_sha256") != trusted_sha:
+            data = {**data, "bot_sha256": trusted_sha}
         return identity, data
 
     # --- matches ---

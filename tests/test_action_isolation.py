@@ -218,6 +218,18 @@ def test_match_job_bot_path_is_identity_pinned(wf):
         "must not select an arbitrary bot with find|head"
 
 
+def test_match_job_rejects_symlinked_bot(wf):
+    # santa round-6 (Reviewer B): -f/wc/cp all FOLLOW symlinks and the PR-path gate only
+    # checks path strings, so a submitter could symlink their own main.py to another
+    # entrant's bot and have the trusted job hash/run those bytes under their login. The
+    # extract step must reject a symlinked bot (and one whose realpath escapes the
+    # submitter's own dir) BEFORE sizing/copying/hashing it.
+    match = _jobs(wf)["match"]
+    body = yaml.safe_dump(match)
+    assert "-L" in body, "extract step must test for a symlinked bot (-L)"
+    assert "realpath" in body, "extract step must resolve the bot path to confine it"
+
+
 def test_match_job_stages_bot_without_credentials(wf):
     # every checkout in the match job (including the PR-head bot staging) must be
     # credential-less — the untrusted job never holds a token.
