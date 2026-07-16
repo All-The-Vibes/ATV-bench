@@ -1,0 +1,25 @@
+# ATV-bench Community League — code ownership / mandatory review (santa round-8).
+#
+# GitHub runs a `pull_request` workflow from the PR's OWN copy of the workflow file, so a
+# malicious submission PR could rewrite the pr-path-guard / league scorer to no-op itself.
+# The platform's answer to that is NOT more workflow code (the PR can rewrite it too) — it
+# is REQUIRED CODE-OWNER REVIEW on the sensitive paths, enforced by branch protection
+# ("Require review from Code Owners" + "Include administrators"). A PR that edits any path
+# below cannot merge without an explicit maintainer approval, which is exactly the manual
+# inspection GitHub's fork-PR security model depends on.
+#
+# Community submission PRs (touching only league/submissions/<author>/{main.py,
+# submission.json}) match NONE of these patterns, so they need no code-owner review and the
+# always-on ci.yml pr-path-guard confines them. Any PR that also touches the trust-critical
+# surfaces below is forced through a maintainer.
+
+# The workflows themselves — the scorer, the publisher, the deploy, and the always-on gate.
+/.github/                       @All-The-Vibes/league-maintainers
+
+# The durable store the leaderboard is rebuilt from — never a community submission's to edit.
+/league/matches.jsonl           @All-The-Vibes/league-maintainers
+
+# The trusted publish/scoring code and its guards.
+/src/                           @All-The-Vibes/league-maintainers
+/pyproject.toml                 @All-The-Vibes/league-maintainers
+/leaderboard/schema.json        @All-The-Vibes/league-maintainers

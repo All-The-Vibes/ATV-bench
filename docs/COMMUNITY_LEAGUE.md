@@ -79,6 +79,34 @@ match_id = the stable `github.run_id`) before anything enters permanent ELO hist
   `src/atv_bench/arena/`, and the proof artifacts in `docs/proof/item1-adjudication/`.
   Public match logs remain the fingerprint-honesty dispute mechanism (Premise 4).
 
+## Required repository configuration (the fork-PR governance layer)
+
+GitHub runs a `pull_request`-triggered workflow from the **PR's own copy** of the workflow
+file. That is fundamental to the fork-PR model and means a malicious submission PR could
+rewrite the `pr-path-guard` gate or the `league.yml` scorer to no-op itself. No workflow can
+close this alone (the PR can rewrite that workflow too), so the deployment MUST set:
+
+1. **Branch protection on the default branch** with *Require status checks to pass* →
+   `hermetic` and `pr-path-guard` as **required** checks, *Require a pull request before
+   merging*, *Require review from Code Owners*, and *Do not allow bypassing the above
+   settings* (include administrators).
+2. **`.github/CODEOWNERS`** (in-repo) makes every trust-critical path — `.github/**` (the
+   workflows/gate/scorer), `league/matches.jsonl` (the durable store), and `src/**` (the
+   trusted publish/scoring code) — require an explicit maintainer approval. A PR that edits
+   any of them cannot merge without a code owner, which is exactly the manual inspection
+   GitHub's own fork-PR security guidance depends on. Community submission PRs (only
+   `league/submissions/<author>/{main.py,submission.json}`) match none of these and merge
+   through the automated gate alone.
+3. **Defense in depth in the trusted publisher.** `league-publish.yml` runs on
+   `workflow_run` from the default branch (a PR *cannot* rewrite it) and independently
+   re-resolves the triggering PR's author via the GitHub API, failing closed if the match
+   artifact's `submitter` does not match. So even a rewritten scorer that forges a
+   `match-meta.json` submitter is caught before it reaches permanent ELO history.
+
+Enforced/asserted by `tests/test_action_isolation.py`
+(`test_codeowners_protects_trust_critical_paths`,
+`test_publish_job_cross_checks_submitter_against_pr_author`) + `.github/CODEOWNERS`.
+
 ## Harness fingerprint (the credibility gate)
 
 A per-harness probe reads on-disk config and emits ONE normalized, **leak-safe** schema:

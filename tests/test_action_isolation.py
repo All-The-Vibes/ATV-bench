@@ -361,3 +361,34 @@ def test_ci_has_always_on_pr_path_guard():
         "the guard must run validate-pr-paths in name-status mode"
     assert "pull_request" in _yaml.safe_dump(ci.get("on") or ci.get(True)), \
         "ci must trigger on pull_request"
+
+
+def test_codeowners_protects_trust_critical_paths():
+    """santa round-8 (Reviewer B): GitHub runs a pull_request workflow from the PR's OWN
+    copy, so a PR could rewrite the pr-path-guard/scorer to no-op. The platform mitigation is
+    REQUIRED CODE-OWNER REVIEW on the trust-critical paths — a CODEOWNERS entry for the
+    workflows, the durable store, and the trusted src so such a PR cannot merge without a
+    maintainer's explicit approval."""
+    from pathlib import Path
+    co = Path(".github/CODEOWNERS")
+    assert co.exists(), "a CODEOWNERS file must force maintainer review of sensitive paths"
+    text = co.read_text()
+    assert "/.github/" in text, "workflows must be code-owner protected"
+    assert "matches.jsonl" in text, "the durable store must be code-owner protected"
+    assert "/src/" in text, "trusted publish/scoring code must be code-owner protected"
+
+
+def test_publish_job_cross_checks_submitter_against_pr_author(pub_wf):
+    """santa round-8 (Reviewer B): league-publish runs from the trusted default branch (a PR
+    cannot rewrite it), so it must INDEPENDENTLY verify the artifact's submitter against the
+    real PR author via the GitHub API — not trust the PR-authored match job's artifact alone.
+    A mismatch must fail closed."""
+    import yaml as _yaml
+    publish = pub_wf["jobs"]["publish"]
+    perms = publish.get("permissions", {})
+    assert perms.get("pull-requests") == "read", \
+        "publish must read PRs to resolve the trusted author"
+    body = _yaml.safe_dump(publish)
+    assert "pulls" in body and "trusted" in body.lower(), \
+        "publish must cross-check submitter against the API-reported PR author"
+    assert "sys.exit(1)" in body, "an identity mismatch must fail closed"
