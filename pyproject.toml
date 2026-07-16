@@ -1,0 +1,31 @@
+[project]
+name = "atv-bench"
+version = "0.1.0"
+description = "Community league for coding-agent harnesses: submit a bot + harness fingerprint, a GitHub Action recomputes ELO, a static leaderboard publishes it (CodeClash-inspired, harness-as-unit)"
+requires-python = ">=3.11"
+dependencies = [
+  "typer>=0.12",
+  "jsonschema>=4.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "playwright>=1.40", "pyyaml>=6.0"]
+
+[project.scripts]
+atv-bench = "atv_bench.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/atv_bench"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+testpaths = ["tests"]
+markers = [
+  "spike: end-to-end spike tests that invoke real CLIs (may be slow / need auth)",
+  "live: requires live CLI auth and network",
+  "integration: gated tests needing Docker/containers/secrets (not run on every push)",
+]

@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ATV-bench Community League</title>
+<style>
+  :root {
+    --bg: oklch(21% 0.02 265);
+    --surface: oklch(26% 0.02 265);
+    --surface-2: oklch(30% 0.02 265);
+    --text: oklch(96% 0.01 265);
+    --muted: oklch(72% 0.02 265);
+    --line: oklch(38% 0.02 265);
+    --accent: oklch(78% 0.16 155);
+    --warn: oklch(82% 0.15 85);
+    --warn-text: oklch(88% 0.11 85);
+    --rank-1: oklch(85% 0.15 95);
+    --chip: oklch(34% 0.03 265);
+    --radius: 14px;
+    --mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, monospace;
+    --sans: "Inter", system-ui, -apple-system, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background:
+      radial-gradient(1200px 500px at 85% -10%, oklch(30% 0.06 265 / .5), transparent 60%),
+      var(--bg);
+    color: var(--text); font-family: var(--sans); line-height: 1.4;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; padding: clamp(1.5rem, 4vw, 3.5rem) 1.25rem 4rem; }
+  header.masthead { display: flex; flex-wrap: wrap; align-items: baseline; gap: .75rem 1.25rem; border-bottom: 1px solid var(--line); padding-bottom: 1.25rem; }
+  .masthead h1 { font-size: clamp(1.8rem, 1rem + 3vw, 3rem); margin: 0; letter-spacing: -0.02em; font-weight: 800; }
+  .masthead .tag { color: var(--accent); font-family: var(--mono); font-size: .8rem; text-transform: uppercase; letter-spacing: .12em; }
+  .masthead p { flex-basis: 100%; color: var(--muted); margin: .25rem 0 0; max-width: 62ch; }
+  .staleness { flex-basis: 100%; margin-top: .75rem; font-family: var(--mono); font-size: .78rem; color: var(--muted); display: flex; align-items: center; gap: .5rem; }
+  .staleness .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px oklch(78% 0.16 155 / .18); }
+
+  .board { list-style: none; margin: 1.75rem 0 0; padding: 0; display: flex; flex-direction: column; gap: .7rem; }
+  .row { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem 1.15rem; transition: border-color .15s, transform .15s; }
+  .row:hover { border-color: oklch(50% 0.04 265); }
+  .row.low-confidence { opacity: .82; border-style: dashed; }
+  .row-head { display: grid; grid-template-columns: auto 1fr auto; gap: .35rem 1rem; align-items: baseline; }
+  .rank { font-family: var(--mono); font-size: 1.5rem; font-weight: 700; color: var(--muted); min-width: 2.6ch; }
+  .row:first-child .rank { color: var(--rank-1); }
+  .elo-line { display: flex; align-items: baseline; flex-wrap: wrap; gap: .55rem; }
+  .elo { font-family: var(--mono); font-size: 1.6rem; font-weight: 700; letter-spacing: -0.01em; }
+  .elo small { font-size: .8rem; color: var(--muted); font-weight: 500; }
+  .badge { font-size: .72rem; font-family: var(--mono); padding: .18rem .5rem; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
+  .badge.low { color: var(--warn-text); background: oklch(82% 0.15 85 / .12); }
+  .badge.unrated { color: var(--muted); }
+  .ci { font-family: var(--mono); font-size: .78rem; color: var(--muted); }
+  .identity { grid-column: 2 / -1; display: flex; align-items: center; gap: .55rem; color: var(--text); }
+  .identity a { color: inherit; text-decoration: none; border-bottom: 1px solid var(--line); }
+  .identity a:hover, .identity a:focus-visible { border-color: var(--accent); }
+  .avatar { width: 26px; height: 26px; border-radius: 50%; background: linear-gradient(135deg, var(--surface-2), var(--chip)); display: grid; place-items: center; font-size: .72rem; font-family: var(--mono); color: var(--muted); }
+  .harness { font-family: var(--mono); font-size: .82rem; color: var(--muted); }
+  .chips { grid-column: 2 / -1; margin-top: .55rem; display: flex; flex-wrap: wrap; gap: .4rem; }
+  .chip { font-family: var(--mono); font-size: .74rem; padding: .2rem .55rem; border-radius: 8px; background: var(--chip); color: var(--text); border: 1px solid var(--line); }
+  .chip.on { color: var(--accent); border-color: oklch(78% 0.16 155 / .5); }
+
+  details.drawer { grid-column: 1 / -1; margin-top: .75rem; }
+  details.drawer > summary { cursor: pointer; font-size: .8rem; color: var(--muted); font-family: var(--mono); list-style: none; display: inline-flex; gap: .35rem; align-items: center; padding: .25rem .1rem; }
+  details.drawer > summary::-webkit-details-marker { display: none; }
+  details.drawer > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+  details.drawer > summary::before { content: "▸"; transition: transform .15s; display: inline-block; }
+  details.drawer[open] > summary::before { transform: rotate(90deg); }
+  .drawer-body { margin-top: .6rem; padding: .8rem 1rem; background: var(--surface-2); border-radius: 10px; font-size: .82rem; }
+  .drawer-body dt { color: var(--muted); font-family: var(--mono); font-size: .74rem; text-transform: uppercase; letter-spacing: .08em; margin-top: .6rem; }
+  .drawer-body dt:first-child { margin-top: 0; }
+  .drawer-body dd { margin: .25rem 0 0; }
+  .drawer-body code { font-family: var(--mono); background: var(--chip); padding: .1rem .35rem; border-radius: 5px; }
+  .unknown-item { color: var(--warn-text); }
+
+  .state { text-align: center; padding: 3rem 1rem; border: 1px dashed var(--line); border-radius: var(--radius); background: var(--surface); }
+  .state h2 { margin: 0 0 .5rem; font-size: 1.3rem; }
+  .state p { color: var(--muted); margin: .35rem auto; max-width: 48ch; }
+  .state pre { text-align: left; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: .9rem 1rem; overflow-x: auto; font-family: var(--mono); font-size: .82rem; color: var(--accent); }
+  .divider { display: flex; align-items: center; gap: .8rem; color: var(--muted); font-family: var(--mono); font-size: .74rem; text-transform: uppercase; letter-spacing: .1em; margin: 1.5rem 0 .3rem; }
+  .divider::before, .divider::after { content: ""; height: 1px; background: var(--line); flex: 1; }
+
+  @media (max-width: 560px) {
+    .row-head { grid-template-columns: auto 1fr; }
+    .elo-line { grid-column: 1 / -1; }
+    .rank { font-size: 1.2rem; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="masthead">
+    <h1>ATV-bench</h1>
+    <span class="tag">community league</span>
+    <p>Harnesses ranked by ELO from head-to-head arena matches. Each row shows a leak-safe
+       fingerprint of the harness that built the bot. Rankings are for entertainment and
+       directional signal — fingerprints are self-attested.</p>
+    <div class="staleness" id="staleness" aria-live="polite"></div>
+  </header>
+
+  <main id="board-root" aria-live="polite">
+    <div class="state" id="loading"><h2>Loading leaderboard…</h2><p>Fetching the latest standings.</p></div>
+  </main>
+</div>
+
+<script>
+const SUBMIT_CMD = "atv-bench submit ./main.py --game battlesnake";
+const root = document.getElementById("board-root");
+const staleEl = document.getElementById("staleness");
+
+function fmtTs(iso) {
+  try { return new Date(iso).toISOString().replace("T", " ").replace(/\.\d+Z$/, "Z"); }
+  catch { return iso; }
+}
+function esc(s){ return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+// href sanitizer: allow ONLY http(s) URLs. esc() blocks tag injection but NOT
+// javascript:/data: schemes, which execute on click. Anything else -> "#".
+function safeHref(u){
+  const s = String(u == null ? "" : u).trim();
+  return /^https?:\/\//i.test(s) ? esc(s) : "#";
+}
+
+function chip(label, on){ return `<span class="chip${on?" on":""}">${esc(label)}</span>`; }
+
+function renderRow(r) {
+  const low = r.rated && (r.low_confidence === true || (r.match_count > 0 && r.match_count < 5));
+  const ciTxt = r.ci ? `±${Math.round((r.ci.hi - r.ci.lo)/2)}` : "";
+  let badge = "";
+  if (!r.rated) badge = `<span class="badge unrated">waiting for opponent</span>`;
+  else if (low) badge = `<span class="badge low">⚠ low confidence</span>`;
+  const d = r.details || {skills:[],mcps:[],plugins:[],unknown:[]};
+  const chips = [
+    chip("gstack " + (r.details && r.fingerprint_gstack ? "on":""), r.fingerprint_gstack),
+    chip(`${d.skills.length} skills`),
+    chip(`${d.mcps.length} MCPs`),
+    chip(`${d.plugins.length} plugins`),
+  ].join("");
+  const unknownHtml = d.unknown.length
+    ? `<dt>unknown</dt><dd>${d.unknown.map(u=>`<span class="unknown-item">${esc(u.field)}: ${esc(u.reason)}</span>`).join(", ")}</dd>`
+    : `<dt>unknown</dt><dd>none — all surfaces read cleanly</dd>`;
+  const initials = esc((r.identity||"?").slice(0,2).toUpperCase());
+  return `
+  <li class="row${low?" low-confidence":""}">
+    <div class="row-head">
+      <div class="rank" aria-label="rank ${r.rank}">#${r.rank}</div>
+      <div class="elo-line">
+        <span class="elo">${Math.round(r.elo)}<small> ELO</small></span>
+        ${badge}
+        <span class="ci">${r.rated ? `${r.match_count} matches · ${ciTxt}` : ""}</span>
+      </div>
+      <div class="identity">
+        <span class="avatar" aria-hidden="true">${initials}</span>
+        <a href="${safeHref(r.pr_url)}">@${esc(r.identity)}</a>
+        <span class="harness">· ${esc(r.harness_name)}</span>
+      </div>
+      <div class="chips">${chips}</div>
+      <details class="drawer">
+        <summary aria-label="Show full fingerprint for ${esc(r.identity)}">full fingerprint</summary>
+        <div class="drawer-body">
+          <dl>
+            <dt>skills</dt><dd>${d.skills.length?d.skills.map(esc).join(", "):"none"}</dd>
+            <dt>MCP servers</dt><dd>${d.mcps.length?d.mcps.map(esc).join(", "):"none"}</dd>
+            <dt>plugins</dt><dd>${d.plugins.length?d.plugins.map(esc).join(", "):"none"}</dd>
+            ${unknownHtml}
+            <dt>bot</dt><dd><code>${esc((r.bot_sha256||"").slice(0,16))}…</code> · <a href="${safeHref(r.logs_url)}" style="color:var(--accent)">match logs</a></dd>
+          </dl>
+        </div>
+      </details>
+    </div>
+  </li>`;
+}
+
+function renderEmpty() {
+  return `<div class="state">
+    <h2>Be the first — submit your harness</h2>
+    <p>No harnesses have entered the league yet. Run a local match, then submit your bot
+       and its fingerprint. The board rebuilds when your PR merges.</p>
+    <pre>${esc(SUBMIT_CMD)}</pre>
+  </div>`;
+}
+function renderError(msg, sha) {
+  return `<div class="state">
+    <h2>Leaderboard unavailable</h2>
+    <p>${esc(msg)}</p>
+    <p style="font-family:var(--mono);font-size:.78rem">build ${esc(sha||"unknown")}</p>
+  </div>`;
+}
+
+function render(doc) {
+  staleEl.innerHTML = `<span class="dot"></span> Last updated ${esc(fmtTs(doc.updated_at))} · rebuilt after each match`;
+  const rows = (doc.rows || []).slice().sort((a, b) => a.rank - b.rank);
+  if (rows.length === 0) { root.innerHTML = renderEmpty(); return; }
+  // The builder already ranks stable rows above low-confidence/unrated ones, so we
+  // render strictly in rank order (no re-sort) — JSON rank always == visual row.
+  // We only insert a visual divider where the provisional tier begins.
+  const isShaky = r => !r.rated || r.low_confidence === true || (r.match_count > 0 && r.match_count < 5);
+  const stable = rows.filter(r => !isShaky(r));
+  const shaky  = rows.filter(isShaky);
+  let html = `<ol class="board">${stable.map(renderRow).join("")}</ol>`;
+  if (shaky.length) {
+    html += `<div class="divider">provisional · not yet rated</div>`;
+    html += `<ol class="board">${shaky.map(renderRow).join("")}</ol>`;
+  }
+  root.innerHTML = html;
+}
+
+async function load() {
+  try {
+    const res = await fetch("leaderboard.json", {cache: "no-store"});
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const doc = await res.json();
+    render(doc);
+  } catch (e) {
+    root.innerHTML = renderError("Could not load leaderboard.json (" + e.message + ").");
+  }
+}
+// allow tests/screenshots to inject a fixture: window.__FIXTURE__
+if (window.__FIXTURE__) { render(window.__FIXTURE__); } else { load(); }
+</script>
+</body>
+</html>

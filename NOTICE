@@ -1,0 +1,13 @@
+ATV-bench
+Copyright (c) 2026
+
+This product includes and builds upon CodeClash
+(https://github.com/CodeClash-ai/CodeClash), licensed under the MIT License,
+Copyright (c) 2025 John Yang.
+
+CodeClash provides the game arenas (BattleSnake and others), the Docker-based
+match engine, ELO ranking, and the web replay viewer that ATV-bench reuses.
+
+Paper: "CodeClash: Benchmarking Goal-Oriented Software Engineering",
+John Yang, Kilian Lieret, et al. arXiv:2511.00839.
+https://arxiv.org/abs/2511.00839

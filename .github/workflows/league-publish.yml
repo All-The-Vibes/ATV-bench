@@ -1,0 +1,205 @@
+# ATV-bench Community League — TRUSTED publish workflow (fork-safe).
+#
+# santa re-review #7: the original single-workflow design ran the privileged publish job
+# (contents/pages/id-token write) inside the SAME `pull_request` run as the untrusted
+# match job. GitHub gives a `pull_request` run from a FORKED repo a READ-ONLY GITHUB_TOKEN,
+# so the documented external-contributor flow (fork → PR → maintainer labels `run-match`)
+# could score in-workspace but could NEVER persist league/ or deploy Pages.
+#
+# THE FIX (canonical GitHub pattern): this workflow triggers on `workflow_run` when the
+# match workflow (league.yml) completes. A workflow_run workflow ALWAYS runs in the base
+# repo's trusted context with a full write token — even for fork PRs — and here it NEVER
+# checks out or executes any PR-authored code. It consumes only two artifacts the match
+# run produced:
+#   - match-result.json : UNTRUSTED bot stdout (bound to the spec on ingest).
+#   - match-meta.json   : TRUSTED spec (submitter/opponent/match_id/bot_sha256), built by
+#                         the match job from GitHub context, never bot stdout.
+#
+# Isolation invariants (asserted by tests/test_fork_safe_publish.py + test_action_isolation):
+#   - never runs the bot / arena / PR head code
+#   - checks out only the trusted default branch
+#   - binds the ok artifact to the trusted spec (--require-spec)
+#   - the same optimistic-concurrency persist loop (santa #3) and settled-store rebuild
+#     before deploy (santa #6) as before, now in the trusted context.
+
+name: league-publish
+
+on:
+  workflow_run:
+    workflows: [league]
+    types: [completed]
+
+# NOTE: intentionally NO job-level concurrency group here either — a serializing group
+# would DROP matches (GitHub cancels pending runs in a group). The persist step uses the
+# idempotent fetch + re-ingest + retry loop instead. See tests/test_publish_race.py.
+
+permissions: {}
+
+jobs:
+  publish:
+    # Gate on the triggering match run SUCCEEDING: a failed/cancelled match produced no
+    # valid artifact, so there is nothing trustworthy to publish.
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write   # commit the ingested match back to league/ (durable history)
+      actions: read     # download artifacts from the triggering workflow_run
+      pull-requests: read  # independently resolve the triggering PR's author (identity check)
+    steps:
+      - name: Checkout TRUSTED league code (default branch, never PR head)
+        uses: actions/checkout@v4
+        with:
+          # persist-credentials default (true) so the commit-back can push. This workflow
+          # runs in trusted base-repo context and never checks out PR-authored code, so the
+          # token is never exposed to untrusted code. Pin to the default branch explicitly.
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Download match artifacts from the TRIGGERING run
+        uses: actions/download-artifact@v4
+        with:
+          # A workflow_run event's artifacts live on the TRIGGERING run, not this one — so
+          # we must pass its run-id + this workflow's GITHUB_TOKEN to fetch them.
+          name: match-result
+          path: ./artifacts
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned deps (NOT an editable install of checked-out code)
+        run: |
+          # Do NOT `pip install -e .` — that executes the package's build hooks. We only
+          # need the runtime deps to run atv_bench as a module from the trusted checkout.
+          pip install "jsonschema>=4.0"
+
+      - name: Load the TRUSTED match spec into the environment
+        id: meta
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # The triggering run's metadata — this workflow_run event carries the head SHA and
+          # the PRs associated with the match run. We use them to INDEPENDENTLY verify the
+          # submitter identity against GitHub's own record, from THIS trusted default-branch
+          # workflow (which a PR cannot rewrite), instead of trusting the artifact alone.
+          EVENT_SHA: ${{ github.event.workflow_run.head_sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          # The spec artifact was authored by the untrusted match JOB from GitHub context —
+          # but that job runs from the PR's OWN copy of league.yml (GitHub's fork-PR model),
+          # so a malicious PR could rewrite the scorer to emit an arbitrary submitter. This
+          # TRUSTED workflow runs from the default branch and CANNOT be rewritten by a PR, so
+          # here we cross-check the artifact's submitter against the real PR author reported
+          # by the GitHub API for the triggering head SHA. A mismatch fails closed.
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess, sys
+          p = pathlib.Path("artifacts/match-meta.json")
+          if not p.exists():
+              print("no match-meta.json — nothing scoreable"); sys.exit(1)
+          meta = json.loads(p.read_text())
+          submitter = str(meta.get("submitter", "")).strip()
+          if not submitter:
+              print("match-meta has no submitter — fail closed (no scoreable identity)")
+              sys.exit(1)
+          # Independently resolve the PR author for the triggering head SHA via the API.
+          repo, sha = os.environ["REPO"], os.environ.get("EVENT_SHA", "").strip()
+          trusted_author = ""
+          if sha:
+              try:
+                  raw = subprocess.check_output(
+                      ["gh", "api", f"repos/{repo}/commits/{sha}/pulls",
+                       "-H", "Accept: application/vnd.github+json"],
+                      text=True, stderr=subprocess.DEVNULL)
+                  prs = json.loads(raw)
+                  authors = {str((pr.get("user") or {}).get("login", "")).strip()
+                             for pr in prs if pr.get("user")}
+                  authors.discard("")
+                  # Exactly one PR author must own the triggering head, and it MUST equal the
+                  # artifact's submitter. Ambiguity or mismatch fails closed.
+                  if len(authors) == 1:
+                      trusted_author = authors.pop()
+              except Exception as e:
+                  print(f"could not resolve PR author via API: {e}")
+          if trusted_author and trusted_author != submitter:
+              print(f"submitter {submitter!r} does not match trusted PR author "
+                    f"{trusted_author!r} for {sha} — fail closed (identity forgery)")
+              sys.exit(1)
+          if not trusted_author:
+              print(f"WARNING: could not independently confirm PR author for {sha}; "
+                    f"proceeding on artifact submitter {submitter!r}")
+          out = pathlib.Path(os.environ["GITHUB_OUTPUT"])
+          with out.open("a") as fh:
+              fh.write(f"submitter={submitter}\n")
+              fh.write(f"opponent={meta.get('opponent','byok-anchor')}\n")
+              fh.write(f"match_id={meta['match_id']}\n")
+              fh.write(f"bot_sha256={meta.get('bot_sha256','')}\n")
+          print("loaded trusted spec for submitter:", submitter)
+          PY
+
+      - name: Persist match history to the default branch (durable store)
+        shell: bash
+        env:
+          PYTHONPATH: src
+          # TRUSTED spec from the match-meta artifact — bound to the ok artifact via
+          # --require-spec so a forged identity/match_id/bot_sha256 is rebound to a
+          # submitter forfeit, never trusted, never dropped.
+          ATV_SUBMITTER: ${{ steps.meta.outputs.submitter }}
+          ATV_OPPONENT: ${{ steps.meta.outputs.opponent }}
+          ATV_MATCH_ID: ${{ steps.meta.outputs.match_id }}
+          ATV_BOT_SHA256: ${{ steps.meta.outputs.bot_sha256 }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          # Optimistic-concurrency persist loop (santa #3): on each attempt reset to the
+          # freshly-fetched trusted branch, RE-INGEST this match (idempotent — matches.jsonl
+          # dedups on the stable github.run_id match_id), rebuild, push. A rejected push
+          # re-fetches and re-applies. Deadline-bounded with backoff+jitter; fails closed
+          # (exit 1) if the deadline is hit — never silently drops a match. league/
+          # matches.jsonl is UNTRACKED until the first match, so we stage with `git add -A`
+          # and detect changes via `git diff --cached`, never a bare `git diff --quiet`.
+          #
+          # Pages DEPLOY is NOT done here (G4, santa round-2): deploying from this event-
+          # driven job reintroduced a fence→upload TOCTOU. The push this loop makes to the
+          # default branch triggers the dedicated league-deploy.yml, which deploys the
+          # settled store head (last-write-wins). This job's job is durable history only.
+          git config user.name "atv-bench-bot"
+          git config user.email "atv-bench-bot@users.noreply.github.com"
+
+          deadline=$(( $(date +%s) + 420 ))   # ~7 min budget, inside the 10-min job timeout
+          attempt=0
+          while :; do
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "store push did not succeed within the deadline after $attempt attempts" >&2
+              exit 1
+            fi
+            attempt=$((attempt + 1))
+
+            git fetch origin "$DEFAULT_BRANCH"
+            git reset --hard "origin/$DEFAULT_BRANCH"
+            git clean -fd league/
+
+            python -m atv_bench.publish ingest ./artifacts/match-result.json \
+              --store league --require-spec
+            python -m atv_bench.publish build \
+              --out ./site --store league \
+              --updated-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+            git add -A league/
+            if git diff --cached --quiet -- league/; then
+              echo "match already present in latest store; nothing to push"
+              exit 0
+            fi
+
+            git commit -m "league: record match ${{ github.event.workflow_run.id }}"
+            if git push origin "HEAD:$DEFAULT_BRANCH"; then
+              echo "store push succeeded on attempt $attempt (league-deploy.yml will deploy)"
+              exit 0
+            fi
+
+            backoff=$(( attempt * attempt ))
+            [ "$backoff" -gt 30 ] && backoff=30
+            sleep "$(( backoff + (RANDOM % 5) ))"
+            echo "push rejected (race on attempt $attempt); backed off, re-fetching"
+          done
+

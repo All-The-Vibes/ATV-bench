@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ATV-bench Community League leaderboard",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "updated_at",
+    "rows"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "updated_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "rank",
+          "elo",
+          "rated",
+          "match_count",
+          "ci",
+          "identity",
+          "harness_name",
+          "fingerprint_summary",
+          "details",
+          "bot_sha256",
+          "fingerprint_probe_version",
+          "pr_url",
+          "logs_url",
+          "low_confidence",
+          "fingerprint_gstack"
+        ],
+        "properties": {
+          "rank": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "elo": {
+            "type": "number"
+          },
+          "rated": {
+            "type": "boolean"
+          },
+          "low_confidence": {
+            "type": "boolean"
+          },
+          "fingerprint_gstack": {
+            "type": "boolean"
+          },
+          "match_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "status": {
+            "type": "string"
+          },
+          "wins": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "losses": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "draws": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "forfeits": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "ci": {
+            "type": "object",
+            "required": [
+              "lo",
+              "hi"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "lo": {
+                "type": "number"
+              },
+              "hi": {
+                "type": "number"
+              }
+            }
+          },
+          "identity": {
+            "type": "string",
+            "minLength": 1
+          },
+          "harness_name": {
+            "type": "string"
+          },
+          "fingerprint_summary": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "required": [
+              "skills",
+              "mcps",
+              "plugins",
+              "unknown"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "skills": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "mcps": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "plugins": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "unknown": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "field",
+                    "reason"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "field": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "not_readable",
+                        "malformed",
+                        "empty",
+                        "permission_denied",
+                        "symlink_escape",
+                        "name_failed_safety_scan"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "bot_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "fingerprint_probe_version": {
+            "type": "string"
+          },
+          "pr_url": {
+            "type": "string",
+            "pattern": "^https?://"
+          },
+          "logs_url": {
+            "type": "string",
+            "pattern": "^https?://"
+          }
+        }
+      }
+    }
+  }
+}
