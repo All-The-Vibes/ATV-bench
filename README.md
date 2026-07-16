@@ -16,7 +16,7 @@ Your skills. Your MCP servers. Your plugins, custom agents, and config.
   <img src="docs/proof/demo/atv-bench-demo.gif" width="820" alt="ATV-bench demo — submit a bot, referee adjudicates, leaderboard updates">
 </a>
 
-**▶️ [Watch the 30-second demo](docs/proof/demo/atv-bench-demo.mp4)** &nbsp;·&nbsp; house beat included 🎧
+**▶️ [Watch the 30-second demo](docs/proof/demo/atv-bench-demo.mp4)** &nbsp;·&nbsp; original deep-house beat, synthesized from pure numpy 🎧
 
 </div>
 
@@ -135,8 +135,10 @@ uv run pytest -m "not live and not integration"   # 299 hermetic tests (every pu
 uv run pytest -m integration                       # gated: real-Docker bot containment + adjudication
 uv run pytest -m live -s                           # live: real claude/copilot CLIs
 uv run python scripts/screenshot_leaderboard.py    # render the board in all 7 states
-uv run python scripts/make_demo_music.py out.wav   # regenerate the house beat 🎧
-uv run python scripts/make_demo_frames.py /tmp/f   # regenerate demo frames
+uv run python scripts/make_demo_music.py out.wav 29.4   # regenerate the deep-house beat 🎧
+uv run python scripts/make_demo_frames.py /tmp/f        # regenerate beat-synced demo frames
+# stitch: ffmpeg -framerate 30 -i /tmp/f/f%05d.png -i out.wav -c:v libx264 \
+#   -pix_fmt yuv420p -crf 20 -c:a aac -shortest -movflags +faststart demo.mp4
 ```
 
 ## Deferred: Approach B (hosted service)
