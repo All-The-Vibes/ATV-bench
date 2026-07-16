@@ -104,3 +104,18 @@ def test_changes_non_submission_pr_is_not_confined():
 def test_changes_submission_pr_flag_set():
     res = validate_pr_changes("octocat", ["A\tleague/submissions/octocat/main.py"])
     assert res["is_submission_pr"] is True
+
+
+def test_submissions_root_scaffolding_is_not_a_submission():
+    # league/submissions/.gitkeep (directory scaffolding at the submissions ROOT, no
+    # per-entrant subdir) must NOT flip is_submission_pr — otherwise the foundational
+    # maintainer PR that creates the tree gets confined to submission-only paths and its
+    # own .github/** and src/** files are rejected. A real submission lives one level
+    # deeper: league/submissions/<identity>/{main.py,submission.json}.
+    res = validate_pr_changes("maintainer", [
+        "A\tleague/submissions/.gitkeep",
+        "M\tsrc/atv_bench/store.py",
+        "A\t.github/workflows/ci.yml",
+    ])
+    assert res["is_submission_pr"] is False
+    assert res["ok"] is True
