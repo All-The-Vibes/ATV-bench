@@ -172,10 +172,11 @@ def gh_preflight_runner(check: PreflightCheck, *, runner: CommandRunner,
         rc, out, err = runner(["gh", "repo", "view", _REPO_SLUG, "--json", "name"])
         return rc == 0, _REPO_SLUG if rc == 0 else (err or "repo not reachable")
     if cid == "fork_exists":
-        # a fork under the user's account; `gh repo fork` is idempotent, but here we only
-        # PROBE (view). The live open path creates it if absent.
+        # F3: a first-time contributor has NO fork yet. This must be non-fatal — the live
+        # open path creates it idempotently (`gh repo fork`). We PROBE for information only
+        # and always return ok, so a missing fork never blocks the advertised bootstrap.
         rc, out, err = runner(["gh", "repo", "view", f"{identity}/ATV-bench", "--json", "name"])
-        return rc == 0, "fork present" if rc == 0 else "no fork yet (submit will create one)"
+        return True, "fork present" if rc == 0 else "no fork yet (submit will create one)"
     if cid == "branch_clean":
         rc, out, err = runner(["git", "status", "--porcelain"])
         clean = rc == 0 and out.strip() == ""
@@ -212,12 +213,19 @@ def open_submission_pr(*, record: dict[str, Any], bot_path: str, identity: str,
                        runner: CommandRunner = default_command_runner,
                        workdir: str, branch: str | None = None,
                        repo_slug: str = _REPO_SLUG) -> dict[str, Any]:
-    """Open the submission PR live: fork → branch → stage → commit → push → `gh pr create`.
+    """Open the submission PR live: fork → clone → branch → stage → commit → push →
+    `gh pr create` → backfill the record's real PR URL → re-push.
 
     Every step goes through the injected `runner` so the whole flow is hermetically
     testable. Fails closed: identity is required, and any non-zero gh/git step aborts with
     a SUBMIT_PR_FAILED AtvError before a later step (never a half-open PR). Returns
     {"pr_url": ...} parsed from `gh pr create` stdout.
+
+    First-timer safe (F3): a missing fork is bootstrapped by `gh repo fork`, and if
+    `workdir` is not already a git checkout it is cloned from the fork before branching.
+    The committed submission.json is rewritten with the real PR URL after the PR exists
+    (the pre-PR record can only carry a placeholder), then re-pushed so the merged record
+    links to the actual PR.
 
     The bot + submission.json are materialized at the IDENTITY-PINNED path the match job
     reads — league/submissions/<identity>/ — so the opened PR is directly scoreable.
@@ -229,8 +237,16 @@ def open_submission_pr(*, record: dict[str, Any], bot_path: str, identity: str,
     branch = branch or f"submit/{ident}"
     wt = Path(workdir)
 
-    # Ensure the fork exists (idempotent) and a working tree is present.
+    # Ensure the fork exists (idempotent — no-op if already forked). This is the bootstrap
+    # a first-time contributor needs; it is never a preflight prerequisite.
     _run_or_raise(runner, ["gh", "repo", "fork", repo_slug, "--clone=false"])
+
+    # Ensure a working tree is present. A first-timer runs from an arbitrary cwd with no
+    # ATV-bench checkout — probe with `git rev-parse` and clone the fork if it is not a repo.
+    rc, _out, _err = runner(["git", "rev-parse", "--is-inside-work-tree"], cwd=str(wt) if wt.exists() else None)
+    if rc != 0:
+        wt.mkdir(parents=True, exist_ok=True)
+        _run_or_raise(runner, ["gh", "repo", "clone", f"{ident}/ATV-bench", str(wt)])
 
     # Stage the bot + record at the identity-pinned path BEFORE committing. We write files
     # directly (the runner handles only gh/git), so tests observe a real materialized tree.
@@ -251,4 +267,14 @@ def open_submission_pr(*, record: dict[str, Any], bot_path: str, identity: str,
         "--head", f"{ident}:{branch}",
     ], cwd=str(wt))
     pr_url = out.strip().splitlines()[-1].strip() if out.strip() else ""
+
+    # Backfill the real PR URL into the committed record (the pre-PR record can only carry
+    # a placeholder) and re-push so the merged submission.json links to the actual PR.
+    if pr_url:
+        backfilled = {**record, "pr_url": pr_url}
+        (dest / "submission.json").write_text(json.dumps(backfilled, indent=2, sort_keys=True))
+        _run_or_raise(runner, ["git", "add", "league/submissions"], cwd=str(wt))
+        _run_or_raise(runner, ["git", "commit", "-m", f"league: backfill PR url for {ident}"], cwd=str(wt))
+        _run_or_raise(runner, ["git", "push", "origin", branch], cwd=str(wt))
+
     return {"pr_url": pr_url, "branch": branch, "identity": ident}

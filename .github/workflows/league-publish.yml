@@ -172,13 +172,40 @@ jobs:
           PYTHONPATH: src
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          # santa #6: rebuild ./site from the freshly-fetched settled head immediately
-          # before deploy so the deployed board never regresses to a stale snapshot.
-          git fetch origin "$DEFAULT_BRANCH"
-          git reset --hard "origin/$DEFAULT_BRANCH"
-          python -m atv_bench.publish build \
-            --out ./site --store league \
-            --updated-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          # santa #6 + F4 (santa round-1 #6 re-review): rebuild ./site from the settled
+          # head immediately before deploy so the deployed board never regresses to a stale
+          # snapshot. A single fetch+reset+build is still TOCTOU: origin can advance between
+          # the build and upload, so an older run could deploy a board built before a newer
+          # store head landed. FENCE the deploy on the head SHA — capture the head we built
+          # from, then re-fetch and re-check; if origin moved, rebuild and re-check. The
+          # artifact is provably built from the settled origin head. Deadline-bounded, fails
+          # closed (exit 1) rather than deploying a stale or unverifiable snapshot.
+          deadline=$(( $(date +%s) + 180 ))
+          attempt=0
+          while :; do
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "deploy fence did not stabilize within the deadline after $attempt attempts" >&2
+              exit 1
+            fi
+            attempt=$((attempt + 1))
+
+            git fetch origin "$DEFAULT_BRANCH"
+            git reset --hard "origin/$DEFAULT_BRANCH"
+            built_from="$(git rev-parse HEAD)"
+
+            python -m atv_bench.publish build \
+              --out ./site --store league \
+              --updated-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+            # Re-check: did origin advance while we were building?
+            git fetch origin "$DEFAULT_BRANCH"
+            settled="$(git rev-parse "origin/$DEFAULT_BRANCH")"
+            if [ "$built_from" = "$settled" ]; then
+              echo "deploy fenced on settled head $settled (attempt $attempt)"
+              break
+            fi
+            echo "origin advanced ($built_from -> $settled) mid-build; rebuilding"
+          done
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

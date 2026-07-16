@@ -3,7 +3,8 @@
 The store is a committed directory in the repo:
 
     league/
-      submissions/<identity>.json   # one per entrant: bot metadata + fingerprint
+      submissions/<identity>/submission.json   # one dir per entrant: metadata + fingerprint
+      submissions/<identity>/main.py            # the harness-built bot (match job reads)
       matches.jsonl                 # append-only match history (one JSON object/line)
 
 The publish job reads the store and recomputes the leaderboard from full history —
@@ -33,33 +34,53 @@ class LeagueStore:
         self.matches_file = self.root / "matches.jsonl"
 
     # --- submissions ---
+    #
+    # Canonical on-disk layout (F1, santa round-1): ONE directory per entrant, shared
+    # by the match job, the live-submit writer, and this reader:
+    #
+    #     league/submissions/<identity>/main.py          # bot (match job reads)
+    #     league/submissions/<identity>/submission.json  # record (this reader)
+    #
+    # The previous flat `submissions/<identity>.json` layout was invisible to the nested
+    # tree that `submit --live` and the match job both use, so a live entrant was scored
+    # but never appeared on the board. Identity is anchored to the PARENT DIRECTORY name,
+    # preserving the spoof protection the flat stem-check provided.
+    _RECORD_FILENAME = "submission.json"
+
+    def _submission_path(self, identity: str) -> Path:
+        return self.submissions_dir / identity / self._RECORD_FILENAME
+
     def add_submission(self, submission: dict[str, Any]) -> None:
         missing = _SUBMISSION_KEYS - set(submission)
         if missing:
             raise ValueError(f"submission missing keys: {sorted(missing)}")
-        self.submissions_dir.mkdir(parents=True, exist_ok=True)
         identity = submission["identity"]
         if not isinstance(identity, str) or not identity.isascii() or "/" in identity or "\\" in identity:
             raise ValueError(f"unsafe identity: {identity!r}")
-        path = self.submissions_dir / f"{identity}.json"
+        path = self._submission_path(identity)
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(submission, indent=2, sort_keys=True))
 
     def load_submissions(self) -> dict[str, dict[str, Any]]:
         subs: dict[str, dict[str, Any]] = {}
         if not self.submissions_dir.exists():
             return subs
-        for f in sorted(self.submissions_dir.glob("*.json")):
-            data = json.loads(f.read_text())
+        for d in sorted(p for p in self.submissions_dir.iterdir() if p.is_dir()):
+            record = d / self._RECORD_FILENAME
+            if not record.is_file():
+                # A bot directory without a record is not yet a scored submission
+                # (e.g. a partial tree). Skip it rather than crash the whole board.
+                continue
+            data = json.loads(record.read_text())
             identity = data.get("identity")
-            # Anchor identity to the FILENAME stem: a submission's identity is bound to
-            # its file path (league/submissions/<identity>.json), which the PR diff
-            # attributes to an author. Rejecting a body whose identity != filename
-            # stops a hand-edited mallory.json from claiming another entrant's identity
-            # and overwriting their row.
-            if identity != f.stem:
+            # Anchor identity to the DIRECTORY name: a submission's identity is bound to
+            # its path (league/submissions/<identity>/), which the PR diff attributes to
+            # an author. Rejecting a body whose identity != directory stops a hand-edited
+            # mallory/submission.json from claiming another entrant's identity.
+            if identity != d.name:
                 raise ValueError(
-                    f"submission identity {identity!r} does not match filename {f.name!r}; "
-                    "identity must equal the file stem"
+                    f"submission identity {identity!r} does not match directory {d.name!r}; "
+                    "identity must equal the submission directory name"
                 )
             if identity in subs:
                 raise ValueError(f"duplicate submission identity: {identity!r}")

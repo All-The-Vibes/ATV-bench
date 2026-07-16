@@ -9,9 +9,11 @@ both models 6/6 rejected the hosted Approach B on strategy; it had no owner.
 1. A contributor runs a local match with their harness, producing a **bot file** the
    harness edited (e.g. `main.py` for Battlesnake) + a **harness fingerprint**.
 2. `atv-bench submit --dry-run` builds the submission record (bot + fingerprint JSON);
-   the contributor commits it under `league/submissions/` and **opens the PR manually**
-   (live PR automation is not wired yet). The contributor never reports their own
-   win/loss (forgeable) — only the artifact.
+   the contributor commits it under `league/submissions/<identity>/` and opens the PR —
+   either automatically with `atv-bench submit --live --identity <login>` (fork → clone →
+   branch → push → `gh pr create`, first-timer fork bootstrapped) or by hand (manual
+   fallback in CONTRIBUTING.md). The contributor never reports their own win/loss
+   (forgeable) — only the artifact.
 3. A **GitHub Action** runs when a maintainer adds the `run-match` label to the PR
    (the label is the trust boundary gating untrusted bot execution):
    - **match job (untrusted):** executes the bot in the CodeClash Docker arena against
@@ -19,7 +21,9 @@ both models 6/6 rejected the hosted Approach B on strategy; it had no owner.
      no Pages token, egress blocked, resource caps, non-root read-only container. Writes
      only a schema-validated **result artifact**.
    - **publish job (trusted):** reads the artifact (never executes bot code), recomputes
-     ELO from full history (deterministic), builds the static leaderboard, deploys Pages.
+     ELO from full history (deterministic), re-scans every merged fingerprint for
+     secret-shaped values (leak-safety on the publish path, not just at probe time),
+     builds the static leaderboard, and deploys Pages fenced on the settled store head.
 4. The **static leaderboard** publishes each row: rank · ELO · fingerprint chips.
 
 **Onboarding timing (by design):** the publish job builds from the submissions committed

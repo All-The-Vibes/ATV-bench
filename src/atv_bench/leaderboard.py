@@ -15,6 +15,7 @@ from atv_bench.elo import (
     MIN_RATED_MATCHES,
     compute_leaderboard,
 )
+from atv_bench.fingerprint.scan import is_safe_name, is_secret
 
 SCHEMA_VERSION = 1
 # Low-confidence gate — reuses elo's canonical variance-gate thresholds (single source)
@@ -132,6 +133,37 @@ def _summary(fp: dict[str, Any]) -> str:
     return " · ".join(bits)
 
 
+def _sanitized_details(fp: dict[str, Any]) -> dict[str, Any]:
+    """Re-validate a merged fingerprint for leak-safety on the trusted publish path (F2).
+
+    The probe is leak-safe at emit time, but `submission.json` is a plain committed file
+    a contributor can hand-edit. Every name that would enter a published row is re-scanned
+    with the SAME allowlist scanner the probe uses. A failing value is DROPPED from details
+    and recorded in unknown[{field, reason:"name_failed_safety_scan"}] — never published,
+    never crashes. This closes the leak the schema's bare `type: string` left open.
+    """
+    unknown = list(fp.get("unknown", []) or [])
+    clean: dict[str, list[str]] = {}
+    for field in ("skills", "mcps", "plugins"):
+        kept: list[str] = []
+        for name in fp.get(field, []) or []:
+            if isinstance(name, str) and is_safe_name(name):
+                kept.append(name)
+            else:
+                unknown.append({"field": field, "reason": "name_failed_safety_scan"})
+        clean[field] = kept
+    clean["unknown"] = unknown
+    return clean
+
+
+def _safe_harness_name(fp: dict[str, Any]) -> str:
+    """Harness is copied to a top-level row field; a secret-shaped value must not publish."""
+    harness = fp.get("harness", "unknown")
+    if not isinstance(harness, str) or is_secret(harness):
+        return "unknown"
+    return harness
+
+
 def build_leaderboard_doc(
     matches: list[MatchResult],
     submissions: dict[str, dict[str, Any]],
@@ -193,14 +225,9 @@ def build_leaderboard_doc(
             "forfeits": b["forfeits"],
             "ci": b["ci"],
             "identity": sub["identity"],
-            "harness_name": fp.get("harness", "unknown"),
+            "harness_name": _safe_harness_name(fp),
             "fingerprint_summary": _summary(fp),
-            "details": {
-                "skills": fp.get("skills", []),
-                "mcps": fp.get("mcps", []),
-                "plugins": fp.get("plugins", []),
-                "unknown": fp.get("unknown", []),
-            },
+            "details": _sanitized_details(fp),
             "bot_sha256": sub["bot_sha256"],
             "fingerprint_probe_version": fp.get("probe_version", "unknown"),
             "pr_url": sub["pr_url"],

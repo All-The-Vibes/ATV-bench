@@ -176,3 +176,63 @@ def test_gh_preflight_runner_flags_unauthed(tmp_path):
     ok, detail = gh_preflight_runner(check, runner=fake_cmd, bot_path=_write_bot(tmp_path),
                                      identity="octocat")
     assert not ok
+
+
+# --- F3 (santa round-1, Reviewer B): the live flow must actually work for a first-time
+#     user with no fork and no local checkout, and must backfill the PR/log URLs. ---
+
+def test_missing_fork_is_non_fatal_for_first_timer(tmp_path):
+    """A first-time contributor has no fork yet. `fork_exists` must NOT fail preflight and
+    block submission — open_submission_pr creates the fork idempotently (bootstrap, not a
+    prerequisite). Before the fix, a missing fork failed preflight and the advertised
+    `gh repo fork` bootstrap never ran."""
+    def fake_cmd(cmd, **kwargs):
+        joined = " ".join(cmd)
+        if f"gh repo view octocat/ATV-bench" in joined:
+            return (1, "", "Could not resolve to a Repository")  # no fork yet
+        if "gh auth status" in joined:
+            return (0, "Logged in", "")
+        if "gh repo view" in joined:
+            return (0, "All-The-Vibes/ATV-bench", "")
+        if "git status" in joined:
+            return (0, "", "")
+        return (0, "ok", "")
+    check = next(c for c in PREFLIGHT_CHECKS if c.id == "fork_exists")
+    ok, detail = gh_preflight_runner(check, runner=fake_cmd, bot_path=_write_bot(tmp_path),
+                                     identity="octocat")
+    assert ok, "missing fork must be non-fatal (submit bootstraps it): " + detail
+
+
+def test_open_pr_bootstraps_checkout_when_workdir_not_a_repo(tmp_path):
+    """A first-timer runs from an arbitrary cwd with no ATV-bench checkout. open_submission_pr
+    must clone the fork into a working tree before `git checkout -b` — before the fix it ran
+    checkout in a non-repo and failed."""
+    record = _record(tmp_path)
+    wt = tmp_path / "wt"  # does NOT exist / is not a git repo
+    runner = _RecordingRunner({
+        "pr create": (0, "https://github.com/All-The-Vibes/ATV-bench/pull/7\n", ""),
+        # a rev-parse probe on a non-repo returns non-zero -> triggers clone
+        "rev-parse": (1, "", "not a git repository"),
+    })
+    open_submission_pr(record=record, bot_path=_write_bot(tmp_path),
+                       identity="octocat", runner=runner, workdir=str(wt))
+    assert runner.ran("gh repo clone") or runner.ran("git clone"), \
+        "must clone the fork when workdir is not already a checkout"
+
+
+def test_open_pr_backfills_real_pr_url_in_committed_record(tmp_path):
+    """pr_url/logs_url are unknown until the PR exists. After `gh pr create`, the committed
+    submission.json must be rewritten with the real PR URL (and re-pushed) so the merged
+    record carries a real link, not the repo-root placeholder."""
+    record = _record(tmp_path)
+    wt = tmp_path / "wt"
+    pr = "https://github.com/All-The-Vibes/ATV-bench/pull/99"
+    runner = _RecordingRunner({"pr create": (0, pr + "\n", "")})
+    result = open_submission_pr(record=record, bot_path=_write_bot(tmp_path),
+                                identity="octocat", runner=runner, workdir=str(wt))
+    assert result["pr_url"] == pr
+    rec = json.loads((wt / "league" / "submissions" / "octocat" / "submission.json").read_text())
+    assert rec["pr_url"] == pr, "committed record must carry the real PR URL after backfill"
+    # a second push must carry the backfilled record
+    push_calls = [c for c in runner.calls if "push" in " ".join(c)]
+    assert len(push_calls) >= 2, "backfilled record must be pushed (a second push after pr create)"

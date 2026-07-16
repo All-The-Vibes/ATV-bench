@@ -257,14 +257,16 @@ def test_history_persists_across_fresh_checkout(tmp_path):
 
 
 def test_store_rejects_identity_filename_mismatch(tmp_path):
-    """R5 (Reviewer B, reproduced): a hand-edited league/submissions/mallory.json with
-    body identity='alice' would overwrite alice's row. load_submissions must anchor
-    identity to the filename stem."""
+    """R5 (Reviewer B, reproduced): a hand-edited league/submissions/mallory/submission.json
+    with body identity='alice' would overwrite alice's row. load_submissions must anchor
+    identity to the parent DIRECTORY name (F1: nested layout)."""
     store = LeagueStore(str(tmp_path / "league"))
     store.add_submission(_sub("alice"))
-    # attacker writes mallory.json but claims to be alice
+    # attacker writes mallory/ dir but the record body claims to be alice
     spoof = _sub("alice")  # body identity = alice
-    (store.submissions_dir / "mallory.json").write_text(json.dumps(spoof))
+    mdir = store.submissions_dir / "mallory"
+    mdir.mkdir(parents=True, exist_ok=True)
+    (mdir / "submission.json").write_text(json.dumps(spoof))
     with pytest.raises(ValueError):
         store.load_submissions()
 
