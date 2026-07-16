@@ -112,3 +112,18 @@ def test_javascript_url_neutralized_in_href():
     assert not errors, f"JS errors: {errors}"
     for h in hrefs:
         assert h is None or not h.lower().startswith("javascript:"), f"live javascript href: {h}"
+
+
+def test_bundled_view_matches_canonical():
+    """The wheel bundles a copy of the viewer at atv_bench/view/index.html so `board`
+    renders clone-free. It MUST stay byte-identical to the canonical
+    leaderboard/view/index.html, or an installed tool renders a stale board. This guard
+    fails if the two drift; re-copy when you edit the viewer.
+    """
+    canonical = Path(__file__).parent.parent / "leaderboard" / "view" / "index.html"
+    bundled = Path(__file__).parent.parent / "src" / "atv_bench" / "view" / "index.html"
+    assert bundled.exists(), "bundled viewer copy is missing"
+    assert bundled.read_text() == canonical.read_text(), (
+        "bundled viewer drifted from canonical; re-copy "
+        "leaderboard/view/index.html -> src/atv_bench/view/index.html"
+    )

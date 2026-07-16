@@ -376,10 +376,25 @@ def build_site(out_dir: str, *, store_dir: str = _DEFAULT_STORE, updated_at: str
     doc = build_leaderboard_from_store(store_dir, updated_at=_normalize_utc_z(updated_at))
     validate_leaderboard(doc)
     (out / "leaderboard.json").write_text(json.dumps(doc, indent=2))
-    view = Path(__file__).parent.parent.parent / "leaderboard" / "view" / "index.html"
-    if view.exists():
+    view = _find_view_html()
+    if view is not None:
         (out / "index.html").write_text(view.read_text())
     return out
+
+
+def _find_view_html() -> Path | None:
+    """Locate the static viewer HTML, preferring the copy bundled in the wheel.
+
+    The board renders from an installed package (no repo clone), so the bundled
+    `atv_bench/view/index.html` is the primary source. The repo-root
+    `leaderboard/view/index.html` is the fallback for an editable/source checkout,
+    where the two are kept byte-identical by tests/test_viewer.py.
+    """
+    bundled = Path(__file__).parent / "view" / "index.html"
+    if bundled.exists():
+        return bundled
+    repo = Path(__file__).parent.parent.parent / "leaderboard" / "view" / "index.html"
+    return repo if repo.exists() else None
 
 
 def _arg(argv: list[str], flag: str, default: str) -> str:

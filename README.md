@@ -7,7 +7,7 @@
 Your skills. Your MCP servers. Your plugins, custom agents, and config.
 **That's what actually ships code — so that's what we rank.**
 
-[![hermetic tests](https://img.shields.io/badge/tests-299%20passing-6ce7be?style=flat-square)](#dev)
+[![hermetic tests](https://img.shields.io/badge/tests-397%20passing-6ce7be?style=flat-square)](#dev)
 [![docker adjudication](https://img.shields.io/badge/arena-referee%20adjudicated-7aa2ff?style=flat-square)](#the-trust-boundary)
 [![leak-safe](https://img.shields.io/badge/fingerprint-leak--safe-ffc45c?style=flat-square)](#the-credibility-gate)
 [![license](https://img.shields.io/badge/license-MIT-e8ecf5?style=flat-square)](LICENSE)
@@ -15,6 +15,8 @@ Your skills. Your MCP servers. Your plugins, custom agents, and config.
 https://github.com/user-attachments/assets/438771f0-4886-4185-9c75-85c8d9c35bd9
 
 <sub>▶️ Click play for the 30-second demo with sound — original deep-house beat, synthesized from pure numpy 🎧 &nbsp;·&nbsp; [download the MP4](docs/proof/demo/atv-bench-demo.mp4) &nbsp;·&nbsp; [animated GIF](docs/proof/demo/atv-bench-demo.gif)</sub>
+
+<sub>Install in one line — no clone, no npm: `uv tool install --from git+https://github.com/All-The-Vibes/ATV-bench atv-bench`, then `atv-bench board --demo` to see the rankings.</sub>
 
 </div>
 
@@ -96,21 +98,68 @@ A per-harness probe reads on-disk config and emits **one normalized, leak-safe**
 
 ## Quick start (zero to board)
 
+**Install — no clone, no npm.** One command puts the `atv-bench` CLI on your PATH,
+straight from the repo:
+
 ```bash
-# 1. install
-uv venv && uv pip install -e '.[dev]'
-
-# 2. see exactly what your harness would publish (nothing leaves your machine)
-atv-bench fingerprint --dry-run
-
-# 3. validate + build your submission (bot + leak-safe fingerprint)
-atv-bench validate-game ./main.py
-atv-bench submit ./main.py --game battlesnake \
-  --identity <your-github-login> --out submission.json
-
-# 4. open the PR (live automation behind the 7-check preflight)
-atv-bench submit ./main.py --live --identity <your-github-login>
+uv tool install --from git+https://github.com/All-The-Vibes/ATV-bench atv-bench
 ```
+
+No `uv`? Get it at [astral.sh/uv](https://docs.astral.sh/uv/) (`curl -LsSf
+https://astral.sh/uv/install.sh | sh`), or use pipx: `pipx install
+git+https://github.com/All-The-Vibes/ATV-bench`. Upgrade later with
+`uv tool upgrade atv-bench`; remove with `uv tool uninstall atv-bench`.
+
+Verify your machine is ready:
+
+```bash
+atv-bench doctor          # python / harness config / gh / docker readiness, with fixes
+```
+
+### See the rankings first
+
+Before you submit anything, look at the board — including a populated sample so you
+know what you're aiming at:
+
+```bash
+atv-bench board --demo    # builds a sample leaderboard and opens it in your browser
+```
+
+The live community board is at
+**https://all-the-vibes.github.io/ATV-bench/** — that's where every submitted harness
+ranks. To render the *real* board locally from a checkout's store: `atv-bench board
+--store league`.
+
+### Run the benchmark on your harness (step by step)
+
+1. **Pick a game.** See what's playable:
+   ```bash
+   atv-bench games        # lightcycles is live; battlesnake is planned
+   ```
+2. **Have your harness build a bot.** Point your own harness (Claude Code, Copilot CLI,
+   your skills/MCP/agents — the thing being ranked) at the game and let it produce a
+   single-file bot named `main.py` that plays the arena (emits one move per turn). That
+   bot *is* your harness's entry — the whole thesis is that your harness, not a raw
+   model, wrote it.
+3. **See exactly what your harness fingerprint would publish** (nothing leaves your
+   machine):
+   ```bash
+   atv-bench fingerprint --dry-run
+   ```
+4. **Validate + build your submission:**
+   ```bash
+   atv-bench validate-game ./main.py
+   atv-bench submit ./main.py --game lightcycles \
+     --identity <your-github-login> --dry-run --out submission.json
+   ```
+5. **Open the PR** (live automation behind the preflight):
+   ```bash
+   atv-bench submit ./main.py --game lightcycles --live --identity <your-github-login>
+   ```
+
+A maintainer adds the `run-match` label, the sandboxed arena plays your bot, the trusted
+referee adjudicates from real gameplay, ELO is recomputed, and your row appears on the
+board. **That's how you see where your harness sits against everyone else's.**
 
 `fingerprint --dry-run` prints a three-section consent view — **Will publish**,
 **Scrubbed** (values the scanner withheld, proving it ran), **Unknown** (surfaces it
@@ -128,8 +177,13 @@ fingerprints are independently attestable.
 
 ## Dev
 
+Contributing to ATV-bench itself (not just submitting a harness) is the one path that
+needs a clone:
+
 ```bash
-uv run pytest -m "not live and not integration"   # 299 hermetic tests (every push)
+git clone https://github.com/All-The-Vibes/ATV-bench && cd ATV-bench
+uv venv && uv pip install -e '.[dev]'
+uv run pytest -m "not live and not integration"   # hermetic tests (every push)
 uv run pytest -m integration                       # gated: real-Docker bot containment + adjudication
 uv run pytest -m live -s                           # live: real claude/copilot CLIs
 uv run python scripts/screenshot_leaderboard.py    # render the board in all 7 states
@@ -138,6 +192,10 @@ uv run python scripts/make_demo_frames.py /tmp/f        # regenerate beat-synced
 # stitch: ffmpeg -framerate 30 -i /tmp/f/f%05d.png -i out.wav -c:v libx264 \
 #   -pix_fmt yuv420p -crf 20 -c:a aac -shortest -movflags +faststart demo.mp4
 ```
+
+Editing the viewer? Keep the bundled copy in sync:
+`cp leaderboard/view/index.html src/atv_bench/view/index.html` (a test enforces they
+stay byte-identical so an installed `atv-bench board` never renders a stale UI).
 
 ## Deferred: Approach B (hosted service)
 
