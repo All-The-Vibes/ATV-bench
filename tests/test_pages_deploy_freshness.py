@@ -71,7 +71,7 @@ def _code(step):
 
 def test_deploy_workflow_triggers_on_push_to_default_branch(deploy_wf):
     on = _on(deploy_wf)
-    assert "push" in on, "deploy must trigger on push (the settled store commit)"
+    assert "push" in on, "deploy must trigger on push (a merged PR / board-code change)"
     branches = on["push"].get("branches", [])
     assert any(b in ("main", "master") for b in branches), (
         "deploy must trigger on push to the default branch, where the store settles"
@@ -79,6 +79,23 @@ def test_deploy_workflow_triggers_on_push_to_default_branch(deploy_wf):
     # scoped to store changes so unrelated pushes don't redeploy
     paths = on["push"].get("paths", [])
     assert any("league" in p for p in paths), "deploy should be scoped to league/ changes"
+
+
+def test_deploy_fires_after_publish_via_workflow_run(deploy_wf):
+    """R1 (santa round-5): league-publish persists the match with the default GITHUB_TOKEN,
+    and GitHub does NOT trigger workflows from GITHUB_TOKEN pushes (recursion prevention).
+    So a `push`-only deploy trigger would never fire for a scored match — the live board
+    would only update on human pushes. The deploy MUST also trigger on workflow_run after
+    league-publish completes, which is not subject to that suppression."""
+    on = _on(deploy_wf)
+    assert "workflow_run" in on, (
+        "deploy must trigger on workflow_run so a GITHUB_TOKEN persist push still redeploys"
+    )
+    wr = on["workflow_run"]
+    assert "league-publish" in (wr.get("workflows") or []), (
+        "deploy's workflow_run trigger must watch league-publish (the persist workflow)"
+    )
+    assert "completed" in (wr.get("types") or []), "must fire on the publish run completing"
 
 
 def test_deploy_redeploys_on_board_builder_code_changes(deploy_wf):

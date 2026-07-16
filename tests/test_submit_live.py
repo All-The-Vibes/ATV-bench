@@ -192,12 +192,31 @@ def test_branch_clean_check_runs_in_target_workdir(tmp_path):
         return (0, "ok", "")
 
     check = next(c for c in PREFLIGHT_CHECKS if c.id == "branch_clean")
-    wt = str(tmp_path / "wt")
+    wt = tmp_path / "wt"
+    wt.mkdir()  # an EXISTING checkout — the dirty-tree case runs git status here
     gh_preflight_runner(check, runner=fake_cmd, bot_path=_write_bot(tmp_path),
-                        identity="octocat", workdir=wt)
-    assert seen_cwd.get("cwd") == wt, (
+                        identity="octocat", workdir=str(wt))
+    assert seen_cwd.get("cwd") == str(wt), (
         f"branch_clean must check the target workdir, ran in {seen_cwd.get('cwd')!r}"
     )
+
+
+def test_branch_clean_passes_when_workdir_absent_or_not_a_repo(tmp_path):
+    """R3 (santa round-5, Reviewer B): a first-timer's --workdir may not exist yet (the fork
+    is cloned later by open_submission_pr). branch_clean must treat a missing/non-repo
+    workdir as bootstrap-needed (PASS), not a dirty-tree FAILURE — otherwise the CLI, which
+    requires preflight to pass, never reaches the clone bootstrap."""
+    def fake_cmd(cmd, **kwargs):
+        if "git status" in " ".join(cmd):
+            # git status in a non-repo exits non-zero (real gh runner) or raises; model the
+            # non-zero exit the real runner surfaces.
+            return (128, "", "fatal: not a git repository")
+        return (0, "ok", "")
+
+    check = next(c for c in PREFLIGHT_CHECKS if c.id == "branch_clean")
+    ok, detail = gh_preflight_runner(check, runner=fake_cmd, bot_path=_write_bot(tmp_path),
+                                     identity="octocat", workdir=str(tmp_path / "nope"))
+    assert ok, f"missing/non-repo workdir must be bootstrap-needed (pass), got: {detail}"
 
 
 # --- F3 (santa round-1, Reviewer B): the live flow must actually work for a first-time
@@ -326,22 +345,44 @@ def test_backfill_failure_after_pr_create_is_surfaced_not_silent(tmp_path):
 
 
 def test_open_pr_aborts_if_existing_checkout_is_not_the_atv_fork(tmp_path):
-    """santa round-4 (Reviewer B): an existing but UNRELATED git repo at workdir must not be
-    treated as the ATV-bench fork checkout — otherwise league/submissions/... gets committed
-    and pushed into the wrong repo before `gh pr create` fails. Verify the remote is the
-    user's fork before any mutation; abort fail-closed if not."""
+    """santa round-4/5 (Reviewer B): an existing but UNRELATED git repo at workdir must not be
+    treated as the ATV-bench fork checkout. The guard must parse the origin's repo name
+    EXACTLY (== ATV-bench), not substring-match 'atv-bench' — else a close-name repo like
+    octocat/atv-bench-malicious slips through and gets a submission committed + pushed."""
     record = _record(tmp_path)
-    wt = tmp_path / "wt"
-    wt.mkdir()
-    runner = _RecordingRunner({
-        # workdir IS a repo (rev-parse ok) ...
-        "rev-parse --is-inside-work-tree": (0, "true", ""),
-        # ... but its origin points at some unrelated repo
-        "remote get-url": (0, "https://github.com/octocat/some-other-project\n", ""),
-    })
-    with pytest.raises(AtvError):
+    for bad_origin in (
+        "https://github.com/octocat/some-other-project",
+        "https://github.com/octocat/atv-bench-malicious",   # substring-bypass (R2)
+        "git@github.com:evil/ATV-bench-fork-attack.git",
+    ):
+        wt = tmp_path / f"wt_{abs(hash(bad_origin))}"
+        wt.mkdir()
+        runner = _RecordingRunner({
+            "rev-parse --is-inside-work-tree": (0, "true", ""),
+            "remote get-url": (0, bad_origin + "\n", ""),
+        })
+        with pytest.raises(AtvError):
+            open_submission_pr(record=record, bot_path=_write_bot(tmp_path),
+                               identity="octocat", runner=runner, workdir=str(wt))
+        assert not runner.ran("git commit"), f"must not commit into {bad_origin}"
+        assert not runner.ran("git push"), f"must not push into {bad_origin}"
+
+
+def test_open_pr_accepts_a_real_atv_bench_fork_origin(tmp_path):
+    """No false positive: a genuine ATV-bench fork origin is accepted."""
+    record = _record(tmp_path)
+    for good_origin in (
+        "https://github.com/octocat/ATV-bench",
+        "https://github.com/octocat/ATV-bench.git",
+        "git@github.com:octocat/ATV-bench.git",
+    ):
+        wt = tmp_path / f"ok_{abs(hash(good_origin))}"
+        wt.mkdir()
+        runner = _RecordingRunner({
+            "rev-parse --is-inside-work-tree": (0, "true", ""),
+            "remote get-url": (0, good_origin + "\n", ""),
+            "pr create": (0, "https://github.com/All-The-Vibes/ATV-bench/pull/1\n", ""),
+        })
         open_submission_pr(record=record, bot_path=_write_bot(tmp_path),
                            identity="octocat", runner=runner, workdir=str(wt))
-    # must NOT have committed/pushed into the wrong repo
-    assert not runner.ran("git commit")
-    assert not runner.ran("git push")
+        assert runner.ran("git push"), f"a real fork ({good_origin}) must proceed"

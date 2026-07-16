@@ -1,26 +1,31 @@
 # ATV-bench Community League — Pages DEPLOY workflow (settled-store, race-free).
 #
-# G4/G5 (santa round-2): Pages deploy used to live inside league-publish.yml (the
-# workflow_run publish job). That left two problems:
-#   - G4: a head-SHA fence proved the artifact was built from the settled head, but the
-#     separate upload-pages-artifact step ran later, so origin could advance again between
-#     the final re-check and the upload — a slower older run could still deploy a stale board.
-#   - G5: a merged submission PR did not trigger any rebuild, so a first-time entrant's row
-#     did not appear until the NEXT match landed.
+# G4/G5 (santa round-2): Pages deploy used to live inside league-publish.yml. A head-SHA
+# fence proved the artifact was built from the settled head, but the separate upload step
+# ran later, so origin could advance again — a slower older run could still deploy stale.
 #
-# THE FIX: deploy on PUSH to the default branch (scoped to league/** changes). The commit
-# that triggers this run IS the settled store head, so the deployed board is built from
-# exactly that commit — no fence loop, no TOCTOU. A `pages` concurrency group with
-# cancel-in-progress makes the newest settled-store push supersede any older in-flight
-# deploy (last-write-wins). And because the persist push (league-publish.yml) AND a merged
-# submission PR both land on the default branch, both now converge the board automatically.
+# R1 (santa round-5): the round-2 fix triggered deploy on `push`. But league-publish.yml
+# persists the match with the default GITHUB_TOKEN, and GitHub deliberately does NOT trigger
+# workflow runs from GITHUB_TOKEN pushes (recursion prevention) — so a scored match would
+# persist but never redeploy the live board. Only human pushes (a merged PR) would fire it.
 #
-# Trusted by construction: it runs only on already-merged default-branch code, never checks
-# out or executes PR head / bot code, and never does an editable install (no build hooks).
+# THE FIX: trigger on BOTH
+#   - `workflow_run` when league-publish completes — fires reliably after every scored match
+#     (workflow_run is NOT subject to the GITHUB_TOKEN-push suppression); AND
+#   - `push` to the default branch — covers a merged submission PR (or a direct board-code
+#     change) that lands without a match run.
+# Either way the job checks out the freshly-settled default-branch head and rebuilds ./site
+# from exactly that store. A `pages` concurrency group with cancel-in-progress makes the
+# newest deploy supersede any older in-flight one (last-write-wins) — no stale board, no
+# TOCTOU. The job runs only trusted default-branch code, never PR head / bot code, and never
+# does an editable install (no build hooks).
 
 name: league-deploy
 
 on:
+  workflow_run:
+    workflows: [league-publish]
+    types: [completed]
   push:
     branches: [main, master]
     paths:
@@ -45,6 +50,9 @@ permissions: {}
 
 jobs:
   deploy:
+    # For the workflow_run trigger, only deploy after a SUCCESSFUL publish (a failed publish
+    # persisted nothing new). The push trigger has no workflow_run context, so allow it too.
+    if: ${{ github.event_name == 'push' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -55,8 +63,14 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Checkout the settled default branch (the triggering commit)
+      - name: Checkout the settled default branch
         uses: actions/checkout@v4
+        with:
+          # Always build from the settled default-branch head. On a push event that IS the
+          # triggering commit; on a workflow_run event we pin the default branch explicitly
+          # so the deploy reflects the store as persisted by the publish run (plus anything
+          # that landed since — last-write-wins via the concurrency group).
+          ref: ${{ github.event.repository.default_branch }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -69,14 +83,13 @@ jobs:
           # need the runtime deps to run atv_bench as a module from the trusted checkout.
           pip install "jsonschema>=4.0"
 
-      - name: Build the board from the settled store (this commit)
+      - name: Build the board from the settled store
         shell: bash
         env:
           PYTHONPATH: src
         run: |
-          # The checked-out commit is the settled store head that triggered this deploy,
-          # so ./site is built from exactly the state being deployed — no head-SHA fence
-          # needed (the trigger already fences us to this commit).
+          # The checked-out default-branch head is the settled store; ./site is built from
+          # exactly that state. The pages concurrency group ensures the newest deploy wins.
           python -m atv_bench.publish build \
             --out ./site --store league \
             --updated-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"

@@ -27,6 +27,21 @@ _REPO_SLUG = "All-The-Vibes/ATV-bench"
 CommandRunner = Callable[..., "tuple[int, str, str]"]
 
 
+def _is_atv_bench_origin(origin: str) -> bool:
+    """True iff a git remote URL's REPO NAME is exactly `ATV-bench` (case-insensitive).
+
+    Parses both HTTPS (`https://github.com/<owner>/ATV-bench[.git]`) and SSH
+    (`git@github.com:<owner>/ATV-bench[.git]`) forms and compares the final path segment
+    exactly — so a close-name repo like `owner/atv-bench-malicious` is rejected, not
+    substring-matched. Owner is intentionally NOT constrained (it is the user's fork).
+    """
+    tail = origin.rstrip("/").rsplit("/", 1)[-1]      # handles https and the ssh path part
+    tail = tail.rsplit(":", 1)[-1]                     # git@host:owner/repo -> repo if no slash
+    if tail.endswith(".git"):
+        tail = tail[:-4]
+    return tail.lower() == "atv-bench"
+
+
 @dataclass(frozen=True)
 class PreflightCheck:
     id: str
@@ -182,8 +197,16 @@ def gh_preflight_runner(check: PreflightCheck, *, runner: CommandRunner,
     if cid == "branch_clean":
         # H4: check the SUBMISSION workdir, not the process cwd — the live PR commits from
         # `workdir`, so a dirty tree THERE (not here) is what could leak unrelated files.
+        # R3: a first-timer's workdir may not exist / not be a repo yet (open_submission_pr
+        # clones the fork later). Treat a missing/non-repo workdir as bootstrap-needed (pass),
+        # not a dirty-tree failure — else the CLI's "preflight must pass" gate blocks the
+        # clone bootstrap. Only an EXISTING repo with a dirty tree fails here.
+        if workdir is not None and not Path(workdir).exists():
+            return True, "workdir absent — will be cloned by submit (bootstrap)"
         rc, out, err = runner(["git", "status", "--porcelain"], cwd=workdir)
-        clean = rc == 0 and out.strip() == ""
+        if rc != 0:
+            return True, "workdir is not a git repo yet — will be cloned by submit (bootstrap)"
+        clean = out.strip() == ""
         return clean, "clean" if clean else "working tree has uncommitted changes"
     if cid == "leak_scan":
         # cheap defense-in-depth: the bot file bytes must not contain a secret-shaped token.
@@ -255,13 +278,14 @@ def open_submission_pr(*, record: dict[str, Any], bot_path: str, identity: str,
     if rc != 0:
         _run_or_raise(runner, ["gh", "repo", "clone", f"{ident}/ATV-bench", str(wt)])
     else:
-        # An EXISTING repo at workdir must actually be an ATV-bench checkout (santa round-4,
-        # Reviewer B): otherwise we would commit league/submissions/... into an unrelated
-        # repo and push it before `gh pr create` fails. Verify origin points at ATV-bench;
-        # fail closed if it does not (empty origin is tolerated — a bare/fresh checkout).
+        # An EXISTING repo at workdir must actually be an ATV-bench checkout (santa round-4/5,
+        # Reviewer B): otherwise we would commit league/submissions/... into an unrelated repo
+        # and push it before `gh pr create` fails. Verify origin's REPO NAME is exactly
+        # ATV-bench (not a substring match — `octocat/atv-bench-malicious` must be rejected).
+        # An empty origin is tolerated (a bare/fresh checkout).
         orc, oout, _oerr = runner(["git", "remote", "get-url", "origin"], cwd=str(wt))
         origin = oout.strip()
-        if orc == 0 and origin and "atv-bench" not in origin.lower():
+        if orc == 0 and origin and not _is_atv_bench_origin(origin):
             raise AtvError(
                 ErrorCode.SUBMIT_PR_FAILED,
                 cause=(f"workdir {wt} is a git repo whose origin ({origin}) is not an "
