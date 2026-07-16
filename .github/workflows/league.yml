@@ -42,6 +42,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions: {}
+    # Trusted job outputs (NOT bot-controlled): the sha256 of the exact bot bytes staged
+    # into the sandbox. Consumed by the publish job to bind the scored record to the
+    # submitted bytes (santa re-review #5). Empty on the fail-closed no-bot/too-large paths
+    # (those score a crash forfeit, which carries no bot_sha256).
+    outputs:
+      bot_sha256: ${{ steps.extract.outputs.bot_sha256 }}
     # Protected environment => first-time contributors need manual approval before
     # the untrusted bot ever executes (GitHub gates entry to environments).
     environment: league-match
@@ -63,6 +69,7 @@ jobs:
           path: pr-src
 
       - name: Extract the bot file into the sandbox mount dir
+        id: extract
         env:
           SUBMITTER: ${{ github.event.pull_request.user.login || 'submitter' }}
           OPPONENT: byok-anchor
@@ -83,6 +90,13 @@ jobs:
           SZ=$(wc -c < "$BOT")
           if [ "$SZ" -gt 262144 ]; then echo "$CRASH" > match-result.json; echo "bot too large"; exit 0; fi
           cp "$BOT" submission/main.py
+          # Bot-identity binding (santa re-review #5): hash the EXACT bytes we mounted into
+          # the sandbox and publish it as a TRUSTED job output. The publish job stamps this
+          # onto the scored record (never the bot-reported value), so a scored result is
+          # provably tied to the submitted bytes and cannot be re-attributed to a later
+          # swapped bot under the same login. Computed on trusted staged bytes, not bot
+          # stdout — the untrusted bot never influences it.
+          echo "bot_sha256=$(sha256sum submission/main.py | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Build the arena image from the TRUSTED in-repo Dockerfile
         run: |
@@ -252,6 +266,10 @@ jobs:
           ATV_SUBMITTER: ${{ github.event.pull_request.user.login }}
           ATV_OPPONENT: byok-anchor
           ATV_MATCH_ID: ${{ github.run_id }}
+          # Trusted bot-bytes hash from the match job (santa re-review #5). Stamped onto
+          # the scored record so it is provably tied to the submitted bytes; a bot that
+          # reports a disagreeing bot_sha256 is rebound to a forfeit. Empty on crash paths.
+          ATV_BOT_SHA256: ${{ needs.match.outputs.bot_sha256 }}
         run: python -m atv_bench.publish ingest ./artifacts/match-result.json --store league --require-spec
 
       - name: Recompute ELO from full history + build static board
@@ -274,6 +292,10 @@ jobs:
           ATV_SUBMITTER: ${{ github.event.pull_request.user.login }}
           ATV_OPPONENT: byok-anchor
           ATV_MATCH_ID: ${{ github.run_id }}
+          # Trusted bot-bytes hash from the match job (santa re-review #5). Stamped onto
+          # the scored record so it is provably tied to the submitted bytes; a bot that
+          # reports a disagreeing bot_sha256 is rebound to a forfeit. Empty on crash paths.
+          ATV_BOT_SHA256: ${{ needs.match.outputs.bot_sha256 }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           # Commit the ingested match back to the trusted default branch so
