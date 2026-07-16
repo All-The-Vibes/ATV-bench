@@ -344,6 +344,19 @@ def _validate_match_record(m: Any) -> None:
     reason = m.get("forfeit_reason")
     if reason is not None and reason not in {r.value for r in ForfeitReason}:
         raise ValueError(f"matches.jsonl record has invalid forfeit_reason {reason!r}")
+    # Cross-field invariant (santa round-4): mirror MatchResult.__post_init__ — a forfeit
+    # outcome REQUIRES a reason, and a non-forfeit outcome must NOT carry one. Without this,
+    # a well-formed line with a valid enum but inconsistent reason passes the loader then
+    # raises in _to_match_result during the trusted build (board availability DoS).
+    is_forfeit = m["outcome"] in (Outcome.FORFEIT_A.value, Outcome.FORFEIT_B.value)
+    if is_forfeit and reason is None:
+        raise ValueError(
+            f"matches.jsonl forfeit record {m.get('match_id')!r} missing forfeit_reason"
+        )
+    if not is_forfeit and reason is not None:
+        raise ValueError(
+            f"matches.jsonl non-forfeit record {m.get('match_id')!r} carries a forfeit_reason"
+        )
     seed = m.get("seed", 0)
     if not isinstance(seed, int) or isinstance(seed, bool):
         raise ValueError(f"matches.jsonl record has non-int seed {seed!r}")

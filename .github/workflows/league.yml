@@ -61,6 +61,30 @@ jobs:
           ref: refs/pull/${{ github.event.pull_request.number }}/head
           persist-credentials: false
           path: pr-src
+          # Need history to diff the PR against its base for the path-confinement gate.
+          fetch-depth: 0
+
+      - name: Gate — a community PR may only touch its OWN submission tree
+        # santa round-4 (Reviewer B CRITICAL): the durable leaderboard is rebuilt from
+        # committed files, so a merged PR that edits league/matches.jsonl directly or writes
+        # into another entrant's directory could forge history / poison another row. Fail
+        # CLOSED here (before scoring) if the PR changes anything outside
+        # league/submissions/<author>/{main.py,submission.json}. Runs against the TRUSTED
+        # default-branch checkout's code (python -m atv_bench.cli), never pr-src code.
+        env:
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          git -C pr-src fetch --no-tags --depth=1 origin "$BASE_SHA" || true
+          # Changed paths of the PR head vs its merge base, computed from untrusted tree
+          # metadata only (names, never contents). The validator confines them.
+          git -C pr-src diff --name-only "$BASE_SHA"...HEAD > changed-paths.txt || \
+            git -C pr-src diff --name-only "$BASE_SHA" HEAD > changed-paths.txt
+          echo "PR changed paths:"; cat changed-paths.txt
+          python -m atv_bench.cli validate-pr-paths --author "$AUTHOR" \
+            --paths-file changed-paths.txt
 
       - name: Extract the bot file into the sandbox mount dir
         id: extract

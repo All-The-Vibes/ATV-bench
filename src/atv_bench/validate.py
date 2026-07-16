@@ -7,6 +7,8 @@ production path uses — no second, weaker code path.
 """
 from __future__ import annotations
 
+import posixpath
+import re
 from typing import Any
 
 from atv_bench.fingerprint import reader
@@ -14,6 +16,44 @@ from atv_bench.fingerprint.probe import FINGERPRINT_SCHEMA_KEYS
 from atv_bench.fingerprint.scan import is_safe_name, is_secret
 from atv_bench.submit import validate_bot_shape
 from atv_bench.errors import AtvError
+
+# A GitHub-login-shaped author (same shape store.py anchors identities to).
+_AUTHOR_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}")
+# The only two files a community PR is allowed to add/modify, under its own directory.
+_ALLOWED_SUBMISSION_FILES = {"main.py", "submission.json"}
+
+
+def validate_pr_paths(author: str, changed_paths: list[str]) -> dict[str, Any]:
+    """Confine a community PR to its OWN submission tree (santa round-4).
+
+    Runtime scoring is workflow-pinned to the PR author, but the durable leaderboard is
+    rebuilt from committed files. A merged PR that edits league/matches.jsonl directly, or
+    writes into another entrant's directory, could forge history or poison another row.
+    This gate rejects ANY changed path outside league/submissions/<author>/{main.py,
+    submission.json}, so CI can fail closed and block the PR before merge. Repo-plumbing
+    PRs (workflows, src, docs) are expected to come from maintainers and run without this
+    community gate; it is applied only to untrusted community submission PRs.
+    """
+    errors: list[str] = []
+    if not isinstance(author, str) or not _AUTHOR_RE.fullmatch(author):
+        return {"ok": False, "errors": [f"invalid PR author login: {author!r}"]}
+    allowed_dir = f"league/submissions/{author}"
+    for raw in changed_paths:
+        if not isinstance(raw, str) or not raw:
+            errors.append(f"invalid changed path: {raw!r}")
+            continue
+        # Normalize to catch traversal/./ tricks, then require the exact canonical shape.
+        norm = posixpath.normpath(raw)
+        if norm != raw or norm.startswith("/") or ".." in norm.split("/"):
+            errors.append(f"unsafe changed path: {raw!r}")
+            continue
+        parent, name = posixpath.split(norm)
+        if parent != allowed_dir or name not in _ALLOWED_SUBMISSION_FILES:
+            errors.append(
+                f"path {raw!r} is outside {allowed_dir}/"
+                f"{{{','.join(sorted(_ALLOWED_SUBMISSION_FILES))}}}"
+            )
+    return {"ok": not errors, "errors": errors}
 
 
 def validate_harness_fingerprint(manifest: dict[str, Any]) -> dict[str, Any]:

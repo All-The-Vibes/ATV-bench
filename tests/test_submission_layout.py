@@ -416,3 +416,49 @@ def test_valid_matches_line_still_loads(tmp_path):
         '{"player_a":"a","player_b":"b","outcome":"a_wins","match_id":"x"}\n')
     loaded = LeagueStore(str(league)).load_matches()
     assert len(loaded) == 1 and loaded[0]["player_a"] == "a"
+
+
+# --- Forfeit/reason cross-field invariant (santa round-4): _validate_match_record must
+#     mirror MatchResult.__post_init__ (forfeit_reason required IFF outcome is a forfeit),
+#     or a well-formed committed line passes the loader then crashes _to_match_result during
+#     the trusted board build (availability DoS), defeating the fail-closed contract. ---
+
+def test_matches_forfeit_without_reason_fails_closed(tmp_path):
+    league = tmp_path / "league"
+    league.mkdir()
+    (league / "matches.jsonl").write_text(
+        '{"player_a":"a","player_b":"b","outcome":"forfeit_a","match_id":"x"}\n')
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_matches()
+
+
+def test_matches_reason_on_non_forfeit_fails_closed(tmp_path):
+    league = tmp_path / "league"
+    league.mkdir()
+    (league / "matches.jsonl").write_text(
+        '{"player_a":"a","player_b":"b","outcome":"a_wins","match_id":"x",'
+        '"forfeit_reason":"CRASH"}\n')
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_matches()
+
+
+def test_matches_valid_forfeit_with_reason_still_loads(tmp_path):
+    league = tmp_path / "league"
+    league.mkdir()
+    (league / "matches.jsonl").write_text(
+        '{"player_a":"a","player_b":"b","outcome":"forfeit_a","match_id":"x",'
+        '"forfeit_reason":"TIMEOUT"}\n')
+    loaded = LeagueStore(str(league)).load_matches()
+    assert len(loaded) == 1
+
+
+def test_build_from_store_survives_malformed_forfeit_line(tmp_path):
+    """End-to-end: the trusted board build must raise a CONTROLLED ValueError (not an
+    uncaught crash) when history contains a forfeit line missing its reason."""
+    from atv_bench.store import build_leaderboard_from_store
+    league = tmp_path / "league"
+    (league / "submissions").mkdir(parents=True)
+    (league / "matches.jsonl").write_text(
+        '{"player_a":"a","player_b":"b","outcome":"forfeit_b","match_id":"x"}\n')
+    with pytest.raises(ValueError):
+        build_leaderboard_from_store(str(league), updated_at="2026-07-15T18:00:00Z")

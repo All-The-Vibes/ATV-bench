@@ -8,6 +8,7 @@ counts even when zero). `--json` emits the raw manifest for machines.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import typer
@@ -216,6 +217,36 @@ def validate_game_cmd(
         typer.echo(f"✓ bot {bot.name} passes shape validation")
     else:
         typer.echo("✗ bot failed validation:")
+        for e in report["errors"]:
+            typer.echo(f"  - {e}")
+        raise typer.Exit(1)
+
+
+@app.command(name="validate-pr-paths")
+def validate_pr_paths_cmd(
+    author: str = typer.Option(..., "--author", help="PR author GitHub login."),
+    paths_file: Path = typer.Option(
+        None, "--paths-file",
+        help="File with one changed path per line (default: read stdin).",
+    ),
+) -> None:
+    """Fail closed if a community PR touches anything outside its own submission tree.
+
+    Wire into CI as a gate on community submission PRs: `git diff --name-only base...head`
+    -> this command. Rejects direct league/matches.jsonl edits, other-entrant directories,
+    and stray files, so a merged PR cannot forge history or poison another row.
+    """
+    from atv_bench.validate import validate_pr_paths
+    if paths_file is not None:
+        text = paths_file.read_text()
+    else:
+        text = sys.stdin.read()
+    changed = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    report = validate_pr_paths(author, changed)
+    if report["ok"]:
+        typer.echo(f"✓ PR by {author} touches only its own submission files")
+    else:
+        typer.echo("✗ PR touches paths outside its own submission tree:")
         for e in report["errors"]:
             typer.echo(f"  - {e}")
         raise typer.Exit(1)
