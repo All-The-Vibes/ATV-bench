@@ -59,6 +59,20 @@ def validate_pr_paths(author: str, changed_paths: list[str]) -> dict[str, Any]:
 _SUBMISSIONS_PREFIX = "league/submissions/"
 
 
+def _is_submission_path(path: str) -> bool:
+    """True only for a per-entrant submission file league/submissions/<identity>/<file>.
+
+    Requires at least two path segments after the prefix (an identity directory AND a file
+    within it). Scaffolding placed directly at the submissions root — most notably
+    league/submissions/.gitkeep, committed by the foundational PR to materialize the empty
+    tree — has only one trailing segment and is deliberately NOT treated as a submission.
+    """
+    if not isinstance(path, str) or not path.startswith(_SUBMISSIONS_PREFIX):
+        return False
+    remainder = path[len(_SUBMISSIONS_PREFIX):]
+    return "/" in remainder.strip("/") and remainder.split("/", 1)[0] != ""
+
+
 def validate_pr_changes(author: str, name_status_lines: list[str]) -> dict[str, Any]:
     """Confine a community submission PR, from `git diff --name-status` output (santa
     round-7). Stronger than validate_pr_paths (which sees only --name-only path strings):
@@ -88,7 +102,13 @@ def validate_pr_changes(author: str, name_status_lines: list[str]) -> dict[str, 
         parts = raw.split("\t")
         status = parts[0].strip()
         paths = [p.strip() for p in parts[1:] if p.strip()]
-        if any(p.startswith(_SUBMISSIONS_PREFIX) for p in paths):
+        # A path is a *submission* only if it lives in a per-entrant subdirectory:
+        # league/submissions/<identity>/<file> (>=2 segments after the prefix). Directory
+        # scaffolding at the submissions ROOT itself (e.g. league/submissions/.gitkeep)
+        # is NOT a submission — otherwise the foundational maintainer PR that creates the
+        # tree would be misclassified and confined to submission-only paths, rejecting its
+        # own .github/** and src/** files.
+        if any(_is_submission_path(p) for p in paths):
             is_submission_pr = True
         # Rename/copy (R*/C*) and delete (D) are never allowed on a submission PR: a rename
         # can pull another entrant's bytes into your dir; a delete can drop history/rows.
