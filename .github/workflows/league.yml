@@ -382,6 +382,28 @@ jobs:
             echo "push rejected (race on attempt $attempt); backed off, re-fetching"
           done
 
+      - name: Rebuild board from the SETTLED store before deploy (freshness)
+        # explicit bash: mirrors the persist step's shell pin (consistency; no bashisms
+        # strictly required here, but keep the trusted steps on one interpreter).
+        shell: bash
+        env:
+          PYTHONPATH: src
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          # santa re-review #6: the persist loop makes the STORE race-safe, but the Pages
+          # deploy was not. Each publish built ./site from its OWN loop snapshot; if an
+          # older publisher's deploy finished last, Pages regressed to a stale board even
+          # though the store was correct. Fix: after the store push settles, rebuild ./site
+          # from the FRESHLY-FETCHED trusted head so the deployed board reflects the latest
+          # settled store — this match PLUS any that landed concurrently — never a snapshot
+          # that is behind. Build validates the whole board, so a poison state still fails
+          # closed here before deploy.
+          git fetch origin "$DEFAULT_BRANCH"
+          git reset --hard "origin/$DEFAULT_BRANCH"
+          python -m atv_bench.publish build \
+            --out ./site --store league \
+            --updated-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
