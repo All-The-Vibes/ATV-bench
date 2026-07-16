@@ -56,16 +56,18 @@ match_id = the stable `github.run_id`) before anything enters permanent ELO hist
   from the spec, so no bot-chosen string ever lands in an identity field. Enforced on
   every push by `tests/test_match_binding.py` + the `league.yml` tripwire in
   `tests/test_action_isolation.py`.
-- **Outcome IS bot-asserted (accepted v1 boundary).** The win/loss/draw the bot reports
-  is taken on trust. The opponent is a fixed baseline **anchor** whose rating is **pinned
-  at 1500 and excluded from ELO updates** (`elo.compute_leaderboard(anchors=[...])`, plan
-  #11/#12). Because the anchor never moves, a dishonestly-claimed win only inflates the
-  forger's own row versus that fixed yardstick — it **cannot move the anchor and therefore
-  cannot bleed into any other entrant's rating** (each entrant is scored against the same
-  1500 reference, independent of what other entrants asserted). The anchor column is a
-  participation signal, not a trust signal. Making the *arena* (not the bot) emit the
-  adjudicated outcome is the deferred match-orchestration follow-up; until then, public
-  match logs remain the dispute mechanism (Premise 4).
+- **Outcome is now ARENA-ADJUDICATED (trust boundary CLOSED).** The win/loss/draw is no
+  longer bot-asserted. The arena image's ENTRYPOINT is a **trusted referee**
+  (`python3 -m atv_bench.arena`) that runs a deterministic lightcycles/Tron game inside
+  the sandbox, drives the submitted bot as a **move-only subprocess** (one direction per
+  turn, per-turn timeout), and **authors** the outcome from real gameplay. A bot that
+  prints a fabricated result to stdout is emitting an invalid move and forfeits — it can
+  never inject an outcome. The opponent is a fixed baseline **anchor**, now a real
+  in-process reference player, still **pinned at 1500 and excluded from ELO updates**
+  (`elo.compute_leaderboard(anchors=[...])`, plan #11/#12), so it remains a fixed
+  yardstick every entrant is scored against. See `docs/FOLLOW_UPS.md` item 1 (RESOLVED),
+  `src/atv_bench/arena/`, and the proof artifacts in `docs/proof/item1-adjudication/`.
+  Public match logs remain the fingerprint-honesty dispute mechanism (Premise 4).
 
 ## Harness fingerprint (the credibility gate)
 

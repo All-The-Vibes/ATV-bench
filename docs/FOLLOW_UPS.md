@@ -3,7 +3,7 @@
 Tracked here because issue creation is unavailable on this account (Enterprise
 Managed User restriction). These are genuinely deferred v1-adjacent scope, not bugs.
 
-## 1. Adjudicated match outcome (live match-orchestration)
+## 1. Adjudicated match outcome (live match-orchestration) — ✅ RESOLVED
 
 PR #1 closes **identity + match_id forgery**: the trusted publish job binds an `ok`
 artifact's `player_a`/`player_b`/`match_id` to a workflow-issued `MatchSpec` (submitter
@@ -12,15 +12,43 @@ fabricated match_id, or self-match is rebound to a `CRASH` forfeit against the s
 — never trusted, never dropped. See `tests/test_match_binding.py` and the `league.yml`
 tripwire in `tests/test_action_isolation.py`.
 
-What remains bot-asserted is the **win/loss/draw outcome**. The opponent anchor is pinned
-at 1500 and excluded from ELO updates (`elo.compute_leaderboard(anchors=[...])`), so a
-dishonestly-claimed win inflates only the forger's own row vs the fixed anchor and cannot
-move the anchor or bleed into other entrants' ratings. See the "Match-result trust
-boundary" section in `docs/COMMUNITY_LEAGUE.md`.
+What previously remained bot-asserted was the **win/loss/draw outcome**. The opponent
+anchor is pinned at 1500 and excluded from ELO updates
+(`elo.compute_leaderboard(anchors=[...])`), so a dishonestly-claimed win inflated only
+the forger's own row vs the fixed anchor. That blast-radius bound is now moot: the
+outcome is no longer bot-asserted at all.
 
 **Work:** have the CodeClash **arena** (not the submitted bot) emit the adjudicated
 result inside the sandbox, so the outcome is derived from real gameplay rather than bot
 stdout — the "live trusted match-orchestration" layer end-to-end.
+
+**Resolved:** the arena image ENTRYPOINT is now the **trusted referee**
+(`python3 -m atv_bench.arena`, in `src/atv_bench/arena/`), not a bare `python3` that ran
+the bot's stdout as the result. The referee:
+
+- runs a deterministic lightcycles/Tron engine (`arena/engine.py`) — a pure, immutable,
+  reproducible adjudicator with no I/O and no bot trust;
+- spawns the mounted bot at `/work/main.py` as an **untrusted move-only subprocess**
+  (`arena/referee.py::SubprocessMoveSource`): one direction token per turn over a strict
+  line protocol, with a per-turn timeout. A hang, EOF, crash, garbage line, or a
+  fabricated result JSON all parse to "no move" → a **scored forfeit loss**;
+- plays it against a trusted in-process anchor (`TrustedGreedyBot`) so the `byok-anchor`
+  opponent is now a real reference player, not a bookkeeping row;
+- **authors** the schema-shaped `ok` result from the engine verdict
+  (`arena/__main__.py`). The last line on the container's stdout is always the referee's,
+  never the bot's.
+
+The referee code is **baked into the image** (`arena/pkg/`, byte-identical to the tested
+`src/` package — enforced by a drift tripwire) so no trusted code is read from the
+untrusted `/work` mount. The trusted match identity is passed as `ATV_*` env from GitHub
+context; the publish job still independently spec-binds identity (defense in depth).
+
+Tests: `tests/test_arena_engine.py` (engine rules), `tests/test_arena_referee.py`
+(move protocol + forfeit-on-fake-result), `tests/test_arena_entrypoint.py` (entrypoint
+end-to-end, hermetic), `tests/test_arena_image.py` (entrypoint + baked-package drift
+tripwires, every push), and `tests/test_arena_adjudication.py` (Docker integration:
+malicious result-faker forfeits, wall-diver loses, honest bot gets a real outcome).
+Proof artifacts + a rendered match board: `docs/proof/item1-adjudication/`.
 
 ## 2. Live `gh` PR submission automation — ✅ RESOLVED
 

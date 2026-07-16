@@ -137,6 +137,13 @@ jobs:
           # look successful. Capture ${PIPESTATUS[0]} (the timeout/docker status, which
           # `head` does not affect) and fall back to CRASH on ANY non-zero (124 = timeout,
           # or the bot's own non-zero exit). `head` still bounds the on-disk artifact.
+          # The container ENTRYPOINT is the TRUSTED referee (`python3 -m atv_bench.arena`),
+          # not a bare python that runs the bot's stdout as the result. The referee plays
+          # a real lightcycles game, driving the mounted bot as a MOVE-ONLY subprocess, and
+          # prints the ADJUDICATED result. So this stdout is the referee's verdict, never a
+          # bot-authored outcome. The trusted match identity is passed as env (ATV_*) — the
+          # referee stamps player_a/player_b/match_id from it, never from bot output. The
+          # publish job still independently spec-binds identity (defense in depth).
           set +e
           timeout 300 docker run --rm \
             --network none \
@@ -147,6 +154,9 @@ jobs:
             --user 65534:65534 \
             --cap-drop ALL \
             --security-opt no-new-privileges \
+            -e ATV_SUBMITTER="$SUBMITTER" \
+            -e ATV_OPPONENT="$OPPONENT" \
+            -e ATV_MATCH_ID="$MATCH_ID" \
             -v "$PWD/submission:/work:ro" \
             atv-bench/arena:${{ github.run_id }} \
             /work/main.py 2>/dev/null | head -c 65536 > match-result.json
