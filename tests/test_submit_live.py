@@ -323,3 +323,25 @@ def test_backfill_failure_after_pr_create_is_surfaced_not_silent(tmp_path):
     # PR is live: the caller must learn the URL, not get a misleading SUBMIT_PR_FAILED
     assert result["pr_url"] == pr
     assert result.get("backfilled") is False
+
+
+def test_open_pr_aborts_if_existing_checkout_is_not_the_atv_fork(tmp_path):
+    """santa round-4 (Reviewer B): an existing but UNRELATED git repo at workdir must not be
+    treated as the ATV-bench fork checkout — otherwise league/submissions/... gets committed
+    and pushed into the wrong repo before `gh pr create` fails. Verify the remote is the
+    user's fork before any mutation; abort fail-closed if not."""
+    record = _record(tmp_path)
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    runner = _RecordingRunner({
+        # workdir IS a repo (rev-parse ok) ...
+        "rev-parse --is-inside-work-tree": (0, "true", ""),
+        # ... but its origin points at some unrelated repo
+        "remote get-url": (0, "https://github.com/octocat/some-other-project\n", ""),
+    })
+    with pytest.raises(AtvError):
+        open_submission_pr(record=record, bot_path=_write_bot(tmp_path),
+                           identity="octocat", runner=runner, workdir=str(wt))
+    # must NOT have committed/pushed into the wrong repo
+    assert not runner.ran("git commit")
+    assert not runner.ran("git push")

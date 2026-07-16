@@ -87,6 +87,21 @@ class LeagueStore:
                 raise ValueError(
                     f"submission record for {d.name!r} missing required keys: {sorted(missing)}"
                 )
+            # Nested-type validation (santa round-4): top-level key presence is not enough.
+            # A wrong-TYPED nested field (fingerprint as a string, unknown/skills/mcps/plugins
+            # as a scalar) crashed trusted board generation with an uncaught AttributeError/
+            # TypeError. Fail closed HERE so a malformed merged record can never DoS the board.
+            fp = data.get("fingerprint")
+            if not isinstance(fp, dict):
+                raise ValueError(
+                    f"submission record for {d.name!r} has a non-object fingerprint"
+                )
+            for list_field in ("skills", "mcps", "plugins", "unknown"):
+                if list_field in fp and not isinstance(fp[list_field], list):
+                    raise ValueError(
+                        f"submission record for {d.name!r} fingerprint.{list_field} "
+                        f"must be a list, got {type(fp[list_field]).__name__}"
+                    )
             identity = data.get("identity")
             # Anchor identity to the DIRECTORY name: a submission's identity is bound to
             # its path (league/submissions/<identity>/), which the PR diff attributes to

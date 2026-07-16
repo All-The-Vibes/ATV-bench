@@ -254,6 +254,19 @@ def open_submission_pr(*, record: dict[str, Any], bot_path: str, identity: str,
     rc, _out, _err = runner(["git", "rev-parse", "--is-inside-work-tree"], cwd=str(wt))
     if rc != 0:
         _run_or_raise(runner, ["gh", "repo", "clone", f"{ident}/ATV-bench", str(wt)])
+    else:
+        # An EXISTING repo at workdir must actually be an ATV-bench checkout (santa round-4,
+        # Reviewer B): otherwise we would commit league/submissions/... into an unrelated
+        # repo and push it before `gh pr create` fails. Verify origin points at ATV-bench;
+        # fail closed if it does not (empty origin is tolerated — a bare/fresh checkout).
+        orc, oout, _oerr = runner(["git", "remote", "get-url", "origin"], cwd=str(wt))
+        origin = oout.strip()
+        if orc == 0 and origin and "atv-bench" not in origin.lower():
+            raise AtvError(
+                ErrorCode.SUBMIT_PR_FAILED,
+                cause=(f"workdir {wt} is a git repo whose origin ({origin}) is not an "
+                       "ATV-bench fork; refusing to commit a submission into the wrong repo. "
+                       "Use --workdir pointing at your ATV-bench fork clone (or an empty dir)."))
 
     # Stage the bot + record at the identity-pinned path BEFORE committing. We write files
     # directly (the runner handles only gh/git), so tests observe a real materialized tree.

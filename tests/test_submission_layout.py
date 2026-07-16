@@ -135,3 +135,45 @@ def test_one_malformed_record_does_not_silently_zero_the_board(tmp_path):
     (bad / "submission.json").write_text(json.dumps({"identity": "bob"}))  # missing keys
     with pytest.raises((ValueError, KeyError)):
         build_leaderboard_from_store(str(league), updated_at="2026-07-16T00:00:00Z")
+
+
+# --- santa round-4 (Reviewer B): nested-type validation. Top-level key presence is not
+#     enough — a wrong-TYPED nested field (fingerprint as a string, unknown as an int)
+#     crashed trusted board generation with an uncaught AttributeError/TypeError. Load must
+#     fail closed on nested shape too. ---
+
+def _valid_record(identity):
+    return _sub(identity)
+
+
+def _write_record(league, identity, record):
+    d = league / "submissions" / identity
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "submission.json").write_text(json.dumps(record))
+
+
+def test_non_object_fingerprint_fails_closed(tmp_path):
+    league = tmp_path / "league"
+    rec = _valid_record("alice"); rec["fingerprint"] = "oops"
+    _write_record(league, "alice", rec)
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_submissions()
+
+
+def test_non_list_fingerprint_containers_fail_closed(tmp_path):
+    """fingerprint.unknown / skills / mcps / plugins must be lists — a scalar there crashed
+    board generation (unknown=7 -> 'int not iterable')."""
+    for bad_field, bad_value in [("unknown", 7), ("skills", "not-a-list"), ("mcps", 3), ("plugins", {})]:
+        league = tmp_path / f"league_{bad_field}"
+        rec = _valid_record("alice")
+        rec["fingerprint"][bad_field] = bad_value
+        _write_record(league, "alice", rec)
+        with pytest.raises(ValueError):
+            LeagueStore(str(league)).load_submissions()
+
+
+def test_valid_nested_record_still_loads(tmp_path):
+    """No false positive: a well-typed record still loads."""
+    league = tmp_path / "league"
+    _write_record(league, "alice", _valid_record("alice"))
+    assert set(LeagueStore(str(league)).load_submissions()) == {"alice"}
