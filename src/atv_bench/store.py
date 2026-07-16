@@ -15,6 +15,7 @@ empty board. The match job appends a validated result to `matches.jsonl` via
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,8 @@ from atv_bench.elo import ForfeitReason, MatchResult, Outcome
 from atv_bench.leaderboard import build_leaderboard_doc
 
 _SUBMISSION_KEYS = {"identity", "game", "bot_sha256", "fingerprint", "pr_url", "logs_url"}
+# Matches the leaderboard schema's bot_sha256 pattern (64 lowercase hex).
+_SHA256_RE = re.compile(r"[a-f0-9]{64}")
 _MATCH_KEYS = {"player_a", "player_b", "outcome", "match_id"}
 
 
@@ -101,6 +104,24 @@ class LeagueStore:
                     raise ValueError(
                         f"submission record for {d.name!r} fingerprint.{list_field} "
                         f"must be a list, got {type(fp[list_field]).__name__}"
+                    )
+            # Top-level published scalars (santa round-6): a wrong-typed/malformed
+            # bot_sha256/pr_url/logs_url passed load then crashed the trusted build deep in
+            # schema validation (availability DoS). Validate them HERE so a bad merged record
+            # fails closed with a clear per-record message, matching the leaderboard schema
+            # patterns (bot_sha256 = 64 lowercase hex; urls = http(s)).
+            sha = data.get("bot_sha256")
+            if not isinstance(sha, str) or not _SHA256_RE.fullmatch(sha):
+                raise ValueError(
+                    f"submission record for {d.name!r} has an invalid bot_sha256 "
+                    "(must be 64 lowercase hex chars)"
+                )
+            for url_field in ("pr_url", "logs_url"):
+                url = data.get(url_field)
+                if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+                    raise ValueError(
+                        f"submission record for {d.name!r} has an invalid {url_field} "
+                        "(must be an http(s) URL)"
                     )
             identity = data.get("identity")
             # Anchor identity to the DIRECTORY name: a submission's identity is bound to

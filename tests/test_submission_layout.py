@@ -177,3 +177,40 @@ def test_valid_nested_record_still_loads(tmp_path):
     league = tmp_path / "league"
     _write_record(league, "alice", _valid_record("alice"))
     assert set(LeagueStore(str(league)).load_submissions()) == {"alice"}
+
+
+# --- santa round-6 (both reviewers converged): top-level scalar fields must be validated at
+#     LOAD time. A wrong-typed/malformed bot_sha256/pr_url/logs_url passed load and then
+#     crashed the trusted build deep in schema validation (availability DoS) instead of a
+#     controlled per-record ValueError. ---
+
+def test_non_string_bot_sha256_fails_closed_on_load(tmp_path):
+    league = tmp_path / "league"
+    rec = _valid_record("alice"); rec["bot_sha256"] = 7
+    _write_record(league, "alice", rec)
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_submissions()
+
+
+def test_bad_bot_sha256_pattern_fails_closed_on_load(tmp_path):
+    league = tmp_path / "league"
+    rec = _valid_record("alice"); rec["bot_sha256"] = "NOT-HEX"
+    _write_record(league, "alice", rec)
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_submissions()
+
+
+def test_non_http_urls_fail_closed_on_load(tmp_path):
+    for field, bad in [("pr_url", 123), ("pr_url", "javascript:alert(1)"),
+                       ("logs_url", "ftp://x/y"), ("logs_url", "")]:
+        league = tmp_path / f"league_{field}_{abs(hash(str(bad)))}"
+        rec = _valid_record("alice"); rec[field] = bad
+        _write_record(league, "alice", rec)
+        with pytest.raises(ValueError):
+            LeagueStore(str(league)).load_submissions()
+
+
+def test_well_formed_scalars_still_load(tmp_path):
+    league = tmp_path / "league"
+    _write_record(league, "alice", _valid_record("alice"))  # valid 64-hex sha, https urls
+    assert set(LeagueStore(str(league)).load_submissions()) == {"alice"}

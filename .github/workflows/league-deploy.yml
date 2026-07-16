@@ -38,6 +38,9 @@ on:
       - "src/atv_bench/leaderboard.py"
       - "src/atv_bench/store.py"
       - "src/atv_bench/elo.py"
+      # leaderboard._sanitized_details imports the scanner to scrub published fields, so a
+      # scanner/security fix is on the live board-build path too (santa round-6).
+      - "src/atv_bench/fingerprint/scan.py"
       - ".github/workflows/league-deploy.yml"
 
 # Newest settled-store deploy wins: an older in-flight deploy is cancelled so the board
