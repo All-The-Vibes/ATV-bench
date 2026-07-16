@@ -154,12 +154,14 @@ def default_command_runner(cmd: list[str], *, cwd: str | None = None,
 
 
 def gh_preflight_runner(check: PreflightCheck, *, runner: CommandRunner,
-                        bot_path: str, identity: str) -> "tuple[bool, str]":
+                        bot_path: str, identity: str,
+                        workdir: str | None = None) -> "tuple[bool, str]":
     """Real gh/git-backed implementation of a single preflight check.
 
     Injected `runner` keeps it testable. Each check maps to a concrete, side-effect-free
     probe; anything that fails returns (False, detail) so run_preflight surfaces the first
-    failure with its actionable AtvError.
+    failure with its actionable AtvError. `workdir` is the submission working tree the live
+    PR is committed from — the cleanliness check must run there, not the process cwd (H4).
     """
     cid = check.id
     if cid == "gh_installed":
@@ -178,7 +180,9 @@ def gh_preflight_runner(check: PreflightCheck, *, runner: CommandRunner,
         rc, out, err = runner(["gh", "repo", "view", f"{identity}/ATV-bench", "--json", "name"])
         return True, "fork present" if rc == 0 else "no fork yet (submit will create one)"
     if cid == "branch_clean":
-        rc, out, err = runner(["git", "status", "--porcelain"])
+        # H4: check the SUBMISSION workdir, not the process cwd — the live PR commits from
+        # `workdir`, so a dirty tree THERE (not here) is what could leak unrelated files.
+        rc, out, err = runner(["git", "status", "--porcelain"], cwd=workdir)
         clean = rc == 0 and out.strip() == ""
         return clean, "clean" if clean else "working tree has uncommitted changes"
     if cid == "leak_scan":

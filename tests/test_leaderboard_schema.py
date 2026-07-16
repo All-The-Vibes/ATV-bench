@@ -129,7 +129,10 @@ def test_validator_rejects_missing_required_field():
         validate_leaderboard(bad)
 
 
-def test_validator_rejects_unknown_reason_enum():
+def test_build_normalizes_unknown_reason_out_of_enum():
+    """santa round-3 (H1): build_leaderboard_doc now SANITIZES a hand-edited unknown[] entry
+    before it reaches the doc — an out-of-enum reason is normalized to a valid enum value
+    (name_failed_safety_scan) rather than passed through. The resulting doc validates."""
     matches = [MatchResult("alice", "bob", Outcome.A_WINS, match_id="m1")]
     fp = _fingerprint()
     fp["unknown"] = [{"field": "x", "reason": "totally_made_up_reason"}]
@@ -138,6 +141,30 @@ def test_validator_rejects_unknown_reason_enum():
             "bob": {"fingerprint": _fingerprint(), "identity": "hubot", "bot_sha256": "b" * 64,
                     "pr_url": "https://github.com/x/y/pull/2", "logs_url": "https://x/l"}}
     doc = build_leaderboard_doc(matches, subs, updated_at="2026-07-15T18:00:00Z")
+    # normalized, not passed through — and the doc is schema-valid
+    validate_leaderboard(doc)
+    alice = next(r for r in doc["rows"] if r["identity"] == "octocat")
+    for entry in alice["details"]["unknown"]:
+        assert entry["reason"] != "totally_made_up_reason"
+
+
+def test_validator_rejects_unknown_reason_enum():
+    """The schema itself must still reject an out-of-enum reason in a HAND-CONSTRUCTED doc
+    (defense in depth, independent of build_leaderboard_doc's sanitization)."""
+    doc = {
+        "schema_version": 1, "updated_at": "2026-07-15T18:00:00Z",
+        "rows": [{
+            "rank": 1, "elo": 1500, "rated": True, "low_confidence": False,
+            "fingerprint_gstack": False, "match_count": 1, "status": "rated",
+            "wins": 1, "losses": 0, "draws": 0, "forfeits": 0,
+            "ci": {"lo": 1400, "hi": 1600}, "identity": "octocat", "harness_name": "claude-code",
+            "fingerprint_summary": "0 skills",
+            "details": {"skills": [], "mcps": [], "plugins": [],
+                        "unknown": [{"field": "x", "reason": "totally_made_up_reason"}]},
+            "bot_sha256": "a" * 64, "fingerprint_probe_version": "1.0.0",
+            "pr_url": "https://github.com/x/y/pull/1", "logs_url": "https://x/l",
+        }],
+    }
     with pytest.raises(jsonschema.ValidationError):
         validate_leaderboard(doc)
 

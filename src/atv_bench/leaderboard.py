@@ -120,11 +120,17 @@ def validate_leaderboard(doc: dict[str, Any]) -> None:
     jsonschema.validate(doc, LEADERBOARD_SCHEMA)
 
 
-def _summary(fp: dict[str, Any]) -> str:
+def _summary_from_details(fp: dict[str, Any], details: dict[str, Any]) -> str:
+    """Build the summary from SANITIZED details, not the raw fingerprint (H2, santa round-3).
+
+    Counting raw list lengths published a non-zero '3 skills' even when every entry was
+    scrubbed (details empty), leaking that scrubbed entries existed and mismatching the row.
+    Count only the entries that survived sanitization.
+    """
     bits = []
     if fp.get("gstack"):
         bits.append("gstack")
-    n_sk, n_mcp, n_pl = _safe_count(fp, "skills"), _safe_count(fp, "mcps"), _safe_count(fp, "plugins")
+    n_sk, n_mcp, n_pl = len(details["skills"]), len(details["mcps"]), len(details["plugins"])
     bits.append(f"{n_sk} skills")
     if n_mcp:
         bits.append(f"{n_mcp} MCP")
@@ -133,16 +139,36 @@ def _summary(fp: dict[str, Any]) -> str:
     return " · ".join(bits)
 
 
+def _sanitized_unknown_entry(entry: Any) -> dict[str, str]:
+    """Re-validate a single unknown[] entry (H1, santa round-3).
+
+    The unknown[] array is hand-editable in a merged record and was copied verbatim, so a
+    secret-shaped `field` (or an out-of-enum `reason`) leaked onto the public board. Redact
+    an unsafe field and constrain the reason to the locked schema enum.
+    """
+    field = entry.get("field") if isinstance(entry, dict) else None
+    reason = entry.get("reason") if isinstance(entry, dict) else None
+    if not isinstance(field, str) or not is_safe_name(field):
+        # is_safe_name rejects secret-shaped, high-entropy, and non-slug values.
+        field = "redacted"
+    if reason not in _UNKNOWN_REASONS:
+        reason = "name_failed_safety_scan"
+    return {"field": field, "reason": reason}
+
+
 def _sanitized_details(fp: dict[str, Any]) -> dict[str, Any]:
     """Re-validate a merged fingerprint for leak-safety on the trusted publish path (F2).
 
-    The probe is leak-safe at emit time, but `submission.json` is a plain committed file
-    a contributor can hand-edit. Every name that would enter a published row is re-scanned
-    with the SAME allowlist scanner the probe uses. A failing value is DROPPED from details
-    and recorded in unknown[{field, reason:"name_failed_safety_scan"}] — never published,
-    never crashes. This closes the leak the schema's bare `type: string` left open.
+    The probe is leak-safe at emit time, but `submission.json` is a plain committed file a
+    contributor can hand-edit. EVERY value that would enter a published row — skills, mcps,
+    plugins, AND the pre-existing unknown[] entries — is re-scanned with the SAME allowlist
+    scanner the probe uses. A failing value is dropped/redacted and recorded in
+    unknown[{field, reason:"name_failed_safety_scan"}] — never published, never crashes.
     """
-    unknown = list(fp.get("unknown", []) or [])
+    # Sanitize the incoming unknown[] first (H1): its field/reason are hand-editable.
+    unknown: list[dict[str, str]] = [
+        _sanitized_unknown_entry(e) for e in (fp.get("unknown", []) or [])
+    ]
     clean: dict[str, list[str]] = {}
     for field in ("skills", "mcps", "plugins"):
         raw = fp.get(field, [])
@@ -177,12 +203,6 @@ def _safe_str_field(fp: dict[str, Any], key: str, default: str = "unknown") -> s
 def _safe_harness_name(fp: dict[str, Any]) -> str:
     """Harness is copied to a top-level row field; a secret-shaped value must not publish."""
     return _safe_str_field(fp, "harness", "unknown")
-
-
-def _safe_count(fp: dict[str, Any], field: str) -> int:
-    """Count only a genuine list field; a string/other value counts as 0 (G1: never len())."""
-    raw = fp.get(field, [])
-    return len(raw) if isinstance(raw, list) else 0
 
 
 def build_leaderboard_doc(
@@ -232,6 +252,7 @@ def build_leaderboard_doc(
         sub = submissions[name]
         fp = sub["fingerprint"]
         low_confidence = _low_conf(name)
+        details = _sanitized_details(fp)
         rows.append({
             "rank": rank,
             "elo": b["elo"],
@@ -247,8 +268,8 @@ def build_leaderboard_doc(
             "ci": b["ci"],
             "identity": sub["identity"],
             "harness_name": _safe_harness_name(fp),
-            "fingerprint_summary": _summary(fp),
-            "details": _sanitized_details(fp),
+            "fingerprint_summary": _summary_from_details(fp, details),
+            "details": details,
             "bot_sha256": sub["bot_sha256"],
             "fingerprint_probe_version": _safe_str_field(fp, "probe_version", "unknown"),
             "pr_url": sub["pr_url"],

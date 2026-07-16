@@ -71,7 +71,22 @@ class LeagueStore:
                 # A bot directory without a record is not yet a scored submission
                 # (e.g. a partial tree). Skip it rather than crash the whole board.
                 continue
-            data = json.loads(record.read_text())
+            # H3 (santa round-3): a committed submission.json is hand-editable. Fail CLOSED
+            # on malformed content — invalid JSON or a record missing required keys must
+            # raise a controlled ValueError here, NOT surface later as an uncaught
+            # JSONDecodeError/KeyError deep inside trusted board generation (a DoS on the
+            # whole board). We do not silently skip either — a maintainer must see + fix it.
+            try:
+                data = json.loads(record.read_text())
+            except json.JSONDecodeError as e:
+                raise ValueError(f"malformed submission.json for {d.name!r}: {e}") from e
+            if not isinstance(data, dict):
+                raise ValueError(f"submission record for {d.name!r} is not a JSON object")
+            missing = _SUBMISSION_KEYS - set(data)
+            if missing:
+                raise ValueError(
+                    f"submission record for {d.name!r} missing required keys: {sorted(missing)}"
+                )
             identity = data.get("identity")
             # Anchor identity to the DIRECTORY name: a submission's identity is bound to
             # its path (league/submissions/<identity>/), which the PR diff attributes to

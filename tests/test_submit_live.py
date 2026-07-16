@@ -178,6 +178,28 @@ def test_gh_preflight_runner_flags_unauthed(tmp_path):
     assert not ok
 
 
+def test_branch_clean_check_runs_in_target_workdir(tmp_path):
+    """H4 (santa round-3, Reviewer B): the branch_clean preflight ran `git status` in the
+    PROCESS cwd, not the --workdir the PR is committed from. A dirty target checkout could
+    leak unrelated staged files into the public submission PR. The cleanliness check must
+    run `git status` with cwd = the submission workdir."""
+    seen_cwd = {}
+
+    def fake_cmd(cmd, **kwargs):
+        if "git status" in " ".join(cmd):
+            seen_cwd["cwd"] = kwargs.get("cwd")
+            return (0, "", "")
+        return (0, "ok", "")
+
+    check = next(c for c in PREFLIGHT_CHECKS if c.id == "branch_clean")
+    wt = str(tmp_path / "wt")
+    gh_preflight_runner(check, runner=fake_cmd, bot_path=_write_bot(tmp_path),
+                        identity="octocat", workdir=wt)
+    assert seen_cwd.get("cwd") == wt, (
+        f"branch_clean must check the target workdir, ran in {seen_cwd.get('cwd')!r}"
+    )
+
+
 # --- F3 (santa round-1, Reviewer B): the live flow must actually work for a first-time
 #     user with no fork and no local checkout, and must backfill the PR/log URLs. ---
 

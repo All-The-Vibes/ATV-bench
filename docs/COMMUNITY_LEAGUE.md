@@ -20,10 +20,16 @@ both models 6/6 rejected the hosted Approach B on strategy; it had no owner.
      the stored roster with fixed seeds. Runs with `permissions: {}`, no `GITHUB_TOKEN`,
      no Pages token, egress blocked, resource caps, non-root read-only container. Writes
      only a schema-validated **result artifact**.
-   - **publish job (trusted):** reads the artifact (never executes bot code), recomputes
-     ELO from full history (deterministic), re-scans every merged fingerprint for
-     secret-shaped values (leak-safety on the publish path, not just at probe time),
-     builds the static leaderboard, and deploys Pages fenced on the settled store head.
+   - **publish job (trusted, on `workflow_run`):** reads the artifact (never executes bot
+     code), recomputes ELO from full history (deterministic), re-scans every merged
+     fingerprint for secret-shaped values (leak-safety on the publish path, not just at
+     probe time), and persists the match to the store on the default branch. It holds
+     `contents:write` only — no Pages scope.
+   - **deploy job (trusted, on `push` to the default branch — `league-deploy.yml`):** the
+     store commit triggers a rebuild + GitHub Pages deploy from that exact settled head
+     (a `pages` concurrency group makes the newest deploy win, so the board never
+     regresses to a stale snapshot). A merged submission PR triggers the same path, so a
+     new entrant's row appears on merge.
 4. The **static leaderboard** publishes each row: rank · ELO · fingerprint chips.
 
 **Onboarding timing (by design):** the publish job builds from the submissions committed

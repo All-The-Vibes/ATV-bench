@@ -129,3 +129,54 @@ def test_non_list_mcps_and_plugins_rejected(tmp_path):
     assert row["details"]["plugins"] == []
     reasons = [u["reason"] for u in row["details"]["unknown"]]
     assert reasons.count("name_failed_safety_scan") >= 2
+
+
+# --- santa round-3: further leak vectors the round-2 fix missed ---
+
+def test_secret_shaped_unknown_field_scrubbed(tmp_path):
+    """H1 (Reviewer A, CRITICAL): the pre-existing unknown[] array is hand-editable in a
+    merged record. Its `field` values were copied verbatim onto the board — a secret-shaped
+    unknown[].field leaked. Each unknown entry must be re-validated: unsafe field redacted,
+    reason constrained to the schema enum."""
+    sub = _sub("m")
+    sub["fingerprint"]["unknown"] = [
+        {"field": "ghp_0123456789abcdefABCD0123456789abcdEF", "reason": "not_readable"},
+    ]
+    doc = build_leaderboard_doc([], {"m": sub}, updated_at="2026-07-16T00:00:00Z")
+    published = doc["rows"][0]["details"]["unknown"]
+    for entry in published:
+        assert "ghp_" not in entry["field"], f"secret leaked via unknown[].field: {entry}"
+
+
+def test_unknown_field_with_bad_reason_normalized(tmp_path):
+    """An unknown[] entry with a reason outside the schema enum must not publish that reason
+    (schema-invalid, and a free-string reason is another injection surface)."""
+    sub = _sub("m")
+    sub["fingerprint"]["unknown"] = [{"field": "cloud_settings", "reason": "sk-INJECTED-REASON"}]
+    doc = build_leaderboard_doc([], {"m": sub}, updated_at="2026-07-16T00:00:00Z")
+    for entry in doc["rows"][0]["details"]["unknown"]:
+        assert not entry["reason"].startswith("sk-")
+
+
+def test_summary_counts_only_sanitized_entries(tmp_path):
+    """H2 (Reviewer B): fingerprint_summary counted RAW list length, so a list of scrubbed /
+    type-confused entries still published a non-zero '3 skills' count even though details is
+    empty. The summary must count only the entries that survive sanitization."""
+    sub = _sub("m", skills=["sk-AAAAAAAAAAAAAAAAAAAAAAAA", {"x": 1}, 7])
+    sub["fingerprint"]["gstack"] = False
+    doc = build_leaderboard_doc([], {"m": sub}, updated_at="2026-07-16T00:00:00Z")
+    row = _row(doc, "m")
+    assert row["details"]["skills"] == []
+    assert "0 skills" in row["fingerprint_summary"], (
+        f"summary must count sanitized entries, got {row['fingerprint_summary']!r}"
+    )
+
+
+def test_summary_counts_surviving_entries_only(tmp_path):
+    """Mixed list: one safe skill + one secret. Summary must read '1 skills', not 2."""
+    sub = _sub("m", skills=["gstack", "sk-AAAAAAAAAAAAAAAAAAAAAAAA"])
+    sub["fingerprint"]["gstack"] = False
+    doc = build_leaderboard_doc([], {"m": sub}, updated_at="2026-07-16T00:00:00Z")
+    row = _row(doc, "m")
+    assert row["details"]["skills"] == ["gstack"]
+    assert "1 skills" in row["fingerprint_summary"]

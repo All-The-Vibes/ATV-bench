@@ -96,3 +96,42 @@ def test_duplicate_identity_dirs_rejected(tmp_path):
     _write_live_tree(league, "alice2", record=_sub("alice"))
     with pytest.raises(ValueError):
         LeagueStore(str(league)).load_submissions()
+
+
+# --- santa round-3 (H3, Reviewer B): malformed committed records must fail closed, not
+#     crash trusted board generation with an uncaught KeyError/JSONDecodeError. ---
+
+def test_malformed_json_record_raises_controlled_error(tmp_path):
+    """A committed submission.json with invalid JSON must raise a controlled ValueError on
+    load (fail-closed), not an uncaught JSONDecodeError deeper in board generation."""
+    league = tmp_path / "league"
+    d = league / "submissions" / "alice"
+    d.mkdir(parents=True)
+    (d / "submission.json").write_text("{ this is not valid json ")
+    with pytest.raises(ValueError):
+        LeagueStore(str(league)).load_submissions()
+
+
+def test_record_missing_required_keys_raises_on_load(tmp_path):
+    """A record missing required keys (identity/fingerprint/bot_sha256/pr_url/logs_url) must
+    be rejected on load with a controlled error, not indexed blindly by build_leaderboard_doc
+    (which would KeyError and take down the whole trusted board build)."""
+    league = tmp_path / "league"
+    d = league / "submissions" / "alice"
+    d.mkdir(parents=True)
+    # identity matches the dir, but everything else is missing
+    (d / "submission.json").write_text(json.dumps({"identity": "alice"}))
+    with pytest.raises((ValueError, KeyError)):
+        LeagueStore(str(league)).load_submissions()
+
+
+def test_one_malformed_record_does_not_silently_zero_the_board(tmp_path):
+    """A malformed record must not be silently skipped either (that would drop a real
+    entrant). It must fail closed so a maintainer sees and fixes it."""
+    league = tmp_path / "league"
+    _write_live_tree(league, "alice")
+    bad = league / "submissions" / "bob"
+    bad.mkdir(parents=True)
+    (bad / "submission.json").write_text(json.dumps({"identity": "bob"}))  # missing keys
+    with pytest.raises((ValueError, KeyError)):
+        build_leaderboard_from_store(str(league), updated_at="2026-07-16T00:00:00Z")

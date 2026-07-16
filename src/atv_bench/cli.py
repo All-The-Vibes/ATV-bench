@@ -123,9 +123,12 @@ def submit(
             typer.echo("--live requires --identity <your-github-login>.")
             raise typer.Exit(2)
 
+        live_workdir = str(workdir or Path.cwd())
+
         def _live_runner(check):
             return gh_preflight_runner(check, runner=default_command_runner,
-                                       bot_path=str(bot), identity=who)
+                                       bot_path=str(bot), identity=who,
+                                       workdir=live_workdir)
         runner_fn = _live_runner
     else:
         def _stub_runner(check):
