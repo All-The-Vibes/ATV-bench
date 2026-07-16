@@ -1,0 +1,97 @@
+"""Arena-image tripwire (santa re-review #2) — runs on EVERY push.
+
+The league match job runs the submitted bot inside a container image. The PR that
+introduced the league referenced `atv-bench/arena:latest` in `docker run` but shipped
+NO Dockerfile and NO build step, so every match failed to pull the image and fell
+through to the CRASH fallback: the ok/scoring path was dead in practice (only forfeits
+were ever recorded).
+
+This test asserts, hermetically (pure YAML/text parse, no Docker), that:
+  1. a buildable arena Dockerfile exists in the repo,
+  2. the match job builds it from the trusted checkout (not an unresolved pull),
+  3. the image is run by a pinned local tag, never the mutable `:latest`,
+  4. the base image is pinned by digest for reproducibility.
+
+Mirrors the tests/test_action_isolation.py tripwire pattern.
+"""
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+import yaml
+
+ROOT = Path(__file__).parent.parent
+WORKFLOW = ROOT / ".github" / "workflows" / "league.yml"
+DOCKERFILE = ROOT / "arena" / "Dockerfile"
+
+
+@pytest.fixture(scope="module")
+def wf():
+    assert WORKFLOW.exists(), "league.yml workflow must exist"
+    return yaml.safe_load(WORKFLOW.read_text())
+
+
+def test_arena_dockerfile_exists():
+    assert DOCKERFILE.exists(), (
+        "arena/Dockerfile must exist — the match job runs the bot inside this image. "
+        "Without it, `docker run` fails and every match is a forfeit."
+    )
+
+
+def test_arena_dockerfile_pins_base_by_digest():
+    # A mutable base tag (python:3.12) can be swapped under the sandbox. Pin by digest.
+    text = DOCKERFILE.read_text()
+    from_lines = [ln for ln in text.splitlines() if ln.strip().upper().startswith("FROM")]
+    assert from_lines, "arena/Dockerfile must have a FROM line"
+    for ln in from_lines:
+        assert "@sha256:" in ln, f"arena base image must be pinned by digest, got: {ln.strip()}"
+
+
+def test_arena_dockerfile_runs_as_nonroot():
+    # Defense-in-depth: the sandbox already forces --user 65534, but the image should
+    # not assume root either.
+    text = DOCKERFILE.read_text().upper()
+    assert "USER " in text, "arena/Dockerfile should declare a non-root USER"
+
+
+def test_match_job_builds_arena_image_from_trusted_checkout(wf):
+    # The image must be produced by a build step from the trusted arena/ dir, not
+    # pulled from an unresolved registry reference.
+    code = _match_run_code(wf)
+    assert "docker build" in code, (
+        "match job must `docker build` the arena image from the in-repo Dockerfile"
+    )
+    assert "arena" in code, "match job build must reference the arena/ build context"
+
+
+def _match_run_code(wf):
+    """All non-comment shell from the match job's run: steps, concatenated."""
+    lines = []
+    for step in wf["jobs"]["match"]["steps"]:
+        for ln in str(step.get("run", "")).splitlines():
+            code = ln.split("#", 1)[0]
+            if code.strip():
+                lines.append(code)
+    return "\n".join(lines)
+
+
+def test_match_job_does_not_run_mutable_latest_tag(wf):
+    # `:latest` is mutable and (here) unbuilt. The actual shell (comments stripped) must
+    # not reference it — comments explaining why it was removed are fine.
+    code = _match_run_code(wf)
+    assert "atv-bench/arena:latest" not in code, (
+        "match job must not run the mutable/unbuilt `atv-bench/arena:latest` tag"
+    )
+
+
+def test_match_job_runs_a_built_local_image(wf):
+    # There must be a `docker run ... <image>` whose image tag also appears as the
+    # build output (`docker build -t <tag>`), proving the run uses what we built.
+    code = _match_run_code(wf)
+    build_tags = re.findall(r"docker build[^\n]*-t\s+(\S+)", code)
+    assert build_tags, "match job must tag the arena image it builds (`docker build -t <tag>`)"
+    run_tag = build_tags[0].strip('"').strip("'")
+    assert run_tag in code, "the built arena tag must be the image passed to `docker run`"
+    assert not run_tag.endswith(":latest"), "arena run tag must be pinned, not :latest"

@@ -38,7 +38,7 @@ via Codex, read-only sandbox — no shared context) returned **NAUGHTY (both FAI
 Item 1 above (adjudicated outcome) was re-confirmed and remains deferred/blast-radius-
 bounded. The three items below are **net-new** and were verified against the tree.
 
-## 3. `atv-bench/arena:latest` image missing — scoring path is dead (BUG)
+## 3. `atv-bench/arena:latest` image missing — scoring path is dead (BUG) — ✅ RESOLVED
 
 `.github/workflows/league.yml:126` runs `docker run ... atv-bench/arena:latest`, but no
 Dockerfile / arena image definition exists anywhere in the repo. Every match therefore
@@ -50,7 +50,14 @@ The ELO scoring path is dead in practice until the arena image ships.
 `:latest`) so the sandbox is reproducible and cannot be swapped. Note: this couples to
 item 1 — the arena is also what should author the adjudicated outcome.
 
-## 4. Concurrent-publish store race drops matches (BUG)
+**Resolved:** added `arena/Dockerfile` (base pinned by digest, non-root USER). The match
+job now `docker build`s it from the TRUSTED default-branch checkout and runs a run-scoped
+local tag `atv-bench/arena:${{ github.run_id }}` — never the mutable/unbuilt `:latest`.
+Tripwire: `tests/test_arena_image.py`. Verified the image builds and executes a mounted
+bot under the full sandbox flag set. (The adjudicated-outcome layer — item 1 — is still
+deferred; this fix makes the scoring path live.)
+
+## 4. Concurrent-publish store race drops matches (BUG) — ✅ RESOLVED
 
 `league.yml:24` scopes concurrency per-PR (`group: league-${{ pr.number || ref }}`), so
 two different PRs' publish jobs run concurrently. `league.yml:254` does a single-shot
@@ -61,6 +68,15 @@ silently dropped — skewing ELO.
 **Work:** use a **global** concurrency group (or a real lock) for the publish job, and
 make the store push a fetch + rebase + retry loop so a losing race re-applies instead of
 dropping a match.
+
+**Resolved:** the `publish` job now has a job-level `concurrency: { group:
+league-publish, cancel-in-progress: false }` (a CONSTANT group, not keyed on the PR) so
+publishes across different PRs serialize instead of racing. Defense-in-depth: the persist
+step is now a fetch + `reset --hard origin/<default>` + **re-ingest-and-rebuild** + push
+**retry loop** (5 attempts). Because the store is recompute-from-history (matches.jsonl is
+the append-only truth), each retry re-applies THIS match onto the freshly-fetched store
+and rebuilds — a losing race re-applies rather than dropping the match, and never hits a
+rebase conflict on derived files. Tripwire: `tests/test_publish_race.py`.
 
 ## 5. ok-artifact not bound to immutable bot identity (ENHANCEMENT)
 

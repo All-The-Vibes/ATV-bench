@@ -77,6 +77,16 @@ jobs:
           if [ "$SZ" -gt 262144 ]; then echo "$CRASH" > match-result.json; echo "bot too large"; exit 0; fi
           cp "$BOT" submission/main.py
 
+      - name: Build the arena image from the TRUSTED in-repo Dockerfile
+        run: |
+          # Build the sandbox image from arena/Dockerfile in the TRUSTED default-branch
+          # checkout (staged at the repo root, NOT the untrusted pr-src/). The image is
+          # tagged with a local, run-scoped tag and run by that exact tag below — never
+          # the mutable/unbuilt `atv-bench/arena:latest`. This closes santa re-review #2
+          # (the ok/scoring path was dead because the referenced image had no producer).
+          # The Dockerfile pins its base by digest, so the build is reproducible.
+          docker build -t "atv-bench/arena:${{ github.run_id }}" ./arena
+
       - name: Run bot in a locked-down sandbox container
         # explicit bash: the fallback logic uses ${PIPESTATUS[0]} (a bash builtin) to read
         # the container status through the `head` pipe. GitHub defaults to bash on Linux,
@@ -123,7 +133,7 @@ jobs:
             --cap-drop ALL \
             --security-opt no-new-privileges \
             -v "$PWD/submission:/work:ro" \
-            atv-bench/arena:latest \
+            atv-bench/arena:${{ github.run_id }} \
             /work/main.py 2>/dev/null | head -c 65536 > match-result.json
           run_status=${PIPESTATUS[0]}
           # Non-zero container/timeout status or empty output falls back to a trusted,
@@ -172,6 +182,15 @@ jobs:
     needs: match
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # GLOBAL publish serialization (santa re-review #3): a CONSTANT group (not keyed on
+    # the PR number) so publishes from DIFFERENT PRs run one-at-a-time instead of racing
+    # on the default-branch store push. cancel-in-progress:false so a queued publish
+    # waits its turn and still records its match rather than being cancelled. The
+    # workflow-level `concurrency:` block is keyed per-PR (fine — it only coalesces
+    # re-labels of the SAME PR); this job-level block is what serializes ACROSS PRs.
+    concurrency:
+      group: league-publish
+      cancel-in-progress: false
     permissions:
       contents: write   # commit the ingested match back to league/ (durable history)
       pages: write
@@ -240,19 +259,60 @@ jobs:
             --updated-at "$(git show -s --format=%cI HEAD)"
 
       - name: Persist match history back to the default branch (durable store)
+        env:
+          PYTHONPATH: src
+          ATV_SUBMITTER: ${{ github.event.pull_request.user.login }}
+          ATV_OPPONENT: byok-anchor
+          ATV_MATCH_ID: ${{ github.run_id }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           # Runs only after a successful build. Commit the appended match back to the
           # trusted default branch so recompute-from-history actually persists. Safe:
           # trusted publish job, default branch, never touches bot code.
+          #
+          # santa re-review #3: a single-shot push drops the match on a non-fast-forward
+          # race (another PR's publish pushed first). The job-level `concurrency:
+          # league-publish` group serializes publishes so races are rare, but we ALSO
+          # make the push resilient: fetch + rebase-onto-latest + retry. The store is
+          # recompute-from-history (league/matches.jsonl is the append-only source of
+          # truth; the rest is derived), so on each attempt we re-apply our ingest on
+          # top of the freshly-fetched store and rebuild — this cannot conflict the way
+          # a raw `git rebase` of the derived files would, and no match is ever dropped.
           if git diff --quiet -- league/; then
-            echo "no store change to commit"
-          else
-            git config user.name "atv-bench-bot"
-            git config user.email "atv-bench-bot@users.noreply.github.com"
+            echo "no store change to commit"; exit 0
+          fi
+          git config user.name "atv-bench-bot"
+          git config user.email "atv-bench-bot@users.noreply.github.com"
+          # Stash our just-ingested store change; we re-apply it deterministically below.
+          git stash push -- league/ >/dev/null 2>&1 || true
+
+          attempts=0
+          max_attempts=5
+          until [ "$attempts" -ge "$max_attempts" ]; do
+            attempts=$((attempts + 1))
+            # Rebase our working tree onto the latest trusted default branch.
+            git fetch origin "$DEFAULT_BRANCH"
+            git reset --hard "origin/$DEFAULT_BRANCH"
+            # Re-apply THIS match on top of the freshly-fetched store, then rebuild.
+            python -m atv_bench.publish ingest ./artifacts/match-result.json \
+              --store league --require-spec
+            python -m atv_bench.publish build \
+              --out ./site --store league \
+              --updated-at "$(git show -s --format=%cI HEAD)"
+            if git diff --quiet -- league/; then
+              echo "match already present in latest store; nothing to push"; exit 0
+            fi
             git add league/
             git commit -m "league: record match ${{ github.run_id }} [skip ci]"
-            git push origin HEAD:${{ github.event.repository.default_branch }}
-          fi
+            if git push origin "HEAD:$DEFAULT_BRANCH"; then
+              echo "store push succeeded on attempt $attempts"; exit 0
+            fi
+            echo "push rejected (race on attempt $attempts); rebasing and retrying"
+            # Drop our local commit before re-fetching so reset --hard is clean.
+            git reset --hard "HEAD~1" || true
+          done
+          echo "store push failed after $max_attempts attempts" >&2
+          exit 1
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

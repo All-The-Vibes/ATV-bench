@@ -283,7 +283,9 @@ def test_match_job_caps_artifact_size_before_upload(wf):
     # the trusted publish job before scoring. The match job must bound the artifact size
     # and fall back to a CRASH record when exceeded.
     match = _jobs(wf)["match"]
-    body = yaml.safe_dump(match)
+    # width high so long shell lines aren't folded across `\n\` continuations (folding
+    # can split the `wc -c < match-result.json` token and defeat a naive substring test).
+    body = yaml.safe_dump(match, width=10**9)
     assert "wc -c < match-result.json" in body or "stat -c%s match-result.json" in body, \
         "match job must measure match-result.json size before upload"
 
