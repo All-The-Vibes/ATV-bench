@@ -1,19 +1,26 @@
 """Publish-race tripwire (santa re-review #3) — runs on EVERY push.
 
 The trusted publish job appends the scored match to `league/` and pushes it back to the
-default branch. Two problems shipped in the league PR:
+default branch. The league PR shipped a single-shot push with no retry, which dropped a
+match on a non-fast-forward race.
 
-  1. concurrency was scoped PER PR (`league-${{ pr.number }}`), so two different PRs'
-     publish jobs ran concurrently and raced on the default-branch push;
-  2. the push was a single-shot `git push` with no fetch/rebase/retry, so the losing
-     race hit a non-fast-forward rejection, aborted the job, and SILENTLY DROPPED the
-     recorded match — skewing ELO.
+The FIX is optimistic-concurrency: fetch the latest trusted branch, re-apply THIS match
+on top of it (re-ingest is idempotent — `matches.jsonl` dedups on `match_id`), rebuild,
+push, and retry on rejection. This is race-safe on its own and — unlike a GitHub
+`concurrency` group — cannot silently drop a match: GitHub keeps only ONE *pending* run
+per concurrency group and cancels an older pending run when a newer one queues (even with
+`cancel-in-progress: false`, which protects only the *in-progress* run), so serializing
+publishes via a constant group would REINTRODUCE the drop. The retry loop is the real
+guarantee.
 
-This test asserts, hermetically (YAML/text parse, no runner), that the publish path is
-serialized globally AND that its store push is a fetch+rebase+retry loop so a losing
-race re-applies instead of dropping a match.
+Two subtle bugs this tripwire guards against (found in santa re-review round 2):
+  1. `git diff --quiet -- league/` IGNORES untracked files. `league/matches.jsonl` is
+     not tracked until the first match, so the loop must stage untracked store files
+     (`git add -A league/` / `git clean`), or the first match is silently dropped.
+  2. asserting the word "rebase" is satisfied by COMMENTS — assertions here run against
+     comment-stripped shell so they prove real behavior, not documentation.
 
-Mirrors the tests/test_action_isolation.py tripwire pattern.
+Mirrors the tests/test_action_isolation.py + test_arena_image.py tripwire pattern.
 """
 from __future__ import annotations
 
@@ -37,56 +44,112 @@ def _publish(wf):
 
 def _persist_step(wf):
     for step in _publish(wf)["steps"]:
-        run = str(step.get("run", ""))
-        if "git push" in run:
+        if "git push" in str(step.get("run", "")):
             return step
     return None
 
 
-def test_publish_job_is_serialized_globally(wf):
-    # The publish job must have its OWN concurrency group that is NOT keyed on the PR
-    # number/ref, so publishes from different PRs serialize instead of racing on the
-    # default-branch push. A workflow-level group keyed on pr.number does not serialize
-    # across PRs.
-    publish = _publish(wf)
-    group = str(publish.get("concurrency", {}).get("group", ""))
-    assert group, "publish job must declare a job-level concurrency group"
-    assert "pull_request.number" not in group and "pr.number" not in group, (
-        "publish concurrency group must not be keyed on the PR number "
-        "(that lets different PRs' publishes race on the store push)"
-    )
-
-
-def test_publish_persist_step_fetches_before_push(wf):
+def _persist_code(wf):
+    """The persist step's shell with comment lines stripped (real behavior only)."""
     step = _persist_step(wf)
-    assert step is not None, "publish job must have a step that pushes the store"
-    run = step["run"]
-    assert "git fetch" in run or "git pull" in run, (
-        "store push must fetch/pull the latest default branch before pushing "
+    if step is None:
+        return ""
+    lines = []
+    for ln in str(step.get("run", "")).splitlines():
+        code = ln.split("#", 1)[0]
+        if code.strip():
+            lines.append(code)
+    return "\n".join(lines)
+
+
+def test_publish_has_a_persist_step(wf):
+    assert _persist_step(wf) is not None, "publish job must have a step that pushes the store"
+
+
+def test_publish_persist_fetches_latest_before_push(wf):
+    code = _persist_code(wf)
+    assert "git fetch" in code or "git pull" in code, (
+        "store push must fetch/pull the latest default branch inside the retry loop "
         "(a single-shot push drops the match on a non-fast-forward race)"
     )
 
 
-def test_publish_persist_step_rebases_and_retries(wf):
-    step = _persist_step(wf)
-    assert step is not None
-    run = step["run"]
-    assert "rebase" in run, "store push must rebase onto the latest default branch"
-    # a retry loop so a lost race re-applies rather than aborting the job
-    assert ("for " in run or "while " in run or "until " in run), (
-        "store push must retry in a loop so a losing race re-applies the match "
-        "instead of dropping it"
+def test_publish_persist_has_a_retry_loop(wf):
+    code = _persist_code(wf)
+    assert any(k in code for k in ("while ", "until ", "for ")), (
+        "the store push must run inside a retry loop so a losing race re-applies "
+        "the match instead of dropping it"
     )
 
 
-def test_publish_persist_is_not_single_shot_push(wf):
-    # Guard against regressing back to a bare single push with no retry scaffolding.
-    step = _persist_step(wf)
-    assert step is not None
-    run = step["run"]
-    push_count_context = run.count("git push")
-    assert push_count_context >= 1
-    # the presence of a loop keyword ensures the push is inside retry scaffolding
-    assert any(k in run for k in ("for ", "while ", "until ")), (
-        "the store push must be wrapped in retry scaffolding, not a single-shot push"
+def test_publish_persist_reingests_match_inside_the_loop(wf):
+    # The REAL mechanism: on each attempt, re-apply THIS match on top of the freshly
+    # fetched store (idempotent re-ingest), not a `git rebase` of derived files.
+    code = _persist_code(wf)
+    assert "publish ingest" in code, (
+        "the persist step must re-ingest the match after fetching the latest store "
+        "(optimistic-concurrency re-apply), not merely re-push a stale local commit"
+    )
+
+
+def test_publish_persist_handles_untracked_store_files(wf):
+    # league/matches.jsonl is untracked until the first match. `git diff --quiet` ignores
+    # untracked files, so the step must stage them (git add -A / add league) or clean
+    # them between attempts — otherwise the FIRST match is silently dropped.
+    code = _persist_code(wf)
+    stages_untracked = (
+        "git add -A" in code
+        or "git add --all" in code
+        or "git clean" in code
+        or "--untracked" in code
+    )
+    assert stages_untracked, (
+        "persist step must handle UNTRACKED store files (git add -A / git clean / "
+        "--untracked) so the first match (untracked matches.jsonl) is not dropped"
+    )
+
+
+def test_publish_persist_does_not_short_circuit_on_git_diff_quiet(wf):
+    # `git diff --quiet -- league/` before any staging is the exact bug: it ignores the
+    # untracked first-match file and exits 'no change'. If a change-detection guard
+    # exists it must run AFTER staging (git diff --cached), never as a bare pre-loop
+    # `git diff --quiet -- league/` early-exit.
+    code = _persist_code(wf)
+    assert "git diff --quiet -- league" not in code, (
+        "must not gate on `git diff --quiet -- league/` (ignores the untracked "
+        "first-match file); detect changes AFTER staging via `git diff --cached`"
+    )
+
+
+def test_publish_persist_does_not_silently_swallow_push_errors(wf):
+    # The trusted publish path must fail closed. A `git push ... || true` would hide a
+    # push failure and drop the match silently.
+    code = _persist_code(wf)
+    for line in code.splitlines():
+        if "git push" in line:
+            assert "|| true" not in line, (
+                "git push must not be `|| true`-swallowed (would silently drop a match)"
+            )
+
+
+def test_publish_persist_fails_closed_after_max_attempts(wf):
+    # After exhausting retries the step must exit non-zero (loud, re-runnable failure),
+    # never exit 0 having pushed nothing.
+    code = _persist_code(wf)
+    assert "exit 1" in code, (
+        "persist step must exit non-zero after exhausting retry attempts (fail closed)"
+    )
+
+
+def test_publish_job_does_not_use_a_pending_cancelling_concurrency_group(wf):
+    # A job-level `concurrency` group SERIALIZES publishes via GitHub — but GitHub keeps
+    # only one PENDING run per group and cancels an older pending run when a newer queues
+    # (cancel-in-progress:false protects only the in-progress run). That silently drops
+    # the cancelled publish's match — the exact bug #3 targets. The idempotent retry loop
+    # is the correct mechanism; the publish job must NOT rely on a serializing group.
+    publish = _publish(wf)
+    assert "concurrency" not in publish, (
+        "publish job must NOT declare a job-level concurrency group: GitHub cancels "
+        "pending runs in a group, silently dropping a scored match. Rely on the "
+        "idempotent fetch+re-ingest+retry loop instead."
     )

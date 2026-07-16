@@ -182,15 +182,14 @@ jobs:
     needs: match
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    # GLOBAL publish serialization (santa re-review #3): a CONSTANT group (not keyed on
-    # the PR number) so publishes from DIFFERENT PRs run one-at-a-time instead of racing
-    # on the default-branch store push. cancel-in-progress:false so a queued publish
-    # waits its turn and still records its match rather than being cancelled. The
-    # workflow-level `concurrency:` block is keyed per-PR (fine — it only coalesces
-    # re-labels of the SAME PR); this job-level block is what serializes ACROSS PRs.
-    concurrency:
-      group: league-publish
-      cancel-in-progress: false
+    # NOTE: intentionally NO job-level `concurrency` group. A serializing group would
+    # DROP matches, not protect them: GitHub keeps only ONE pending run per concurrency
+    # group and cancels an older pending run when a newer one queues (cancel-in-progress
+    # protects only the IN-PROGRESS run, not pending ones). With >=3 near-simultaneous
+    # publishes, the queued one is cancelled and its already-scored match is lost — the
+    # exact bug santa #3 targets. Instead, the persist step below uses an idempotent
+    # fetch + re-ingest + retry loop that is race-safe WITHOUT serialization and never
+    # drops a match. See tests/test_publish_race.py.
     permissions:
       contents: write   # commit the ingested match back to league/ (durable history)
       pages: write
@@ -266,51 +265,62 @@ jobs:
           ATV_MATCH_ID: ${{ github.run_id }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          # Runs only after a successful build. Commit the appended match back to the
-          # trusted default branch so recompute-from-history actually persists. Safe:
-          # trusted publish job, default branch, never touches bot code.
+          # Commit the ingested match back to the trusted default branch so
+          # recompute-from-history persists. Safe: trusted publish job, default branch,
+          # never touches bot code.
           #
           # santa re-review #3: a single-shot push drops the match on a non-fast-forward
-          # race (another PR's publish pushed first). The job-level `concurrency:
-          # league-publish` group serializes publishes so races are rare, but we ALSO
-          # make the push resilient: fetch + rebase-onto-latest + retry. The store is
-          # recompute-from-history (league/matches.jsonl is the append-only source of
-          # truth; the rest is derived), so on each attempt we re-apply our ingest on
-          # top of the freshly-fetched store and rebuild — this cannot conflict the way
-          # a raw `git rebase` of the derived files would, and no match is ever dropped.
-          if git diff --quiet -- league/; then
-            echo "no store change to commit"; exit 0
-          fi
+          # race (another PR's publish pushed first). We use OPTIMISTIC CONCURRENCY, which
+          # is race-safe without a serializing GitHub concurrency group (see the job-level
+          # note above for why such a group would itself drop matches): on each attempt,
+          # reset to the freshly-fetched trusted branch, RE-INGEST this match on top
+          # (idempotent — matches.jsonl dedups on the stable github.run_id match_id),
+          # rebuild, then push. A rejected push just loops and re-applies.
+          #
+          # NOTE: league/matches.jsonl is UNTRACKED until the first match, and
+          # `git diff --quiet -- league/` IGNORES untracked files. So we always stage
+          # with `git add -A league/` first and detect real changes via `git diff
+          # --cached`, never a bare pre-stage `git diff --quiet` (which would silently
+          # drop the very first match).
           git config user.name "atv-bench-bot"
           git config user.email "atv-bench-bot@users.noreply.github.com"
-          # Stash our just-ingested store change; we re-apply it deterministically below.
-          git stash push -- league/ >/dev/null 2>&1 || true
 
-          attempts=0
+          attempt=0
           max_attempts=5
-          until [ "$attempts" -ge "$max_attempts" ]; do
-            attempts=$((attempts + 1))
-            # Rebase our working tree onto the latest trusted default branch.
+          while [ "$attempt" -lt "$max_attempts" ]; do
+            attempt=$((attempt + 1))
+
+            # Reset hard to the latest trusted branch, INCLUDING untracked store files, so
+            # each attempt re-applies from a clean, current origin state (never stale local
+            # files). -x removes ignored files too; league/ has none, this is belt-and-braces.
             git fetch origin "$DEFAULT_BRANCH"
             git reset --hard "origin/$DEFAULT_BRANCH"
-            # Re-apply THIS match on top of the freshly-fetched store, then rebuild.
+            git clean -fdx league/
+
+            # Re-apply THIS match onto the fresh store, then rebuild the board.
             python -m atv_bench.publish ingest ./artifacts/match-result.json \
               --store league --require-spec
             python -m atv_bench.publish build \
               --out ./site --store league \
               --updated-at "$(git show -s --format=%cI HEAD)"
-            if git diff --quiet -- league/; then
-              echo "match already present in latest store; nothing to push"; exit 0
+
+            # Stage EVERYTHING under league/ (tracked + untracked matches.jsonl), then
+            # detect changes on the STAGED tree (git diff --cached sees untracked-now-added
+            # files, unlike `git diff --quiet -- league/`).
+            git add -A league/
+            if git diff --cached --quiet -- league/; then
+              echo "match already present in latest store; nothing to push"
+              exit 0
             fi
-            git add league/
+
             git commit -m "league: record match ${{ github.run_id }} [skip ci]"
             if git push origin "HEAD:$DEFAULT_BRANCH"; then
-              echo "store push succeeded on attempt $attempts"; exit 0
+              echo "store push succeeded on attempt $attempt"
+              exit 0
             fi
-            echo "push rejected (race on attempt $attempts); rebasing and retrying"
-            # Drop our local commit before re-fetching so reset --hard is clean.
-            git reset --hard "HEAD~1" || true
+            echo "push rejected (race on attempt $attempt); re-fetching and retrying"
           done
+
           echo "store push failed after $max_attempts attempts" >&2
           exit 1
 

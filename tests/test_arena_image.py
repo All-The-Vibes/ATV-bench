@@ -51,19 +51,20 @@ def test_arena_dockerfile_pins_base_by_digest():
 
 def test_arena_dockerfile_runs_as_nonroot():
     # Defense-in-depth: the sandbox already forces --user 65534, but the image should
-    # not assume root either.
-    text = DOCKERFILE.read_text().upper()
-    assert "USER " in text, "arena/Dockerfile should declare a non-root USER"
-
-
-def test_match_job_builds_arena_image_from_trusted_checkout(wf):
-    # The image must be produced by a build step from the trusted arena/ dir, not
-    # pulled from an unresolved registry reference.
-    code = _match_run_code(wf)
-    assert "docker build" in code, (
-        "match job must `docker build` the arena image from the in-repo Dockerfile"
+    # not assume root either. Parse the LAST effective USER directive (comments stripped)
+    # and assert it is a real non-root uid/name — `USER root`, `USER 0`, or a commented
+    # line must NOT satisfy this.
+    directives = []
+    for ln in DOCKERFILE.read_text().splitlines():
+        code = ln.split("#", 1)[0].strip()
+        if code.upper().startswith("USER "):
+            directives.append(code.split(None, 1)[1].strip())
+    assert directives, "arena/Dockerfile must declare a USER directive (not just a comment)"
+    effective = directives[-1]
+    user_part = effective.split(":", 1)[0]  # strip optional :group
+    assert user_part not in ("root", "0"), (
+        f"arena/Dockerfile must run as a non-root USER, got: {effective!r}"
     )
-    assert "arena" in code, "match job build must reference the arena/ build context"
 
 
 def _match_run_code(wf):
@@ -75,6 +76,22 @@ def _match_run_code(wf):
             if code.strip():
                 lines.append(code)
     return "\n".join(lines)
+
+
+def test_match_job_builds_arena_image_from_trusted_checkout(wf):
+    # The image must be produced by a build step from the trusted arena/ dir, not
+    # pulled from an unresolved registry reference. The build CONTEXT must be exactly
+    # the arena/ dir — NOT `.` (which would pull the whole trusted checkout into the
+    # build, a needless surface) and never a pr-src/ path.
+    code = _match_run_code(wf)
+    build_lines = [ln for ln in code.splitlines() if "docker build" in ln]
+    assert build_lines, "match job must `docker build` the arena image from the in-repo Dockerfile"
+    for ln in build_lines:
+        ctx = ln.split()[-1]  # trailing build-context arg
+        assert ctx in ("./arena", "arena", "arena/"), (
+            f"arena build context must be the arena/ dir, got: {ctx!r}"
+        )
+        assert "pr-src" not in ln, "arena build context must never be the untrusted PR head"
 
 
 def test_match_job_does_not_run_mutable_latest_tag(wf):
