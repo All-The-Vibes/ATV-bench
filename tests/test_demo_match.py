@@ -66,3 +66,58 @@ def test_demo_match_accepts_custom_bot_paths(tmp_path):
         "--a-bot", str(bot), "--b-bot", str(bot),
     ])
     assert result.exit_code == 0, result.output
+
+
+def test_default_demo_bots_are_two_distinct_bots():
+    """The head-to-head must be TWO different bots, not one bot playing itself.
+
+    Root cause of the flat-line board: demo_match_cmd defaulted BOTH players to the
+    single bundled greedy_survivor bot, so the match was deterministic self-play → a
+    draw → zero ELO spread. The two default bot paths must differ.
+    """
+    from atv_bench.cli import _default_demo_bots
+
+    a_path, b_path = _default_demo_bots()
+    assert a_path != b_path, "both demo players default to the same bot file (self-play)"
+    from pathlib import Path
+    assert Path(a_path).is_file() and Path(b_path).is_file()
+
+
+def test_default_demo_match_is_decisive_not_a_draw():
+    """With two distinct default bots, the deterministic demo match must have a winner.
+
+    A decisive result is what produces a real ELO spread on the board; a draw between
+    two 1500 players is a zero-update no-op (the flat line the user reported).
+    """
+    result = runner.invoke(app, ["demo-match", "--no-live", "--no-board"])
+    assert result.exit_code == 0, result.output
+    assert "wins" in result.output.lower(), (
+        "default demo match was not decisive (still self-play draw?):\n" + result.output
+    )
+
+
+def test_demo_board_shows_distinct_fingerprints_for_the_two_players():
+    """Each demo player's board row must carry its OWN fingerprint, and the two must
+    differ — a real head-to-head between different harnesses, not two identical rows."""
+    result = runner.invoke(app, [
+        "demo-match", "--no-live", "--board",
+        "--a-name", "ATV-StarterKit", "--b-name", "ATV-Phoenix",
+    ])
+    assert result.exit_code == 0, result.output
+    board = result.output.split("=== Leaderboard ===", 1)[-1]
+    assert "ATV-StarterKit" in board and "ATV-Phoenix" in board, result.output
+
+    # Pull the two players' board lines and assert their ELO differs (decisive result
+    # recorded, not a flat 1500/1500 draw).
+    import re
+    elos = {}
+    for line in board.splitlines():
+        for name in ("ATV-StarterKit", "ATV-Phoenix"):
+            if name in line:
+                m = re.search(r"(\d+)\s*ELO", line)
+                if m:
+                    elos[name] = int(m.group(1))
+    assert set(elos) == {"ATV-StarterKit", "ATV-Phoenix"}, board
+    assert elos["ATV-StarterKit"] != elos["ATV-Phoenix"], (
+        "both players show identical ELO — self-play draw, not a real head-to-head:\n" + board
+    )
