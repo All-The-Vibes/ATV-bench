@@ -65,6 +65,27 @@ class _Builder:
                 self.note_unknown(field_label, reader.REASON_NAME_UNSAFE)
         return sorted(out)
 
+    def enabled_plugin_keys(self, enabled_plugins_raw: dict) -> set[str]:
+        """Return the set of ENABLED plugin keys from an enabledPlugins map.
+
+        A plugin is enabled ONLY when its value is boolean True — the boolean false IS the
+        disable mechanism. A non-boolean value (a string/number/null/list) is a malformed
+        entry: it flags plugins malformed and contributes NO plugin name (never treated as
+        truthy). This is shared by claude-code + copilot-cli so both honor disable + shape
+        identically.
+        """
+        keys: set[str] = set()
+        for k, v in enabled_plugins_raw.items():
+            if not isinstance(k, str):
+                continue
+            if v is True:
+                keys.add(k)
+            elif v is False:
+                continue  # explicit disable
+            else:
+                self.note_unknown("plugins", reader.REASON_MALFORMED)
+        return keys
+
 
 def probe_claude_code(home: Path) -> ProbeResult:
     """Probe a claude-code config root (normally ~/.claude) → leak-safe manifest.
@@ -121,7 +142,7 @@ def probe_claude_code(home: Path) -> ProbeResult:
 
     # Enabled plugin KEYS ("name@marketplace" truthy only). The strip-@ name is the
     # published plugin; the full key is what installed_plugins.json is keyed by.
-    enabled_keys = {k for k, v in enabled_plugins_raw.items() if isinstance(k, str) and v}
+    enabled_keys = b.enabled_plugin_keys(enabled_plugins_raw)
     plugin_candidates = [k.split("@", 1)[0] for k in enabled_keys if k.split("@", 1)[0]]
     plugins = b.safe_names(sorted(set(plugin_candidates)), "plugins")
 
@@ -279,10 +300,13 @@ def probe_copilot_cli(home: Path) -> ProbeResult:
         b.note_unknown("model", settings.reason or reader.REASON_NOT_READABLE)
 
     # --- plugins (enabledPlugins keys are "name@marketplace"; take the name) ---
+    # A plugin is published ONLY when its enabledPlugins value is boolean true (false is
+    # the disable mechanism; a non-bool value flags plugins malformed and is not published).
+    enabled_keys = b.enabled_plugin_keys(enabled_plugins_raw)
     plugin_candidates = [
-        k.split("@", 1)[0] for k in enabled_plugins_raw if isinstance(k, str) and k.split("@", 1)[0]
+        k.split("@", 1)[0] for k in enabled_keys if k.split("@", 1)[0]
     ]
-    plugins = b.safe_names(plugin_candidates, "plugins")
+    plugins = b.safe_names(sorted(set(plugin_candidates)), "plugins")
 
     # --- skills + custom_agents_count (nested inside each installed plugin) ---
     skill_candidates: list[str] = []

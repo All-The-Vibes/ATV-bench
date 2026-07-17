@@ -1067,3 +1067,49 @@ def test_claude_wrongshaped_enabledplugins_flags_malformed(tmp_path, bad_ep):
         f"wrong-shaped enabledPlugins ({bad_ep}) must flag plugins malformed, "
         f"got unknown={result.manifest['unknown']}"
     )
+
+
+def test_copilot_disabled_plugin_value_false_excluded(tmp_path):
+    """Santa PR#9 round 11 (reviewer B): copilot ignored enabledPlugins VALUES and
+    published every key — so a disabled plugin (value false) leaked into the manifest.
+    A false value must exclude the plugin, matching claude-code's disable semantics."""
+    home = tmp_path / ".copilot"
+    (home / "skills").mkdir(parents=True)
+    (home / "settings.json").write_text(json.dumps({
+        "model": "gpt-x",
+        "enabledPlugins": {"on@mkt": True, "off@mkt": False},
+    }))
+    result = fp.probe_copilot_cli(home)
+    assert result.manifest["plugins"] == ["on"], result.manifest["plugins"]
+
+
+@pytest.mark.parametrize("bad_val", ['"yes"', "1", "0", '""', "null", "[]"])
+def test_claude_nonbool_enabledplugin_value_flags_malformed(tmp_path, bad_val):
+    """Santa PR#9 round 11 (reviewer B): a non-boolean enabledPlugins VALUE (e.g. "yes")
+    was treated as truthy and published the plugin. Non-bool values must flag plugins
+    malformed and contribute no plugin name (only explicit true enables)."""
+    home = tmp_path / ".claude"
+    (home / "skills").mkdir(parents=True)
+    (home / "settings.json").write_text(
+        '{"model": "claude-opus-4-8", "enabledPlugins": {"bad-plugin@mkt": ' + bad_val + '}}')
+    result = fp.probe_claude_code(home)
+    reasons = {(u["field"], u["reason"]) for u in result.manifest["unknown"]}
+    assert ("plugins", "malformed") in reasons, (
+        f"non-bool enabledPlugins value ({bad_val}) must flag plugins malformed, "
+        f"got unknown={result.manifest['unknown']}")
+    assert "bad-plugin" not in result.manifest["plugins"], result.manifest["plugins"]
+
+
+@pytest.mark.parametrize("bad_val", ['"yes"', "1", "0", "null"])
+def test_copilot_nonbool_enabledplugin_value_flags_malformed(tmp_path, bad_val):
+    """Same non-bool enabledPlugins value discipline for copilot-cli."""
+    home = tmp_path / ".copilot"
+    (home / "skills").mkdir(parents=True)
+    (home / "settings.json").write_text(
+        '{"model": "gpt-x", "enabledPlugins": {"bad-plugin@mkt": ' + bad_val + '}}')
+    result = fp.probe_copilot_cli(home)
+    reasons = {(u["field"], u["reason"]) for u in result.manifest["unknown"]}
+    assert ("plugins", "malformed") in reasons, (
+        f"non-bool enabledPlugins value ({bad_val}) must flag plugins malformed, "
+        f"got unknown={result.manifest['unknown']}")
+    assert "bad-plugin" not in result.manifest["plugins"], result.manifest["plugins"]
