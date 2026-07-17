@@ -165,6 +165,37 @@ the count of scrubbed values before anything is submitted, so the user approves
 publication of their own names. Fingerprint honesty remains trust-based (Premise 4);
 public match logs are the dispute mechanism.
 
+### Provenance (UC1 — binding the fingerprint to the bot it was captured with)
+
+Fingerprint readers are table stakes; on their own they prove nothing about whether the
+*published* manifest is the harness/config that actually built the *submitted* bot. Two
+attacks the readers alone don't stop: fingerprint a fat config then run a lean one, or
+present a `claude-code` fingerprint for a `codex`-built bot.
+
+The provenance binding closes the post-capture gap. At build time `capture_provenance`
+binds four facets — `{harness, bot_sha256, fingerprint_sha256, captured_at}` — into a
+token whose `signature` is a digest over that canonical payload. The token ships inside
+`submission.json` under `"provenance"`. `verify_submission_provenance` (run at submit and
+merge time) recomputes each facet from the record's *own* bot hash + manifest and
+re-derives the signature; any post-capture edit to the manifest, a swapped bot, or a
+swapped harness fails closed with a named reason.
+
+Trust level is explicit and honest:
+
+- **Unkeyed (default): tamper-evident, self-attested.** The signature is a salted SHA-256
+  digest. It detects hand-edits and swaps, but runs entirely on the contributor's machine,
+  so a determined attacker who recomputes the whole token can defeat it. These rows are
+  labelled **self-attested**.
+- **Keyed (`ATV_PROVENANCE_KEY` set): HMAC-signed.** Anti-tamper on the token itself. A row
+  is only truly **verified** once a trusted sandbox re-fingerprints the harness at match
+  time and re-signs with a server-held key — deferred to Phase 2 (the containerized
+  runner). The `signed` flag on the token drives the leaderboard's verified/self-attested
+  labelling.
+
+This is deliberately client tamper-evidence, not anti-forgery: it makes lying *evident*
+(edits break verification, logs remain the dispute mechanism) without over-claiming a
+guarantee the client trust boundary can't provide.
+
 ## ELO (deterministic, forfeit-safe, variance-gated)
 
 - **Row identity is the GitHub login, by design.** This is a per-contributor / per-harness

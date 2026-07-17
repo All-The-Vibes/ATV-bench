@@ -108,6 +108,87 @@ def test_build_submission_rejects_leaky_fingerprint():
                          identity="octocat", game="battlesnake")
 
 
+# --- UC1 provenance binding integration ---
+
+_FP = {
+    "harness": "claude-code", "model": "claude-opus-4-8", "gstack": True,
+    "skills": ["gstack"], "mcps": [], "plugins": [], "custom_agents_count": 0,
+    "unknown": [], "probe_version": "1.0.0",
+}
+
+
+def test_build_submission_embeds_provenance_bound_to_bot_and_fingerprint():
+    from atv_bench.fingerprint.provenance import verify_provenance
+    bot = _write_bot()
+    sub = build_submission(bot_path=bot, fingerprint=_FP, identity="octocat",
+                           game="battlesnake", captured_at="2026-07-17T00:00:00Z")
+    prov = sub["provenance"]
+    assert prov["harness"] == "claude-code"
+    assert prov["bot_sha256"] == sub["bot_sha256"]
+    res = verify_provenance(provenance=prov, harness="claude-code",
+                            bot_sha256=sub["bot_sha256"], fingerprint=sub["fingerprint"])
+    assert res.ok is True
+
+
+def test_verify_submission_provenance_detects_fingerprint_post_edit():
+    from atv_bench.submit import verify_submission_provenance
+    sub = build_submission(bot_path=_write_bot(), fingerprint=_FP, identity="octocat",
+                           game="battlesnake", captured_at="2026-07-17T00:00:00Z")
+    sub["fingerprint"] = {**_FP, "skills": []}  # leaner manifest than captured
+    res = verify_submission_provenance(sub)
+    assert res.ok is False
+    assert "fingerprint" in " ".join(res.reasons).lower()
+
+
+def test_verify_submission_provenance_detects_bot_swap():
+    from atv_bench.submit import verify_submission_provenance
+    sub = build_submission(bot_path=_write_bot(), fingerprint=_FP, identity="octocat",
+                           game="battlesnake", captured_at="2026-07-17T00:00:00Z")
+    sub["bot_sha256"] = "f" * 64
+    res = verify_submission_provenance(sub)
+    assert res.ok is False
+    assert "bot" in " ".join(res.reasons).lower()
+
+
+def test_verify_submission_provenance_accepts_untampered_record():
+    from atv_bench.submit import verify_submission_provenance
+    sub = build_submission(bot_path=_write_bot(), fingerprint=_FP, identity="octocat",
+                           game="battlesnake", captured_at="2026-07-17T00:00:00Z")
+    res = verify_submission_provenance(sub)
+    assert res.ok is True
+
+
+def test_keyed_build_marks_provenance_signed(monkeypatch):
+    monkeypatch.setenv("ATV_PROVENANCE_KEY", "server-side-key")
+    sub = build_submission(bot_path=_write_bot(), fingerprint=_FP, identity="octocat",
+                           game="battlesnake", captured_at="2026-07-17T00:00:00Z")
+    assert sub["provenance"]["signed"] is True
+
+
+def test_verify_submission_provenance_rehashes_actual_bot_bytes(tmp_path):
+    """F-bot-bytes: when given the real artifact, verification must re-hash it and reject a
+    swapped bot even if record['bot_sha256'] was left untouched."""
+    from atv_bench.submit import verify_submission_provenance
+    bot = _write_bot()
+    sub = build_submission(bot_path=bot, fingerprint=_FP, identity="octocat",
+                           game="battlesnake", captured_at="2026-07-17T00:00:00Z")
+    # attacker swaps the shipped bot bytes but leaves the record's hash + token untouched
+    swapped = tmp_path / "main.py"
+    swapped.write_text("def move(state):\n    return 'down'  # different bot\n")
+    res = verify_submission_provenance(sub, bot_path=str(swapped))
+    assert res.ok is False
+    assert "bot" in " ".join(res.reasons).lower()
+
+
+def test_verify_submission_provenance_accepts_matching_bot_bytes():
+    from atv_bench.submit import verify_submission_provenance
+    bot = _write_bot()
+    sub = build_submission(bot_path=bot, fingerprint=_FP, identity="octocat",
+                           game="battlesnake", captured_at="2026-07-17T00:00:00Z")
+    res = verify_submission_provenance(sub, bot_path=bot)  # same bytes it was built from
+    assert res.ok is True
+
+
 # --- helpers ---
 
 _BOT_SRC = "def move(state):\n    return 'up'\n"
@@ -130,3 +211,23 @@ def test_status_trail_is_honest_about_wiring():
     assert "run-match" in trail or "label" in trail  # label-triggered, stated
     # honest about how the PR is opened: either the live gh path or the manual fallback
     assert "--live" in trail or "manually" in trail or "you open it" in trail
+
+
+def test_submit_cli_dry_run_shows_provenance_line(tmp_path):
+    """The dry-run submit surface must report the provenance trust level so a contributor
+    knows the row is self-attested (unkeyed) until a trusted sandbox re-signs it."""
+    from typer.testing import CliRunner
+    from atv_bench.cli import app
+    home = tmp_path / ".codex"
+    (home / "skills" / "gstack").mkdir(parents=True)
+    (home / "config.toml").write_text('model = "gpt-5.5"\n')
+    bot = tmp_path / "main.py"
+    bot.write_text(_BOT_SRC)
+    result = CliRunner().invoke(app, [
+        "submit", str(bot), "--game", "lightcycles", "--dry-run",
+        "--harness", "codex", "--home", str(home),
+        "--identity", "octocat", "--out", str(tmp_path / "submission.json"),
+    ])
+    assert result.exit_code == 0, result.output
+    assert "Provenance:" in result.output
+    assert "self-attested" in result.output  # no key set in this env

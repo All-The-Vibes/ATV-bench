@@ -8,6 +8,7 @@ counts even when zero). `--json` emits the raw manifest for machines.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -265,6 +266,27 @@ def submit(
         out_path = out or Path("submission.json")
         out_path.write_text(json.dumps(record, indent=2, sort_keys=True))
         typer.echo(f"\nWrote submission record: {out_path}")
+
+        # UC1 provenance: the record binds harness+bot+fingerprint into a token. Show the
+        # trust level so the contributor knows whether the row will read as verified or
+        # self-attested, and confirm the freshly-built record actually verifies. The tier
+        # comes from the VERIFY RESULT (prov_res.signed), never the token's own bit — a
+        # keyless build can never present as signed.
+        from atv_bench.submit import verify_submission_provenance
+        prov_res = verify_submission_provenance(record, bot_path=str(bot),
+                                                key=os.environ.get("ATV_PROVENANCE_KEY"))
+        prov = record["provenance"]
+        if prov_res.ok:
+            level = "signed (HMAC)" if prov_res.signed else "self-attested (unkeyed)"
+            typer.echo(f"Provenance: bound to harness={prov['harness']} "
+                       f"bot+fingerprint — {level}.")
+            if not prov_res.signed:
+                typer.echo("  Set ATV_PROVENANCE_KEY before building to upgrade to a "
+                           "signed token; rows stay self-attested until a trusted sandbox "
+                           "re-fingerprints (COMMUNITY_LEAGUE.md#provenance).")
+        else:
+            typer.echo("Provenance: ✗ does not verify — "
+                       + "; ".join(prov_res.reasons))
 
     typer.echo("\nSubmission status trail:")
     for step in submission_status_trail(is_first_time=True):
