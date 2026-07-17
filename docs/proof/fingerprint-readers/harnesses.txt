@@ -1,0 +1,10 @@
+Harnesses you can fingerprint with `atv-bench fingerprint [--harness <key>]`:
+
+  ✓ claude-code  [live]  — Claude Code  ← detected on this machine
+      Reads ~/.claude names + counts only (model, skills, MCP servers, plugins, custom agents) into the fixed leak-safe schema. v1 fingerprint reader.
+  ✓ copilot-cli  [live]  — GitHub Copilot CLI
+      Reads ~/.copilot names + counts only (model from settings.json, MCP servers from mcp-config.json, skills/agents/plugins from installed-plugins/) into the fixed leak-safe schema, minus anything disabled in settings.
+  ✓ codex  [live]  — OpenAI Codex CLI
+      Reads ~/.codex names + counts only (model from config.toml top-level key, MCP servers from [mcp_servers.*] tables, skills from skills/, custom agents from prompts/) into the fixed leak-safe schema. Never reads provider tables or headers.
+
+Default (auto-detected): claude-code. Override with `--harness <key>`.

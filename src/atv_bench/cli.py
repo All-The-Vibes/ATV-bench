@@ -15,7 +15,7 @@ import typer
 
 from atv_bench.fingerprint import probe as fp
 from atv_bench.games import GAMES, DEFAULT_GAME, assert_playable
-from atv_bench.harnesses import HARNESSES, DEFAULT_HARNESS, detect_harness
+from atv_bench.harnesses import HARNESSES, DEFAULT_HARNESS, detect_harness, harness_config_present
 from atv_bench.submit import run_preflight, submission_status_trail
 
 app = typer.Typer(
@@ -32,11 +32,95 @@ def _probe_or_exit(home: Path | None, harness: str | None) -> fp.ProbeResult:
     Centralizes the fail-closed handling so every probing command (fingerprint / submit /
     validate-harness) rejects an unknown or planned harness the same way instead of
     emitting an empty/placeholder fingerprint.
+
+    Detect-guard (M10): when the harness is being AUTO-detected (no explicit --harness)
+    against the real $HOME (no --home override) and more than one live harness config is
+    present, refuse to silently pick the first — require an explicit --harness so the user
+    controls which harness is published.
     """
+    from atv_bench import harnesses as hz
+
+    if harness is None and home is None:
+        detected = [h.key for h in HARNESSES if h.live
+                    and hz.harness_config_present(h.key)]
+        if len(detected) > 1:
+            typer.echo(
+                "Multiple coding-agent harnesses detected on this machine: "
+                f"{', '.join(detected)}.\n"
+                "Auto-detect won't guess which one to publish. Re-run with an explicit "
+                "harness, e.g. `atv-bench fingerprint --harness "
+                f"{detected[0]}` (see `atv-bench harnesses`)."
+            )
+            raise typer.Exit(2)
+
     try:
-        return fp.probe(home=home, harness=harness)
+        result = fp.probe(home=home, harness=harness)
     except ValueError as e:
         typer.echo(f"Cannot fingerprint: {e}")
+        raise typer.Exit(2)
+
+    # M9: an explicitly-probed harness whose config is absent/empty must not present as a
+    # confident published fingerprint. Surface an actionable problem/cause/fix message.
+    # The manifest's harness is the source of truth — probe() already resolved it from
+    # --harness, else the --home root basename, else $HOME auto-detect.
+    resolved = (result.manifest.get("harness")
+                or harness or hz.detect_harness() or hz.DEFAULT_HARNESS)
+    _warn_if_config_absent(resolved, home, result)
+    return result
+
+
+def _warn_if_config_absent(harness_key: str, home: Path | None, result: fp.ProbeResult) -> None:
+    """Fail loudly (exit 2) when the harness's primary config file is missing, empty, or
+    malformed, so an empty manifest never passes silently as a real fingerprint (M9).
+
+    Missing is caught by a file-existence check; empty/malformed is caught by inspecting
+    the probe result — the readers surface an unknown[{field:"model", reason:"empty"|
+    "malformed"}] entry when the primary config parsed to nothing usable."""
+    from atv_bench import harnesses as hz
+    from atv_bench.fingerprint import reader as _reader
+
+    root = Path(home) if home is not None else hz.config_root_for(harness_key)
+    primary = hz.PRIMARY_CONFIG.get(harness_key)
+    if primary is None:
+        return
+    primary_path = root / primary
+    # A dangling symlink is NOT "missing" — the file is present as a link, just unreadable.
+    # Treat it as present here so the accurate empty/malformed/unreadable branch below fires
+    # (the probe already flagged it not_readable) rather than the "missing file" message.
+    if not primary_path.exists() and not primary_path.is_symlink():
+        typer.echo(
+            f"Cannot fingerprint {harness_key}: no {primary} found in {root}.\n"
+            f"  problem: the harness config file is missing, so the fingerprint would be empty.\n"
+            f"  cause:   {harness_key} is not set up at {root}, or the wrong --home was passed.\n"
+            f"  fix:     run {harness_key} at least once to create {primary}, or pass the "
+            f"correct --home / --harness (see `atv-bench harnesses`)."
+        )
+        raise typer.Exit(2)
+
+    # File exists but is unusable (empty / malformed / unreadable / symlink-escaped): the
+    # readers flag the model field as unknown with one of these reasons. Fail closed there
+    # too — the published fingerprint would be an empty shell reading as a confident one.
+    unusable = {
+        _reader.REASON_EMPTY, _reader.REASON_MALFORMED,
+        _reader.REASON_PERMISSION, _reader.REASON_SYMLINK_ESCAPE,
+        _reader.REASON_NOT_READABLE,
+    }
+    model_bad = any(
+        u.get("field") == "model" and u.get("reason") in unusable
+        for u in result.manifest.get("unknown", [])
+    )
+    if model_bad:
+        typer.echo(
+            f"Cannot fingerprint {harness_key}: {primary} in {root} is empty, malformed, "
+            f"or unreadable.\n"
+            f"  problem: the harness config file has no usable content, so the fingerprint "
+            f"would be an empty shell.\n"
+            f"  cause:   {primary} is blank, not valid "
+            f"{'TOML' if primary.endswith('.toml') else 'JSON'}, or not readable "
+            f"(permissions / symlink).\n"
+            f"  fix:     repair or re-generate {primary} (run {harness_key} so it rewrites a "
+            f"valid config), then re-run (see `atv-bench harnesses`)."
+        )
         raise typer.Exit(2)
 
 
@@ -45,7 +129,7 @@ def _render_consent(manifest: dict) -> str:
     lines = []
     lines.append(
         "Will publish:  "
-        f"harness {m['harness']} · gstack {str(m['gstack']).lower()} · "
+        f"harness {m['harness']} · model {m['model']} · gstack {str(m['gstack']).lower()} · "
         f"{len(m['skills'])} skills · {len(m['mcps'])} MCPs · "
         f"{len(m['plugins'])} plugins · {m['custom_agents_count']} agents"
     )
@@ -216,15 +300,24 @@ def validate_harness_cmd(
     home: Path = typer.Option(None, "--home", help="Harness config root (default: harness's standard dir under $HOME)."),
 ) -> None:
     """Probe the local harness and validate its fingerprint is schema-complete + leak-safe."""
-    from atv_bench.validate import validate_harness_fingerprint
-    manifest = _probe_or_exit(home, harness).manifest
-    report = validate_harness_fingerprint(manifest)
+    from atv_bench import validate as _validate
+    from atv_bench import harnesses as hz
+
+    result = _probe_or_exit(home, harness)
+    manifest = result.manifest
+    resolved = manifest.get("harness") or harness or hz.detect_harness() or hz.DEFAULT_HARNESS
+    report = _validate.validate_harness_fingerprint(manifest)
     if report["ok"]:
-        typer.echo("✓ harness fingerprint is schema-complete and leak-safe")
+        typer.echo(f"✓ {resolved} harness fingerprint is schema-complete and leak-safe")
     else:
-        typer.echo("✗ harness fingerprint has issues:")
+        typer.echo(f"✗ {resolved} harness fingerprint has issues — fix before submitting:")
         for e in report["errors"]:
             typer.echo(f"  - {e}")
+        typer.echo(
+            "  fix: adjust your reader / config so every published name passes the safety "
+            "scan and the schema is complete, then re-run `atv-bench validate-harness "
+            f"--harness {resolved}`. See CONTRIBUTING.md → Add a harness adapter."
+        )
         raise typer.Exit(1)
 
 
@@ -301,11 +394,20 @@ def harnesses(
 ) -> None:
     """List the coding-agent harnesses you can fingerprint (which are live vs. planned)."""
     detected = detect_harness()
+    # Mirror the M10 detect-guard: if >1 live harness config is present, auto-detect is
+    # ambiguous and the probing commands refuse to guess — so this listing must NOT claim
+    # a single confident default either. Both surfaces tell the same story.
+    live_present = [h.key for h in HARNESSES if h.live
+                    and harness_config_present(h.key)]
+    ambiguous = len(live_present) > 1
+    # When ambiguous, no single harness is "the detected one" — the probing commands
+    # refuse to guess, so neither surface may stamp a winner.
+    marked = None if ambiguous else detected
     if json_out:
         payload = [
             {"key": h.key, "title": h.title, "live": h.live,
              "config_root": h.config_root, "summary": h.summary,
-             "detected": h.key == detected}
+             "detected": h.key == marked}
             for h in HARNESSES
         ]
         typer.echo(json.dumps(payload, indent=2))
@@ -314,12 +416,19 @@ def harnesses(
     for h in HARNESSES:
         status = "live" if h.live else "planned"
         mark = "✓" if h.live else "·"
-        here = "  ← detected on this machine" if h.key == detected else ""
+        here = "  ← detected on this machine" if h.key == marked else ""
         typer.echo(f"  {mark} {h.key}  [{status}]  — {h.title}{here}")
         typer.echo(f"      {h.summary}")
-    default_note = detected or DEFAULT_HARNESS
-    typer.echo(f"\nDefault (auto-detected): {default_note}. "
-               f"Override with `--harness <key>`.")
+    if ambiguous:
+        typer.echo(
+            f"\nMultiple harnesses detected ({', '.join(live_present)}): auto-detect is "
+            "ambiguous. Name one explicitly with `--harness <key>` — the probing commands "
+            "won't guess which to publish."
+        )
+    else:
+        default_note = detected or DEFAULT_HARNESS
+        typer.echo(f"\nDefault (auto-detected): {default_note}. "
+                   f"Override with `--harness <key>`.")
 
 
 @app.command()
