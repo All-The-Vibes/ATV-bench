@@ -96,8 +96,35 @@ def test_read_toml_non_utf8_is_malformed_not_crash(tmp_path):
     assert out.reason == reader.REASON_MALFORMED
 
 
-def test_read_toml_missing_file_is_not_readable(tmp_path):
+def test_read_toml_missing_file_is_absent(tmp_path):
+    """A genuinely-missing file is REASON_ABSENT (distinct from an existing-but-
+    unreadable file, which is REASON_NOT_READABLE). The probe skips ABSENT optional
+    configs but flags NOT_READABLE ones, so an existing-broken config fails closed."""
     out = reader.read_toml(tmp_path / "nope.toml", tmp_path)
+    assert not out.ok
+    assert out.reason == reader.REASON_ABSENT
+
+
+def test_read_toml_existing_unreadable_is_not_readable(tmp_path):
+    """An existing path that can't be read as a file (a directory in its place →
+    OSError) is REASON_NOT_READABLE, NOT absent — so callers can fail closed on it."""
+    p = tmp_path / "config.toml"
+    p.mkdir()
+    out = reader.read_toml(p, tmp_path)
+    assert not out.ok
+    assert out.reason == reader.REASON_NOT_READABLE
+
+
+def test_read_json_missing_file_is_absent(tmp_path):
+    out = reader.read_json(tmp_path / "nope.json", tmp_path)
+    assert not out.ok
+    assert out.reason == reader.REASON_ABSENT
+
+
+def test_read_json_existing_unreadable_is_not_readable(tmp_path):
+    p = tmp_path / "settings.json"
+    p.mkdir()
+    out = reader.read_json(p, tmp_path)
     assert not out.ok
     assert out.reason == reader.REASON_NOT_READABLE
 

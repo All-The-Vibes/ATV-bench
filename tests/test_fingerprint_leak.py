@@ -802,6 +802,68 @@ def test_codex_malformed_config_flags_mcps_unknown(tmp_path):
     )
 
 
+def test_codex_existing_unreadable_config_flags_unknown(tmp_path):
+    """Santa PR#9 round 3 (reviewer B): a config.toml that EXISTS but is unreadable
+    (a directory where a file is expected → OSError → not_readable) must NOT be treated
+    like 'absent'. An absent optional config yields no unknown; an existing-but-broken
+    one must flag model+mcps unknown so the CLI guard fails closed, never publishes an
+    empty confident manifest."""
+    home = tmp_path / ".codex"
+    home.mkdir()
+    (home / "config.toml").mkdir()  # exists, but not a readable file
+    result = fp.probe_codex(home)
+    fields = {u["field"] for u in result.manifest["unknown"]}
+    assert "model" in fields and "mcps" in fields, (
+        f"existing-unreadable config.toml must flag model+mcps unknown, "
+        f"got unknown={result.manifest['unknown']}"
+    )
+
+
+def test_claude_existing_unreadable_settings_flags_model_unknown(tmp_path):
+    """Same existing-but-unreadable gap for claude settings.json."""
+    home = tmp_path / ".claude"
+    (home / "skills").mkdir(parents=True)
+    (home / "settings.json").mkdir()  # exists, unreadable as a file
+    result = fp.probe_claude_code(home)
+    fields = {u["field"] for u in result.manifest["unknown"]}
+    assert "model" in fields, (
+        f"existing-unreadable settings.json must flag model unknown, "
+        f"got unknown={result.manifest['unknown']}"
+    )
+
+
+def test_claude_existing_unreadable_mcp_source_flags_unknown(tmp_path):
+    """Santa PR#9 round 3 (reviewer B): an existing-but-unreadable ~/.claude.json must
+    flag mcps unknown, not silently emit mcps=[] (which reads as 'no MCP servers')."""
+    home = tmp_path / ".claude"
+    (home / "skills").mkdir(parents=True)
+    (home / "settings.json").write_text(json.dumps({"model": "claude-opus-4-8"}))
+    (home.parent / ".claude.json").mkdir()  # exists, unreadable as a file
+    result = fp.probe_claude_code(home)
+    fields = {u["field"] for u in result.manifest["unknown"]}
+    assert "mcps" in fields, (
+        f"existing-unreadable ~/.claude.json must flag mcps unknown, "
+        f"got unknown={result.manifest['unknown']}"
+    )
+
+
+def test_claude_existing_unreadable_installed_plugins_flags_unknown(tmp_path):
+    """An existing-but-unreadable installed_plugins.json must flag plugins unknown, not
+    silently drop nested plugin skills/agents."""
+    home = tmp_path / ".claude"
+    (home / "skills").mkdir(parents=True)
+    (home / "plugins").mkdir()
+    (home / "plugins" / "installed_plugins.json").mkdir()  # exists, unreadable as a file
+    (home / "settings.json").write_text(json.dumps({
+        "model": "claude-opus-4-8", "enabledPlugins": {"p@m": True}}))
+    result = fp.probe_claude_code(home)
+    fields = {u["field"] for u in result.manifest["unknown"]}
+    assert "plugins" in fields, (
+        f"existing-unreadable installed_plugins.json must flag plugins unknown, "
+        f"got unknown={result.manifest['unknown']}"
+    )
+
+
 @pytest.mark.parametrize("shape", ["[]", "42", '"a string"', "null", "true"])
 def test_claude_nondict_primary_config_flags_model_malformed(tmp_path, shape):
     """Santa PR#9 round 2 (both reviewers): a PARSEABLE but non-dict settings.json

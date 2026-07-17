@@ -14,6 +14,7 @@ from typing import Any
 
 # Reason enum surfaced into manifest["unknown"][*]["reason"].
 REASON_NOT_READABLE = "not_readable"
+REASON_ABSENT = "absent"
 REASON_MALFORMED = "malformed"
 REASON_EMPTY = "empty"
 REASON_PERMISSION = "permission_denied"
@@ -21,7 +22,7 @@ REASON_SYMLINK_ESCAPE = "symlink_escape"
 REASON_NAME_UNSAFE = "name_failed_safety_scan"
 
 VALID_REASONS = frozenset({
-    REASON_NOT_READABLE, REASON_MALFORMED, REASON_EMPTY,
+    REASON_NOT_READABLE, REASON_ABSENT, REASON_MALFORMED, REASON_EMPTY,
     REASON_PERMISSION, REASON_SYMLINK_ESCAPE, REASON_NAME_UNSAFE,
 })
 
@@ -57,7 +58,7 @@ def read_json(path: Path, root: Path) -> ReadOutcome:
         return ReadOutcome(reason=REASON_SYMLINK_ESCAPE)
     try:
         if not path.exists():
-            return ReadOutcome(reason=REASON_NOT_READABLE)
+            return ReadOutcome(reason=REASON_ABSENT)
         raw = path.read_text(encoding="utf-8")
     except PermissionError:
         return ReadOutcome(reason=REASON_PERMISSION)
@@ -85,7 +86,7 @@ def read_toml(path: Path, root: Path) -> ReadOutcome:
         return ReadOutcome(reason=REASON_SYMLINK_ESCAPE)
     try:
         if not path.exists():
-            return ReadOutcome(reason=REASON_NOT_READABLE)
+            return ReadOutcome(reason=REASON_ABSENT)
         raw = path.read_text(encoding="utf-8")
     except PermissionError:
         return ReadOutcome(reason=REASON_PERMISSION)

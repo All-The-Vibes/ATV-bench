@@ -164,7 +164,7 @@ def probe_claude_code(home: Path) -> ProbeResult:
         elif plugins_map is not None:
             # version==2 but plugins is present and not a dict → malformed manifest.
             b.note_unknown("plugins", reader.REASON_MALFORMED)
-    elif not manifest_out.ok and manifest_out.reason != reader.REASON_NOT_READABLE:
+    elif not manifest_out.ok and manifest_out.reason != reader.REASON_ABSENT:
         b.note_unknown("plugins", manifest_out.reason or reader.REASON_MALFORMED)
 
     # Dedupe skills across top-level + all plugins.
@@ -183,7 +183,7 @@ def probe_claude_code(home: Path) -> ProbeResult:
         if isinstance(servers, dict):
             # Read only the KEYS (server names), never the values (command/env/url/token).
             mcps = b.safe_names(list(servers.keys()), "mcps")
-    elif not mcp_cfg.ok and mcp_cfg.reason != reader.REASON_NOT_READABLE:
+    elif not mcp_cfg.ok and mcp_cfg.reason != reader.REASON_ABSENT:
         b.note_unknown("mcps", mcp_cfg.reason or reader.REASON_MALFORMED)
 
     manifest: dict[str, Any] = {
@@ -294,7 +294,7 @@ def probe_copilot_cli(home: Path) -> ProbeResult:
             # Read only the KEYS (server names), never the values (command/env/url/token).
             names = [k for k in servers.keys() if k not in disabled_mcps]
             mcps = b.safe_names(names, "mcps")
-    elif not mcp_cfg.ok and mcp_cfg.reason != reader.REASON_NOT_READABLE:
+    elif not mcp_cfg.ok and mcp_cfg.reason != reader.REASON_ABSENT:
         b.note_unknown("mcps", mcp_cfg.reason or reader.REASON_MALFORMED)
 
     manifest: dict[str, Any] = {
@@ -349,7 +349,7 @@ def probe_codex(home: Path) -> ProbeResult:
         if isinstance(servers, dict):
             # Read only the KEYS (server names), never the table bodies (command/env/url).
             mcp_candidates = list(servers.keys())
-    elif not config.ok and config.reason != reader.REASON_NOT_READABLE:
+    elif not config.ok and config.reason != reader.REASON_ABSENT:
         # config.toml is the single untrusted source for BOTH model and mcps — an
         # unreadable/empty/malformed config must flag every dependent field, else
         # mcps=[] reads as a confident "no MCP servers" when the truth is "unreadable".

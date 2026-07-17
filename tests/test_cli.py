@@ -200,6 +200,19 @@ def test_probe_permission_denied_primary_config_fails_closed(tmp_path, monkeypat
     assert "settings.json" in result.output.lower()
 
 
+def test_codex_existing_unreadable_config_fails_closed(tmp_path):
+    """Santa PR#9 round 3 (reviewer B): an existing-but-unreadable config.toml (a dir
+    where a file is expected) must fail closed, not exit 0 with an empty manifest. The
+    file exists (so the .exists() branch passes) but is unreadable, so the guard must
+    catch it via the probe's unknown[model] not_readable marker."""
+    home = tmp_path / ".codex"
+    home.mkdir()
+    (home / "config.toml").mkdir()  # exists, unreadable as a file
+    result = runner.invoke(app, ["fingerprint", "--harness", "codex", "--home", str(home)])
+    assert result.exit_code != 0, result.output
+    assert "config.toml" in result.output.lower()
+
+
 
 
 # --- T7: validate-harness failure copy names harness + prose + fix (M11) ---
