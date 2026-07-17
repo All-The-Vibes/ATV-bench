@@ -173,24 +173,29 @@ attacks the readers alone don't stop: fingerprint a fat config then run a lean o
 present a `claude-code` fingerprint for a `codex`-built bot.
 
 The provenance binding closes the post-capture gap. At build time `capture_provenance`
-binds four facets — `{harness, bot_sha256, fingerprint_sha256, captured_at}` — into a
-token whose `signature` is a digest over that canonical payload. The token ships inside
-`submission.json` under `"provenance"`. `verify_submission_provenance` (run at submit and
-merge time) recomputes each facet from the record's *own* bot hash + manifest and
-re-derives the signature; any post-capture edit to the manifest, a swapped bot, or a
-swapped harness fails closed with a named reason.
+binds the facets — `{version, harness, bot_sha256, fingerprint_sha256, captured_at, signed}`
+— into a token that carries two layers: `signature`, an unkeyed salted-SHA-256 digest over
+the whole payload that ANY verifier (even the keyless Phase-1 board) checks so a naive
+post-capture edit to *any* facet — incl. `captured_at` — fails closed; and, when
+`ATV_PROVENANCE_KEY` is set, `hmac`, the anti-forgery layer that grants the signed tier. The
+token ships inside `submission.json` under `"provenance"`. `verify_submission_provenance`
+(and the trusted board build in `LeagueStore`) recompute each facet from the record's *own*
+re-hashed bot bytes + manifest and re-derive both layers; any post-capture edit to the
+manifest, a swapped bot, or a swapped harness fails closed with a named reason.
 
 Trust level is explicit and honest:
 
-- **Unkeyed (default): tamper-evident, self-attested.** The signature is a salted SHA-256
-  digest. It detects hand-edits and swaps, but runs entirely on the contributor's machine,
-  so a determined attacker who recomputes the whole token can defeat it. These rows are
-  labelled **self-attested**.
-- **Keyed (`ATV_PROVENANCE_KEY` set): HMAC-signed.** Anti-tamper on the token itself. A row
-  is only truly **verified** once a trusted sandbox re-fingerprints the harness at match
-  time and re-signs with a server-held key — deferred to Phase 2 (the containerized
-  runner). The `signed` flag on the token drives the leaderboard's verified/self-attested
-  labelling.
+- **Unkeyed (default): tamper-evident, self-attested.** The `signature` is a salted SHA-256
+  digest over every facet. It detects hand-edits and swaps, but runs entirely on the
+  contributor's machine, so a determined attacker who recomputes the whole token can defeat
+  it. These rows are labelled **self-attested**.
+- **Keyed (`ATV_PROVENANCE_KEY` set): HMAC-signed.** Adds an `hmac` layer — anti-forgery on
+  the token itself. A row is only truly **verified** once a trusted sandbox re-fingerprints
+  the harness at match time and re-signs with a server-held key — deferred to Phase 2 (the
+  containerized runner). A keyed token still publishes on the keyless Phase-1 board (as
+  self-attested, its unkeyed `signature` checked); a key-holding verifier upgrades it to
+  **signed**. The verify RESULT (not the token's own `signed` bit) drives the leaderboard's
+  verified/self-attested labelling.
 
 This is deliberately client tamper-evidence, not anti-forgery: it makes lying *evident*
 (edits break verification, logs remain the dispute mechanism) without over-claiming a

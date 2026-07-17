@@ -91,9 +91,12 @@ def test_unkeyed_capture_is_self_attested():
 def test_keyed_capture_is_signed():
     tok = _capture(key="s3cret-signing-key")
     assert tok["signed"] is True
-    # a different key yields a different signature over the same payload
+    # keyed tokens carry an `hmac` anti-forgery layer; a different key yields a different
+    # hmac over the same payload (the unkeyed `signature` is key-independent by design).
+    assert tok.get("hmac")
     other = _capture(key="different-key")
-    assert tok["signature"] != other["signature"]
+    assert tok["hmac"] != other["hmac"]
+    assert tok["signature"] == other["signature"]  # unkeyed digest is the same payload
 
 
 def test_capture_never_embeds_the_key():
@@ -335,3 +338,19 @@ def test_keyless_verifier_still_catches_tamper_on_keyed_token():
     )
     assert res.ok is False
     assert any("fingerprint" in r.lower() for r in res.reasons), res.reasons
+
+
+def test_keyed_token_captured_at_tamper_caught_by_keyless_verifier():
+    """Santa PR#10 round 3 (reviewer B): captured_at is advertised as a BOUND facet, so a
+    keyed token with only captured_at edited must be caught even by a KEYLESS verifier.
+    The token carries an always-checkable unkeyed digest binding EVERY facet (incl.
+    captured_at); the HMAC is an additional keyed layer for the signed tier only. A keyless
+    board still validates the unkeyed digest, so a captured_at edit fails closed."""
+    tok = _capture(key="contributor-key")  # keyed token
+    tampered = {**tok, "captured_at": "1999-01-01T00:00:00Z"}
+    res = verify_provenance(
+        provenance=tampered, harness="claude-code", bot_sha256=BOT_A,
+        fingerprint=FP_CLAUDE, key=None,   # keyless board
+    )
+    assert res.ok is False, res.reasons
+    assert res.signed is False

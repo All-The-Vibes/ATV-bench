@@ -55,13 +55,17 @@ def fingerprint_hash(fingerprint: dict[str, Any]) -> str:
     return hashlib.sha256(_canonical(fingerprint).encode("utf-8")).hexdigest()
 
 
-def _sign(payload: dict[str, Any], key: str | None) -> str:
-    """Digest over the canonical signed payload. HMAC-SHA256 when keyed, salted SHA-256
-    otherwise. The exact same construction is recomputed in verify."""
+def _unkeyed_digest(payload: dict[str, Any]) -> str:
+    """Salted SHA-256 over the canonical payload — checkable by ANYONE (no key). Binds
+    every facet incl. captured_at, so a keyless board can still detect a naive edit."""
     msg = _canonical(payload).encode("utf-8")
-    if key:
-        return hmac.new(key.encode("utf-8"), msg, hashlib.sha256).hexdigest()
     return hashlib.sha256(_UNKEYED_SALT + b"\x00" + msg).hexdigest()
+
+
+def _hmac_digest(payload: dict[str, Any], key: str) -> str:
+    """HMAC-SHA256 over the canonical payload — the keyed tier's anti-forgery layer."""
+    msg = _canonical(payload).encode("utf-8")
+    return hmac.new(key.encode("utf-8"), msg, hashlib.sha256).hexdigest()
 
 
 def _signed_payload(*, version: str, harness: str, bot_sha256: str,
@@ -78,14 +82,14 @@ def _signed_payload(*, version: str, harness: str, bot_sha256: str,
 
 def capture_provenance(*, harness: str, bot_sha256: str, fingerprint: dict[str, Any],
                        captured_at: str, key: str | None = None) -> dict[str, Any]:
-    """Bind the four facets into a provenance token at fingerprint/build time.
+    """Bind the facets into a provenance token at fingerprint/build time.
 
     `captured_at` is passed in (not read from a clock) so capture is deterministic and
-    testable. `key` (from ATV_PROVENANCE_KEY at the call site) upgrades the signature from
-    an unkeyed digest to HMAC; the key itself is never stored in the token. The `signed`
-    tier bit and the format `version` are BOTH inside the signed payload, so neither can be
-    edited without breaking verification. Returns a plain dict ready to embed in the
-    submission record.
+    testable. The token ALWAYS carries `signature` — an unkeyed salted digest over the whole
+    payload (incl. captured_at, signed, version) that ANY verifier (even a keyless board) can
+    check, so a naive post-capture edit to any facet fails closed. When `key` is set
+    (ATV_PROVENANCE_KEY), the token additionally carries `hmac` — the anti-forgery layer that
+    grants the `signed` tier only to a key-holding verifier. The key itself is never stored.
     """
     fp_hash = fingerprint_hash(fingerprint)
     signed = bool(key)
@@ -93,7 +97,10 @@ def capture_provenance(*, harness: str, bot_sha256: str, fingerprint: dict[str, 
         version=PROVENANCE_VERSION, harness=harness, bot_sha256=bot_sha256,
         fingerprint_sha256=fp_hash, captured_at=captured_at, signed=signed,
     )
-    return {**payload, "signature": _sign(payload, key)}
+    token = {**payload, "signature": _unkeyed_digest(payload)}
+    if key:
+        token["hmac"] = _hmac_digest(payload, key)
+    return token
 
 
 @dataclass(frozen=True)
@@ -150,32 +157,37 @@ def verify_provenance(*, provenance: dict[str, Any] | None, harness: str,
     # reported as signed). Editing any signed facet — including `signed`/`version` — breaks
     # the recomputed digest regardless. Constant-time compare.
     token_signed = bool(provenance["signed"])
-    # A keyed (signed=True) token can only have its HMAC signature validated by a verifier
-    # that holds the key. A KEYLESS verifier (the Phase-1 board, key is None) cannot check
-    # an HMAC — so it does NOT recompute/fail on the signature; it downgrades the tier to
-    # self-attested and relies on the facet checks below (fingerprint/harness/bot/version),
-    # which are independent of the signature and still catch every tamper attack. This
-    # mirrors the keyed-verifier-accepts-unkeyed direction: an honest keyed contributor
-    # must not be dropped from a keyless board just because it can't re-derive the HMAC.
-    keyed_token_but_keyless_verifier = token_signed and not key
-    if keyed_token_but_keyless_verifier:
-        sig_ok = False  # not validated (can't be), so the tier is not "signed"
-    else:
-        sign_key = key if token_signed else None
-        claimed_payload = _signed_payload(
-            version=provenance["version"], harness=provenance["harness"],
-            bot_sha256=provenance["bot_sha256"],
-            fingerprint_sha256=provenance["fingerprint_sha256"],
-            captured_at=provenance["captured_at"], signed=token_signed,
-        )
-        expected_sig = _sign(claimed_payload, sign_key)
-        sig_ok = hmac.compare_digest(str(provenance["signature"]), expected_sig)
-        if not sig_ok:
-            reasons.append("provenance signature does not verify (token tampered or wrong key)")
+    claimed_payload = _signed_payload(
+        version=provenance["version"], harness=provenance["harness"],
+        bot_sha256=provenance["bot_sha256"],
+        fingerprint_sha256=provenance["fingerprint_sha256"],
+        captured_at=provenance["captured_at"], signed=token_signed,
+    )
 
-    # The reported tier is the token's claim AND a real key that validated it: a keyless
-    # verify can never report the signed tier.
-    reported_signed = token_signed and bool(key) and sig_ok
+    # 1) The unkeyed `signature` is ALWAYS checked, by any verifier (keyed or keyless). It
+    # binds EVERY facet — incl. captured_at, signed, version — so a naive post-capture edit
+    # to any facet (leaving a stale signature) fails closed even on a keyless Phase-1 board.
+    # This is the self-attested integrity layer; it is the documented trust boundary (a
+    # determined attacker who recomputes the whole token can still defeat the unkeyed tier).
+    expected_unkeyed = _unkeyed_digest(claimed_payload)
+    unkeyed_ok = hmac.compare_digest(str(provenance.get("signature", "")), expected_unkeyed)
+    if not unkeyed_ok:
+        reasons.append("provenance signature does not verify (token tampered)")
+
+    # 2) The `hmac` (present only on keyed tokens) is the anti-forgery layer that grants the
+    # `signed` tier. Only a key-holding verifier can validate it. A keyless board cannot, so
+    # it reports self-attested (signed=False) — but the unkeyed check above still guarded
+    # integrity. A keyed token that CLAIMS signed=True but is missing/invalid hmac under a
+    # key-holding verifier fails closed (a keyless attacker can't forge the HMAC).
+    hmac_ok = False
+    if token_signed and key:
+        expected_hmac = _hmac_digest(claimed_payload, key)
+        hmac_ok = hmac.compare_digest(str(provenance.get("hmac", "")), expected_hmac)
+        if not hmac_ok:
+            reasons.append("provenance HMAC does not verify (token tampered or wrong key)")
+
+    # Signed tier requires the token to claim it, a verifier key, and a valid HMAC.
+    reported_signed = token_signed and bool(key) and hmac_ok
 
     if provenance["version"] != PROVENANCE_VERSION:
         reasons.append(
