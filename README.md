@@ -109,8 +109,36 @@ git+https://github.com/All-The-Vibes/ATV-bench`. Upgrade later with
 Verify your machine is ready:
 
 ```bash
-atv-bench doctor          # python / harness config / gh / docker readiness, with fixes
+atv-bench doctor          # python / harness config / gh / docker / CodeClash readiness, with fixes
 ```
+
+### Real harness-vs-harness match (the spine)
+
+The core loop: **fingerprint** each harness → the **real harness CLI** (`claude`,
+`copilot`) builds its own `main.py` headless → the two bots **compete in a CodeClash
+arena** (Docker) → **ELO + replay**. Nothing hand-written, no faked model string.
+
+Start with the zero-setup real recording — no Docker, no auth, no network:
+
+```bash
+atv-bench run --demo                 # replays a canned but REAL recorded match
+atv-bench run --demo --json          # same, as a stable machine-readable envelope
+```
+
+Then run a live match (needs Docker + a real harness CLI authenticated — see `doctor`):
+
+```bash
+atv-bench run --game lightcycles --a copilot-cli --b claude-code --model claude-opus-4.8
+atv-bench run --game battlesnake  --a claude-code --b claude-code --model claude-opus-4.8 --json
+atv-bench run --list-games --list-harnesses     # discover valid values
+```
+
+Both harnesses run on the **same model** for parity, so the result isolates the
+*harness*, not the model. Phase-1 results are labeled **unverified / local-debug** and
+do **not** publish a ranked number — that needs the Phase-2 gateway (a real match is
+non-deterministic; only the recorded replay is reproducible). Exit codes are stable and
+distinct per failure mode (`0` ok · `3` missing-cli · `5` docker · `9` codeclash-dep …)
+so an agent or CI can branch on them.
 
 ### See the rankings first
 

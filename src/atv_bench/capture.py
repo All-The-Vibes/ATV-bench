@@ -11,7 +11,7 @@ from __future__ import annotations
 import dataclasses
 from pathlib import Path
 
-from atv_bench.fingerprint.scan import _has_secret_pattern, is_secret
+from atv_bench.fingerprint.scan import _has_secret_pattern
 
 # Bounds — a game bot is a handful of small files.
 MAX_FILES = 64
@@ -32,17 +32,20 @@ class CapturedFile:
 
 
 def _is_secret_content(text: str) -> bool:
-    """True if any line of `text` carries a secret shape / high-entropy token."""
+    """True if any line of `text` carries a hard secret PATTERN.
+
+    Content scanning uses PATTERN matching only (token shapes, keys, creds-in-URL, PEM)
+    — NOT the name-entropy heuristic. A bot's own source, a seed README, or minified
+    code legitimately contains high-entropy tokens (markdown links, hashes, base64) that
+    are not secrets; entropy-scanning file BODIES false-positives on all of them. Real
+    leaked credentials still match `_has_secret_pattern`.
+    """
     for line in text.splitlines():
         line = line.strip()
         if not line:
             continue
         if _has_secret_pattern(line):
             return True
-        # token-per-word entropy check (reuses the fingerprint scanner)
-        for tok in line.replace("=", " ").replace(":", " ").split():
-            if len(tok) >= 16 and is_secret(tok):
-                return True
     return False
 
 
