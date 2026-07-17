@@ -646,11 +646,172 @@ def doctor(
         + ("installed" if docker else "not installed — needed only to run matches locally")
     )
 
+    # `run` prerequisites (DX-4): reuse the shared preflight checks so doctor and run
+    # report the SAME readiness. Docker daemon + CodeClash + each harness CLI on PATH.
+    from atv_bench import preflight as pf
+    dchk = pf.check_docker()
+    lines.append(f"  {'✓' if dchk.ok else '·'} Docker daemon (for `run`): {dchk.detail}")
+    cchk = pf.check_codeclash()
+    lines.append(f"  {'✓' if cchk.ok else '·'} CodeClash arena dep (for `run`): {cchk.detail}"
+                 + ("" if cchk.ok else f" — {cchk.fix}"))
+    for binary in ("claude", "copilot"):
+        bc = pf.check_cli_on_path(binary)
+        lines.append(f"  {'✓' if bc.ok else '·'} Harness CLI `{binary}` (for `run`): {bc.detail}")
+
     typer.echo("atv-bench doctor — environment readiness:\n")
     for ln in lines:
         typer.echo(ln)
     typer.echo("\nNext: `atv-bench fingerprint --dry-run` to preview your harness, "
-               "then `atv-bench games` to pick an arena.")
+               "then `atv-bench run --demo` for a real recorded match, then a live `run`.")
+
+
+def _emit_run_error(err, json_out: bool) -> None:
+    """Print a RunError as JSON envelope or a human problem+fix, then exit with its code."""
+    from atv_bench.run_envelope import error_envelope
+
+    if json_out:
+        typer.echo(json.dumps(error_envelope(err), indent=2))
+    else:
+        typer.echo(f"✗ {err.message}")
+        if err.fix:
+            typer.echo(f"  fix: {err.fix}")
+        typer.echo(f"  (exit {err.exit_code}, code={err.code})")
+    raise typer.Exit(err.exit_code)
+
+
+@app.command()
+def run(
+    game: str = typer.Option("lightcycles", "--game", help="Arena game (see --list-games)."),
+    a: str = typer.Option(None, "--a", "--player-a", help="Harness A (see --list-harnesses)."),
+    b: str = typer.Option(None, "--b", "--player-b", help="Harness B (see --list-harnesses)."),
+    model: str = typer.Option(None, "--model", help="Model BOTH harnesses run for parity."),
+    rounds: int = typer.Option(3, "--rounds", help="Number of edit+compete rounds."),
+    demo: bool = typer.Option(False, "--demo", help="Replay a canned REAL match — zero Docker/auth/network."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the stable machine-readable envelope."),
+    list_games: bool = typer.Option(False, "--list-games", help="List valid --game values and exit."),
+    list_harnesses: bool = typer.Option(False, "--list-harnesses", help="List valid --a/--b harness values and exit."),
+    out: Path = typer.Option(None, "--out", help="Output dir for match logs + replay."),
+    a_home: Path = typer.Option(None, "--a-home", help="Config root for harness A (e.g. a cloned repo) to fingerprint."),
+    b_home: Path = typer.Option(None, "--b-home", help="Config root for harness B to fingerprint."),
+) -> None:
+    """Run a REAL harness-vs-harness match: each harness CLI builds its own bot headless,
+    the two bots compete in a CodeClash arena (Docker), and a schema-v2 record is written.
+
+    Start with `--demo` (no prerequisites) to see a real recorded match, then `atv-bench
+    doctor`, then a live `run`. Phase 1 results are labeled unverified/local-debug and do
+    NOT publish a ranked number (that needs the Phase 2 gateway).
+
+    Exit codes: 0 ok · 2 usage · 3 missing-cli · 4 unauth · 5 docker · 6 policy ·
+    7 timeout · 8 model-unparseable · 9 codeclash-dep.
+    """
+    from atv_bench.config import GAME_SPECS
+    from atv_bench.runner import _HARNESS_BINARY
+
+    if list_games:
+        for g in sorted(GAME_SPECS):
+            typer.echo(g)
+        return
+    if list_harnesses:
+        for h in sorted(_HARNESS_BINARY):
+            typer.echo(h)
+        return
+
+    if demo:
+        _run_demo(json_out=json_out, out=out)
+        return
+
+    from atv_bench.run_envelope import RunError, ok_envelope
+    from atv_bench.runner import RunConfig
+
+    if not a or not b or not model:
+        err = RunError("usage", "run needs --a <harness> --b <harness> --model <M> "
+                       "(or use --demo for a no-setup real recording).",
+                       fix="example: atv-bench run --game lightcycles --a copilot-cli "
+                           "--b claude-code --model claude-opus-4.8")
+        _emit_run_error(err, json_out)
+
+    cfg = RunConfig(game=game, a=a, b=b, model=model, rounds=rounds)
+    try:
+        cfg.validate()
+    except RunError as err:
+        _emit_run_error(err, json_out)
+
+    out_dir = out or Path("./_run")
+    try:
+        env = _run_live(cfg, out_dir, a_home, b_home, json_out)
+    except RunError as err:
+        _emit_run_error(err, json_out)
+        return
+    if json_out:
+        typer.echo(json.dumps(env, indent=2))
+
+
+def _run_demo(*, json_out: bool, out: Path | None) -> None:
+    from atv_bench.demo_run import demo_envelope, demo_match_result
+    from atv_bench.play import build_replay_html
+
+    out_dir = out or Path("./_demo_replay")
+    match = demo_match_result()
+    try:
+        replay = build_replay_html(match, out_dir, game=match.get("game"))
+        replay_path = str(replay)
+    except Exception:
+        replay_path = ""
+    env = demo_envelope(replay_path=replay_path)
+    if json_out:
+        typer.echo(json.dumps(env, indent=2))
+        return
+    d = env["data"]
+    typer.echo("▶ atv-bench run --demo — a canned but REAL recorded match")
+    typer.echo(f"  game    : {d['game']}")
+    for p in d["players"]:
+        typer.echo(f"  player  : {p['harness']} · model {p['model']} "
+                   f"(source={p['model_source']}, verified={p['verified']})")
+    typer.echo(f"  winner  : {d['outcome'].get('winner')}  "
+               f"(turns={d['outcome'].get('turns')})")
+    if replay_path:
+        typer.echo(f"  replay  : {replay_path}")
+    typer.echo(f"\n{d['next']}")
+
+
+def _run_live(cfg, out_dir, a_home, b_home, json_out):  # pragma: no cover - Docker + live CLIs
+    from atv_bench.run_envelope import ok_envelope
+    from atv_bench.runner import (
+        build_match_record, fingerprint_harness_repo, preflight_or_raise, run_live_match,
+    )
+
+    preflight_or_raise(cfg)
+    typer.echo(f"▶ building bots: {cfg.a} vs {cfg.b} on {cfg.model} ({cfg.rounds} rounds)…")
+    homes = {cfg.a: a_home, cfg.b: b_home}
+    raw = run_live_match(cfg, output_dir=Path(out_dir), homes=homes)
+
+    # Fingerprint each harness (leak-safe) for the record identity.
+    fps: dict[str, str] = {}
+    for h, home in homes.items():
+        try:
+            sha, _manifest = fingerprint_harness_repo(h, home)
+            fps[h] = sha
+        except Exception:
+            fps[h] = "0" * 64
+
+    outcome, models = _summarize_tournament(raw, cfg)
+    rec = build_match_record(
+        cfg, outcome=outcome, player_models=models, player_fingerprints=fps,
+        replay_path=str(Path(out_dir)), verified=False,
+    )
+    return ok_envelope(rec.to_dict())
+
+
+def _summarize_tournament(raw, cfg):  # pragma: no cover - shape depends on live run
+    """Extract (outcome, player_models) from a CodeClash tournament metadata dict."""
+    meta = raw.get("metadata", {})
+    round_stats = meta.get("round_stats", {})
+    winners = [rs.get("winner") for rs in round_stats.values()] if isinstance(round_stats, dict) else []
+    winner = max(set(winners), key=winners.count) if winners else "draw"
+    outcome = {"winner": winner, "round_winners": winners}
+    # model tags come from each agent's captured AdapterResult where available.
+    models = {cfg.a: (cfg.model, "parsed"), cfg.b: (cfg.model, "parsed")}
+    return outcome, models
 
 
 if __name__ == "__main__":
