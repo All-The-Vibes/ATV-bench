@@ -270,3 +270,24 @@ def test_submit_cli_keyed_build_does_not_overclaim_signed_on_phase1_board(tmp_pa
     assert "self-attested" in low, result.output
     # Must NOT flatly claim the row is signed/verified on the current board.
     assert "— signed (hmac)." not in low
+
+
+def test_verify_submission_explicit_keynone_forces_keyless_even_with_env(monkeypatch):
+    """Santa PR#10 round 5 (reviewer B): an EXPLICIT key=None must force a KEYLESS verify
+    (simulate the Phase-1 board) even when ATV_PROVENANCE_KEY is set in the environment —
+    otherwise a caller can't reproduce the board's actual (self-attested) tier. Omitting
+    the arg still falls back to the env key."""
+    monkeypatch.setenv("ATV_PROVENANCE_KEY", "contributor-secret")
+    from atv_bench.submit import verify_submission_provenance
+    bot = _write_bot()
+    sub = build_submission(bot_path=bot, fingerprint=_FP, identity="octocat",
+                           game="battlesnake", captured_at="2026-07-17T00:00:00Z")
+    assert sub["provenance"]["signed"] is True  # built keyed (env set)
+    # explicit key=None → keyless board tier (self-attested)
+    keyless = verify_submission_provenance(sub, bot_path=bot, key=None)
+    assert keyless.ok is True
+    assert keyless.signed is False, "explicit key=None must force keyless (self-attested)"
+    # omitted key → env fallback → keyed board tier (signed)
+    keyed = verify_submission_provenance(sub, bot_path=bot)
+    assert keyed.ok is True
+    assert keyed.signed is True, "omitted key must fall back to ATV_PROVENANCE_KEY"

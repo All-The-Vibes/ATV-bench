@@ -24,6 +24,11 @@ from atv_bench.fingerprint.provenance import (
 )
 from atv_bench.fingerprint.scan import is_secret
 
+# Sentinel so an EXPLICIT key=None forces a keyless verify, distinct from "arg omitted"
+# (which falls back to ATV_PROVENANCE_KEY). Without this, `key=None` could not simulate the
+# keyless Phase-1 board when the env var happened to be set.
+_KEY_FROM_ENV = object()
+
 # Bots are single small files (v1 arena bots). Guard shape/size before execution.
 _MAX_BOT_BYTES = 256 * 1024
 _REPO_URL = "https://github.com/All-The-Vibes/ATV-bench"
@@ -168,7 +173,7 @@ def build_submission(
 
 def verify_submission_provenance(record: dict[str, Any],
                                  *, bot_path: str | None = None,
-                                 key: str | None = None) -> VerifyResult:
+                                 key: str | None | object = _KEY_FROM_ENV) -> VerifyResult:
     """Re-derive the bound facets from a submission record and confirm the embedded
     provenance token still matches.
 
@@ -179,9 +184,11 @@ def verify_submission_provenance(record: dict[str, Any],
     source of truth at a trust boundary). When `bot_path` is omitted, it falls back to the
     record's self-reported hash (adequate for a pre-PR self-check, not a trust gate).
 
-    `key` defaults to ATV_PROVENANCE_KEY so a token signed by a trusted sandbox is verified
-    with the same key. A record missing provenance fails closed (ok=False).
+    `key` OMITTED defaults to ATV_PROVENANCE_KEY so a token signed by a trusted sandbox is
+    verified with the same key. An EXPLICIT `key=None` forces a KEYLESS verify (simulate the
+    Phase-1 board) even when the env var is set. A record missing provenance fails closed.
     """
+    resolved_key = os.environ.get("ATV_PROVENANCE_KEY") if key is _KEY_FROM_ENV else key
     if bot_path is not None:
         bot_sha256 = hashlib.sha256(Path(bot_path).read_bytes()).hexdigest()
     else:
@@ -200,7 +207,7 @@ def verify_submission_provenance(record: dict[str, Any],
         harness=str(fp.get("harness", "unknown")),
         bot_sha256=bot_sha256,
         fingerprint=fp,
-        key=key if key is not None else os.environ.get("ATV_PROVENANCE_KEY"),
+        key=resolved_key,
     )
 
 
