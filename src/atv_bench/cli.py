@@ -14,6 +14,7 @@ from pathlib import Path
 import typer
 
 from atv_bench.fingerprint import probe as fp
+from atv_bench.games import GAMES, DEFAULT_GAME, assert_playable
 from atv_bench.submit import run_preflight, submission_status_trail
 
 app = typer.Typer(
@@ -89,7 +90,7 @@ def fingerprint(
 @app.command()
 def submit(
     bot: Path = typer.Argument(None, help="Path to the harness-built bot file (e.g. main.py)."),
-    game: str = typer.Option("battlesnake", "--game", help="Arena the bot targets."),
+    game: str = typer.Option(DEFAULT_GAME, "--game", help="Arena the bot targets (see `atv-bench games`)."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Run preflight + emit the submission JSON; no PR."),
     live: bool = typer.Option(False, "--live", help="Open the PR live via gh (fork, branch, push, PR)."),
     home: Path = typer.Option(None, "--home", help="Harness config root (default ~/.claude)."),
@@ -112,6 +113,15 @@ def submit(
         gh_preflight_runner,
         open_submission_pr,
     )
+
+    # Fail closed on a game with no trusted arena (santa-league integrity): a bot for a
+    # planned/unknown game can never be adjudicated, so reject it here before any PR work
+    # rather than accepting a dead submission the match job will only forfeit.
+    try:
+        assert_playable(game)
+    except ValueError as e:
+        typer.echo(f"Cannot submit: {e}")
+        raise typer.Exit(2)
 
     # --live uses the real gh/git-backed preflight; otherwise a stub exercises the contract
     # + reporting without touching gh. --live requires a bot and an identity.
@@ -271,6 +281,168 @@ def validate_pr_paths_cmd(
         for e in report["errors"]:
             typer.echo(f"  - {e}")
         raise typer.Exit(1)
+
+
+@app.command()
+def games(
+    json_out: bool = typer.Option(False, "--json", help="Emit the games list as JSON."),
+) -> None:
+    """List the arenas you can submit a bot to (which are live vs. planned)."""
+    if json_out:
+        payload = [
+            {"key": g.key, "title": g.title, "live": g.live,
+             "entrypoint": g.entrypoint, "summary": g.summary}
+            for g in GAMES
+        ]
+        typer.echo(json.dumps(payload, indent=2))
+        return
+    typer.echo("Games you can target with `atv-bench submit --game <key>`:\n")
+    for g in GAMES:
+        status = "live" if g.live else "planned"
+        mark = "✓" if g.live else "·"
+        typer.echo(f"  {mark} {g.key}  [{status}]  — {g.title}")
+        typer.echo(f"      {g.summary}")
+    typer.echo(f"\nDefault: {DEFAULT_GAME}. Bot entrypoint: main.py.")
+
+
+@app.command()
+def board(
+    store: Path = typer.Option(None, "--store", help="League store dir (default: ./league)."),
+    out: Path = typer.Option(None, "--out", help="Where to write the static board (default: ./_board)."),
+    demo: bool = typer.Option(False, "--demo", help="Build a populated sample board (no store needed)."),
+    open_browser: bool = typer.Option(True, "--open/--no-open", help="Open the board in a browser."),
+) -> None:
+    """Build the leaderboard locally and open it — see where every harness ranks.
+
+    Renders the same static site the GitHub Action publishes, from your local league
+    store (submissions + match history). With --demo it fabricates a populated sample
+    board so you can see the ranking UI before you've submitted anything. The viewer
+    HTML is bundled in the package, so this works from an installed tool with no clone.
+    """
+    from atv_bench.publish import build_site
+
+    out_dir = out or Path("_board")
+
+    tmp_store: Path | None = None
+    if demo:
+        import tempfile
+        from atv_bench.demo import build_demo_store
+        tmp_store = Path(tempfile.mkdtemp(prefix="atv-demo-store-"))
+        build_demo_store(str(tmp_store))
+        store_dir = str(tmp_store)
+    else:
+        store_dir = str(store or Path("league"))
+        if not Path(store_dir).exists():
+            typer.echo(
+                f"No league store at {store_dir}. Options:\n"
+                f"  • `atv-bench board --demo` to see a populated sample board, or\n"
+                f"  • point --store at a checkout's league/ dir, or\n"
+                f"  • view the live board at https://all-the-vibes.github.io/ATV-bench/"
+            )
+            raise typer.Exit(1)
+
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        site = build_site(str(out_dir), store_dir=store_dir, updated_at=now)
+    finally:
+        # The demo store is throwaway: build_site has already read it and written the
+        # self-contained site (json + html), so drop the temp dir now rather than leak it.
+        if tmp_store is not None:
+            import shutil
+            shutil.rmtree(tmp_store, ignore_errors=True)
+    index = site / "index.html"
+    doc_path = site / "leaderboard.json"
+    rows = json.loads(doc_path.read_text()).get("rows", [])
+    typer.echo(f"✓ Built board with {len(rows)} row(s): {index}")
+    if not rows and not demo:
+        typer.echo("  (empty — no submissions in this store yet. Try `atv-bench board --demo`.)")
+
+    # The board is a static file; fetch() needs http (file:// blocks it). Serve it
+    # locally and open that, unless --no-open (tests + CI use --no-open).
+    if open_browser:
+        _serve_and_open(site)
+    else:
+        typer.echo(f"  Open it with: python -m http.server --directory {site}")
+
+
+def _serve_and_open(site: Path) -> None:
+    """Serve `site` on a local port and open a browser at it (fetch needs http, not file://)."""
+    import functools
+    import http.server
+    import threading
+    import webbrowser
+
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(site))
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    port = httpd.server_address[1]
+    url = f"http://127.0.0.1:{port}/index.html"
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    typer.echo(f"  Serving at {url} (Ctrl-C to stop)")
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass
+    try:
+        thread.join()
+    except KeyboardInterrupt:
+        httpd.shutdown()
+        typer.echo("\nStopped.")
+
+
+@app.command()
+def doctor(
+    home: Path = typer.Option(None, "--home", help="Harness config root (default ~/.claude)."),
+) -> None:
+    """Preflight: is your environment ready to fingerprint, submit, and run matches?
+
+    Reports readiness for each capability with an actionable fix for anything missing.
+    Never fails the process — it's a diagnostic, so it always exits 0 and lets you read
+    the full report.
+    """
+    import shutil
+    import subprocess
+
+    root = home or _default_home()
+    lines: list[str] = []
+
+    py = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    ok_py = sys.version_info >= (3, 11)
+    lines.append(f"  {'✓' if ok_py else '✗'} Python {py}" + ("" if ok_py else " (need >= 3.11)"))
+
+    detected = root.exists()
+    lines.append(
+        f"  {'✓' if detected else '✗'} Harness config at {root} "
+        + ("detected" if detected else "not found — is this a claude-code machine?")
+    )
+
+    gh = shutil.which("gh")
+    if gh:
+        try:
+            auth = subprocess.run(["gh", "auth", "status"], capture_output=True, timeout=10)
+            authed = auth.returncode == 0
+        except Exception:
+            authed = False
+        lines.append(
+            f"  {'✓' if authed else '·'} GitHub CLI (gh) installed"
+            + ("" if authed else " but not logged in — run `gh auth login` for `submit --live`")
+        )
+    else:
+        lines.append("  · GitHub CLI (gh) not installed — needed only for `submit --live` "
+                     "(https://cli.github.com)")
+
+    docker = shutil.which("docker")
+    lines.append(
+        f"  {'✓' if docker else '·'} Docker "
+        + ("installed" if docker else "not installed — needed only to run matches locally")
+    )
+
+    typer.echo("atv-bench doctor — environment readiness:\n")
+    for ln in lines:
+        typer.echo(ln)
+    typer.echo("\nNext: `atv-bench fingerprint --dry-run` to preview your harness, "
+               "then `atv-bench games` to pick an arena.")
 
 
 if __name__ == "__main__":

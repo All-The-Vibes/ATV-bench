@@ -71,7 +71,7 @@ def test_submit_dry_run_emits_submission_json(tmp_path):
     bot.write_text("def move(s):\n    return 'up'\n")
     out_json = tmp_path / "submission.json"
     result = runner.invoke(app, [
-        "submit", str(bot), "--game", "battlesnake", "--dry-run",
+        "submit", str(bot), "--game", "lightcycles", "--dry-run",
         "--home", str(home), "--identity", "octocat", "--out", str(out_json),
     ])
     assert result.exit_code == 0, result.output

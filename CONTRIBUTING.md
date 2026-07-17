@@ -7,11 +7,22 @@ production path uses, so nothing weaker runs in review.
 
 ## Prerequisites
 
+**Just submitting a harness?** You don't need to clone this repo. Install the CLI
+directly and skip to [Submitting your harness](#submitting-your-harness-entering-the-league):
+
+```bash
+uv tool install --from git+https://github.com/All-The-Vibes/ATV-bench atv-bench
+atv-bench doctor    # verify python / harness config / gh / docker
+```
+
+**Extending the ecosystem** (adding a harness adapter or a game) needs a dev checkout:
+
 - Python 3.11+ and [`uv`](https://docs.astral.sh/uv/).
 - The [GitHub CLI](https://cli.github.com) (`gh`) for `atv-bench submit`.
 - Docker (only for running matches locally / the gated integration tests).
 
 ```bash
+git clone https://github.com/All-The-Vibes/ATV-bench && cd ATV-bench
 uv venv && uv pip install -e '.[dev]'
 uv run pytest -m "not live and not integration" -q   # should be all green
 ```
@@ -36,7 +47,8 @@ message pointing here.
 
 ## Submitting your harness (entering the league)
 
-1. Run a local match so your harness produces a bot (e.g. `main.py`).
+1. Have your harness build a bot for a live game (`atv-bench games` — `lightcycles` is
+   the playable arena; it produces a single `main.py` that emits one move per turn).
 2. Preview exactly what your fingerprint will publish — **do this before submitting**:
    ```bash
    atv-bench fingerprint --dry-run
@@ -48,12 +60,12 @@ message pointing here.
 3. Validate and build your submission record:
    ```bash
    atv-bench validate-game ./main.py
-   atv-bench submit ./main.py --game battlesnake --dry-run \
+   atv-bench submit ./main.py --game lightcycles --dry-run \
      --identity <your-github-login> --out submission.json
    ```
    `--dry-run` runs preflight and writes `submission.json` (the store-ingestable
    record). Then either open the PR automatically with `atv-bench submit ./main.py
-   --game battlesnake --live --identity <your-github-login>`, or commit the bot + record
+   --game lightcycles --live --identity <your-github-login>`, or commit the bot + record
    under `league/submissions/<identity>/` and open a PR yourself (see **Manual PR
    fallback** below).
 
@@ -70,13 +82,13 @@ also fork manually and push a branch.
 ### Bot shape
 
 A bot is a **single small text file** (≤ 256 KiB) with the arena's expected entrypoint
-(e.g. `main.py` for Battlesnake). `validate-game` enforces this before submission and
+(e.g. `main.py` for lightcycles). `validate-game` enforces this before submission and
 the sandbox enforces it again before execution.
 
 ### Manual PR fallback
 
 If `gh` isn't available or the automated flow fails, open the PR by hand. Run
-`atv-bench submit ./main.py --game battlesnake --dry-run --identity <you> --out submission.json`
+`atv-bench submit ./main.py --game lightcycles --dry-run --identity <you> --out submission.json`
 to produce the record, then fork `All-The-Vibes/ATV-bench` and add exactly two files
 **in one directory named for your identity**:
 
@@ -102,6 +114,19 @@ PR opened → (first-timer: maintainer approves the run) → match job runs your
 
 First-time contributors need a maintainer to approve the workflow run before the
 untrusted bot executes (a GitHub environment gate). Expect a short wait the first time.
+
+## Seeing where you rank
+
+The live board is at **https://all-the-vibes.github.io/ATV-bench/** — every merged
+harness ranks there. Locally:
+
+```bash
+atv-bench board --demo            # populated sample board, opens in your browser
+atv-bench board --store league    # render the real board from a checkout's store
+```
+
+`board` renders the exact static site the Action publishes; the viewer is bundled in the
+package, so `--demo` works from the installed CLI with no clone.
 
 **Fork-safe by design.** The match job that runs your bot holds no token (a fork PR's
 `GITHUB_TOKEN` is read-only anyway) and only uploads two artifacts: the bot's result and

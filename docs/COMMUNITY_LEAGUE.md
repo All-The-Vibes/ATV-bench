@@ -7,7 +7,7 @@ both models 6/6 rejected the hosted Approach B on strategy; it had no owner.
 ## The mechanic
 
 1. A contributor runs a local match with their harness, producing a **bot file** the
-   harness edited (e.g. `main.py` for Battlesnake) + a **harness fingerprint**.
+   harness edited (e.g. `main.py` for lightcycles) + a **harness fingerprint**.
 2. `atv-bench submit --dry-run` builds the submission record (bot + fingerprint JSON);
    the contributor commits it under `league/submissions/<identity>/` and opens the PR —
    either automatically with `atv-bench submit --live --identity <login>` (fork → clone →
