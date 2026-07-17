@@ -330,3 +330,115 @@ def test_santa_r2_legit_names_still_pass(legit):
     # the hardening must NOT over-reject real skill/MCP names
     from atv_bench.fingerprint.scan import is_safe_name
     assert is_safe_name(legit) is True, f"{legit!r} should be allowed"
+
+
+# --- copilot-cli reader: required canary leak-test (CONTRIBUTING → Add a harness) ---
+
+def _build_malicious_copilot_home(root: Path) -> Path:
+    """A ~/.copilot fixture stuffed with secrets in every readable surface.
+
+    Mirrors the claude fixture but on Copilot's layout: settings.json (model +
+    enabledPlugins + disabled lists), mcp-config.json (server names), and skills/agents
+    NESTED under installed-plugins/<marketplace>/<plugin>/.
+    """
+    home = root / ".copilot"
+    home.mkdir(parents=True)
+    # Nested plugin layout: installed-plugins/<marketplace>/<plugin>/{skills,agents}
+    gstack_skills = home / "installed-plugins" / "gstack" / "gstack" / "skills"
+    gstack_skills.mkdir(parents=True)
+    (gstack_skills / "systematic-debugging").mkdir()   # long slug — must NOT be scrubbed
+    (gstack_skills / "office-hours").mkdir()
+    # SKILL.md body carries a secret — the probe must NEVER read file contents.
+    (gstack_skills / "systematic-debugging" / "SKILL.md").write_text(
+        "secret: sk-ant-api03-SECRETSECRETSECRETSECRETSECRET\n"
+    )
+    agents = home / "installed-plugins" / "gstack" / "gstack" / "agents"
+    agents.mkdir()
+    (agents / "reviewer.md").write_text("token: ghp_1234567890abcdefghijklmnopqrstuvwxyzAB")
+    (agents / "planner.md").write_text("planner")
+    # settings.json: model allowlisted; enabledPlugins keys are "name@marketplace";
+    # secrets everywhere else must not leak.
+    (home / "settings.json").write_text(json.dumps({
+        "model": "claude-opus-4.8",
+        "enabledPlugins": {"gstack@gstack": True, "superpowers@superpowers-marketplace": True},
+        "disabledSkills": ["office-hours"],          # denylist → subtracted from effective skills
+        "disabledMcpServers": ["workiq"],
+        "githubToken": "ghp_1234567890abcdefghijklmnopqrstuvwxyzAB",   # must NOT leak
+    }))
+    # mcp-config.json: server NAMES allowlisted; env/urls carry secrets.
+    (home / "mcp-config.json").write_text(json.dumps({
+        "mcpServers": {
+            "github": {"command": "gh-mcp", "env": {"GITHUB_TOKEN": "ghp_1234567890abcdefghijklmnopqrstuvwxyzAB"}},
+            "grafana": {"url": "https://admin:s3cr3t@internal.example.com"},
+            "workiq": {"url": "postgres://user:hunter2@db.internal:5432/prod"},  # disabled → excluded
+        }
+    }))
+    return home
+
+
+def test_copilot_probe_canary_no_leaks(tmp_path):
+    home = _build_malicious_copilot_home(tmp_path)
+    result = fp.probe_copilot_cli(home)
+    manifest = json.dumps(result.manifest)
+    log = result.log
+
+    for canary in CANARIES:
+        assert canary not in manifest, f"LEAK: {canary!r} in manifest"
+        assert canary not in log, f"LEAK: {canary!r} in log"
+
+    # Accuracy: a leak-free {} is useless. Expected names MUST be present.
+    assert result.manifest["harness"] == "copilot-cli"
+    assert result.manifest["model"] == "claude-opus-4.8"
+    # office-hours is disabled → excluded; the long slug survives the entropy gate.
+    assert "systematic-debugging" in result.manifest["skills"]
+    assert "office-hours" not in result.manifest["skills"]
+    # workiq MCP is disabled → excluded; github/grafana remain.
+    assert set(result.manifest["mcps"]) == {"github", "grafana"}
+    assert set(result.manifest["plugins"]) == {"gstack", "superpowers"}
+    assert result.manifest["custom_agents_count"] == 2
+    assert result.manifest["gstack"] is True
+
+
+def test_copilot_manifest_validates_fixed_schema(tmp_path):
+    home = _build_malicious_copilot_home(tmp_path)
+    result = fp.probe_copilot_cli(home)
+    assert set(result.manifest) == set(fp.FINGERPRINT_SCHEMA_KEYS)
+
+
+def test_copilot_empty_home_is_clean_not_crash(tmp_path):
+    """A ~/.copilot that doesn't exist / is empty → a valid empty-ish manifest, no crash."""
+    result = fp.probe_copilot_cli(tmp_path / ".copilot")
+    assert result.manifest["harness"] == "copilot-cli"
+    assert result.manifest["skills"] == []
+    assert result.manifest["plugins"] == []
+    assert result.manifest["mcps"] == []
+    assert result.manifest["custom_agents_count"] == 0
+
+
+# --- regression: the entropy gate must not scrub legit long hyphenated slugs ---
+
+@pytest.mark.parametrize("legit", [
+    "systematic-debugging",
+    "finishing-a-development-branch",
+    "using-git-worktrees",
+    "subagent-driven-development",
+    "verification-before-completion",
+    "benchmark-models",
+    "claude-opus-4.8",
+])
+def test_long_hyphenated_slugs_not_flagged_as_secret(legit):
+    """Real skill/model names with many hyphen-joined tokens have high whole-string
+    entropy but are NOT secrets. The segment-entropy gate must let them through."""
+    from atv_bench.fingerprint.scan import is_safe_name
+    assert is_secret(legit) is False, f"{legit!r} wrongly flagged as secret"
+    assert is_safe_name(legit) is True, f"{legit!r} wrongly rejected as unsafe name"
+
+
+@pytest.mark.parametrize("blob", [
+    "a1b2C3d4E5f6a1b2C3d4E5f6a1b2C3d4E5f6a1b2",  # long dense random run
+    "aB3xK9mQ2pL5nR8w",                            # 16-char high-entropy blob
+])
+def test_high_entropy_blobs_still_flagged(blob):
+    """The segment-entropy relaxation must NOT weaken detection of a genuine
+    high-entropy token (one unbroken dense run)."""
+    assert is_secret(blob) is True, f"{blob!r} should still be flagged as secret"

@@ -58,6 +58,19 @@ def _shannon_entropy(s: str) -> float:
     return -sum((c / n) * math.log2(c / n) for c in counts.values())
 
 
+# Separator characters that break a slug into segments. A legitimate name is short
+# tokens joined by these ("systematic-debugging", "claude-opus-4.8"); a secret blob is
+# one long dense run ("aB3xK9mQ2pL5nR8w"). The entropy gate scores the longest SEGMENT,
+# not the whole string, so a long hyphenated slug isn't mistaken for a high-entropy token.
+_NAME_SEPARATORS = re.compile(r"[-_.]+")
+
+
+def _longest_segment(value: str) -> str:
+    """Longest separator-delimited run in `value` (the whole string if no separators)."""
+    segments = [s for s in _NAME_SEPARATORS.split(value) if s]
+    return max(segments, key=len) if segments else value
+
+
 def _normalize(value: str) -> str:
     """NFKC-normalize and strip zero-width / formatting characters.
 
@@ -158,7 +171,13 @@ def is_secret(value: str) -> bool:
     for pat in _SECRET_PATTERNS:
         if pat.search(value):
             return True
-    if len(value) >= _ENTROPY_MIN_LEN and _shannon_entropy(value) >= _ENTROPY_BITS:
+    # Entropy gate: score the longest separator-delimited SEGMENT, not the whole string.
+    # A hyphenated slug ("finishing-a-development-branch") has high whole-string entropy
+    # but short low-entropy segments; a real random token is one long dense run. Credential
+    # tokens with structure (sk-…, ghp_…, xox…) are already caught by the prefix/pattern
+    # gates above, so scoring the segment here loses no secret-detection power.
+    segment = _longest_segment(value)
+    if len(segment) >= _ENTROPY_MIN_LEN and _shannon_entropy(segment) >= _ENTROPY_BITS:
         return True
     return False
 

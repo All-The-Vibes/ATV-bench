@@ -43,10 +43,11 @@ HARNESSES: tuple[Harness, ...] = (
     Harness(
         key="copilot-cli",
         title="GitHub Copilot CLI",
-        live=False,
+        live=True,
         config_root=".copilot",
-        summary="Planned. No leak-safe reader in this repo yet — its surfaces emit as "
-        "unknown[] until a reader + canary leak-test ships (see CONTRIBUTING → Add a harness).",
+        summary="Reads ~/.copilot names + counts only (model from settings.json, MCP "
+        "servers from mcp-config.json, skills/agents/plugins from installed-plugins/) "
+        "into the fixed leak-safe schema, minus anything disabled in settings.",
     ),
     Harness(
         key="codex",
