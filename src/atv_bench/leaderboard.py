@@ -6,6 +6,7 @@ document; `validate_leaderboard` enforces the schema (also enforced in the viewe
 """
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from atv_bench.elo import (
@@ -295,9 +296,15 @@ def build_insights(rows: list[dict[str, Any]]) -> list[str]:
 
     def _elo(r: dict[str, Any]) -> float:
         try:
-            return float(r.get("elo", 0.0))
+            val = float(r.get("elo", 0.0))
         except (TypeError, ValueError):
             return 0.0
+        # Corrupted/degenerate ratings (NaN, +/-inf) would crash round() downstream
+        # ("cannot convert float NaN to integer") and brick the whole board display.
+        # One bad row must not take out Act 3 — treat a non-finite rating as 0.0.
+        if not math.isfinite(val):
+            return 0.0
+        return val
 
     ranked = sorted(rows, key=lambda r: r.get("rank", 10**9))
     out: list[str] = []

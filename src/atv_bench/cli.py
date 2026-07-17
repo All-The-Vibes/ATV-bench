@@ -430,6 +430,57 @@ def _serve_and_open(site: Path) -> None:
         typer.echo("\nStopped.")
 
 
+def _record_demo_match(store_dir: str, result: dict, a_name: str, b_name: str) -> None:
+    """Seed the two demo players + the match they just played into the demo store.
+
+    The demo's whole point is "play a match, then see IT on the board". Without this,
+    Act 3 shows only the canned build_demo_store roster and the two harnesses the user
+    just watched (a_name vs b_name) never appear. We add a submission for each (so they
+    get a leaderboard row with a fingerprint chip) and replay the just-played, fully
+    deterministic outcome across enough seeded match_ids to clear the rated gate — the
+    result is honest (same adjudicated outcome every time), just repeated so the row is
+    rated rather than "waiting for opponent".
+    """
+    from atv_bench.store import LeagueStore
+    from atv_bench.elo import MIN_RATED_MATCHES
+
+    store = LeagueStore(store_dir)
+
+    def _fingerprint(harness: str, gstack: bool, skills: list[str]) -> dict:
+        return {
+            "harness": harness, "model": "demo", "gstack": gstack,
+            "skills": skills, "mcps": [], "plugins": [], "custom_agents_count": 0,
+            "probe_version": "1.0.0", "unknown": [],
+        }
+
+    entrants = (
+        (a_name, "claude-code", True, ["gstack"]),
+        (b_name, "copilot-cli", False, []),
+    )
+    for identity, harness, gstack, skills in entrants:
+        store.add_submission({
+            "identity": identity,
+            "game": "lightcycles",
+            "bot_sha256": (identity.encode().hex() * 8)[:64].ljust(64, "0"),
+            "pr_url": "https://github.com/All-The-Vibes/ATV-bench/pull/1",
+            "logs_url": "https://all-the-vibes.github.io/ATV-bench/logs/1",
+            "fingerprint": _fingerprint(harness, gstack, skills),
+        })
+
+    outcome = result.get("outcome", "draw")
+    # Replay the identical adjudicated outcome across distinct match_ids so the pairing
+    # clears MIN_RATED_MATCHES and shows as a real rated row, not "waiting for opponent".
+    for i in range(MIN_RATED_MATCHES + 2):
+        store.append_match({
+            "player_a": a_name,
+            "player_b": b_name,
+            "outcome": outcome,
+            "match_id": f"demo-match-{i}",
+            "game": "lightcycles",
+            "seed": i,
+        })
+
+
 @app.command(name="demo-match")
 def demo_match_cmd(
     a_bot: Path = typer.Option(None, "--a-bot", help="Bot file for player A (default: bundled sample)."),
@@ -517,6 +568,9 @@ def demo_match_cmd(
     out_dir = Path(tempfile.mkdtemp(prefix="atv-demo-board-"))
     try:
         build_demo_store(str(tmp_store))
+        # Record the match that JUST played so Act 3's board reflects it — otherwise the
+        # user watches ATV-StarterKit vs ATV-Phoenix, then sees an unrelated canned roster.
+        _record_demo_match(str(tmp_store), result, a_name, b_name)
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         site = build_site(str(out_dir), store_dir=str(tmp_store), updated_at=now)
         doc = json.loads((site / "leaderboard.json").read_text())

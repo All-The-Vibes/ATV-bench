@@ -55,3 +55,20 @@ def test_build_insights_handles_empty_board():
     out = build_insights([])
     assert isinstance(out, list) and out
     assert all(isinstance(s, str) for s in out)
+
+
+def test_build_insights_survives_nan_or_infinite_elo():
+    # Corrupted/degenerate ELO (NaN or +/-inf) must not crash the board display.
+    # round(float('nan')) / round(float('inf')) raise ValueError — build_insights
+    # must guard so one bad row can't brick the demo Act 3.
+    rows = [
+        {"rank": 1, "elo": float("nan"), "identity": "nanbot",
+         "harness_name": "claude-code", "fingerprint_gstack": True,
+         "details": {"skills": ["gstack"], "mcps": [], "plugins": []}},
+        {"rank": 2, "elo": float("inf"), "identity": "infbot",
+         "harness_name": "copilot-cli", "fingerprint_gstack": False,
+         "details": {"skills": [], "mcps": [], "plugins": []}},
+    ]
+    out = build_insights(rows)  # must not raise
+    assert isinstance(out, list) and out
+    assert all(isinstance(s, str) for s in out)

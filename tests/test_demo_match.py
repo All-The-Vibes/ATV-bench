@@ -40,6 +40,20 @@ def test_demo_match_with_board_shows_leaderboard_and_insights():
     assert "insight" in out
 
 
+def test_demo_match_board_reflects_the_actual_match_players():
+    # The demo narrative: you play a match, then see IT on the board. The two players
+    # who just played must appear in the leaderboard/insights — not only a canned roster.
+    result = runner.invoke(app, [
+        "demo-match", "--no-live", "--board",
+        "--a-name", "ATV-StarterKit", "--b-name", "ATV-Phoenix",
+    ])
+    assert result.exit_code == 0, result.output
+    # Split off the pre-board match feed; assert against the board section only.
+    board_section = result.output.split("=== Leaderboard ===", 1)[-1]
+    assert "ATV-StarterKit" in board_section, result.output
+    assert "ATV-Phoenix" in board_section, result.output
+
+
 def test_demo_match_accepts_custom_bot_paths(tmp_path):
     bot = tmp_path / "mybot.py"
     bot.write_text(
