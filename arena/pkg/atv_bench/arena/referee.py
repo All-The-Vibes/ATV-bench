@@ -204,7 +204,8 @@ def _forfeit_record(*, player_a: str, player_b: str, match_id: str,
 
 def run_match(engine: TronEngine, source_a: MoveSource, source_b: MoveSource, *,
               player_a: str, player_b: str, match_id: str,
-              game: str = "lightcycles", seed: int = 0) -> dict[str, Any]:
+              game: str = "lightcycles", seed: int = 0,
+              observer: Any = None) -> dict[str, Any]:
     """Run a full refereed match and return the trusted, schema-shaped result.
 
     Both players are asked for a move each turn from the trusted engine's observation.
@@ -212,8 +213,18 @@ def run_match(engine: TronEngine, source_a: MoveSource, source_b: MoveSource, *,
     loss with a reason, never a draw and never dropped. If both forfeit the same turn it
     is a draw (mutual no-move). Otherwise the engine adjudicates the collision outcome
     and the referee translates it to an a/b-relative result record.
+
+    `observer`, if given, is a callable invoked with each `GameState` — the initial
+    state and after every tick (including the terminal one). It is a read-only feed hook
+    for a live renderer; it never influences adjudication and its exceptions are the
+    caller's responsibility. Omitting it preserves the exact prior behavior.
     """
+    def _emit(s: GameState) -> None:
+        if observer is not None:
+            observer(s)
+
     state = engine.initial_state()
+    _emit(state)
     while not state.terminal:
         obs_a = _observation(state, engine, me="a")
         obs_b = _observation(state, engine, me="b")
@@ -236,6 +247,7 @@ def run_match(engine: TronEngine, source_a: MoveSource, source_b: MoveSource, *,
                                    reason=ForfeitReason.CRASH, game=game, seed=seed)
 
         state = engine.tick(state, move_a, move_b)
+        _emit(state)
 
     # Engine reached a terminal collision/turn-cap verdict.
     outcome = state.outcome or Outcome.DRAW
