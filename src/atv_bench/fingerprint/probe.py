@@ -410,6 +410,94 @@ def probe_copilot_cli(home: Path) -> ProbeResult:
 _READERS = {"claude-code": probe_claude_code, "copilot-cli": probe_copilot_cli}
 
 
+# Structural dirs under a repo's plugins/ that are not themselves plugins.
+_REPO_PLUGIN_STRUCT = {".git", ".github", "node_modules", "__pycache__"}
+
+
+def probe_repo(repo_root: Path, *, harness_name: str) -> dict[str, Any]:
+    """Fingerprint a GitHub REPO that ships a harness, in its real on-disk layout.
+
+    A repo is NOT a machine's ~/.claude — it declares its harness as committed files:
+      - top-level  skills/<skill>
+      - plugins/<plugin>/{skills/<skill>, agents/<agent>}
+      - .copilot-plugin/skills/<skill>   and   .github/skills/<skill>   (nested)
+    This reads ONLY those, leak-safe, and is HONEST: gstack is True only if a gstack
+    plugin/skill is actually present; model is 'unknown' unless the repo declares one
+    (most don't). The result is the same fixed schema as the machine probes, plus a
+    `harness_name` = the repo name (the leaderboard identity, per spec).
+    """
+    root = Path(repo_root)
+    b = _Builder()
+
+    # top-level skills/
+    top_skill_names, top_errs = reader.list_child_dir_names(root / "skills", root)
+    for _n, reason in top_errs:
+        b.note_unknown("skills", reason)
+    skills = b.safe_names(top_skill_names, "skills")
+
+    # plugins/<plugin>/{skills,agents}
+    plugin_names_raw, plug_errs = reader.list_child_dir_names(root / "plugins", root)
+    for _n, reason in plug_errs:
+        b.note_unknown("plugins", reason)
+    plugin_names = [p for p in plugin_names_raw if p not in _REPO_PLUGIN_STRUCT]
+    plugins = b.safe_names(plugin_names, "plugins")
+
+    nested_candidates: list[str] = []
+    custom_agents_count = 0
+    for plug in plugin_names:
+        ns_names, ns_errs = reader.list_child_dir_names(root / "plugins" / plug / "skills", root)
+        for _n, reason in ns_errs:
+            b.note_unknown("nested_skills", reason)
+        nested_candidates.extend(ns_names)
+        a_count, a_errs = reader.count_child_files(
+            root / "plugins" / plug / "agents", root, suffix=".md")
+        # agents can also be dirs; count child dirs too.
+        a_dirs, _ = reader.list_child_dir_names(root / "plugins" / plug / "agents", root)
+        for _n, reason in a_errs:
+            b.note_unknown("custom_agents_count", reason)
+        custom_agents_count += a_count + len(a_dirs)
+
+    # nested skills under .copilot-plugin/skills and .github/skills
+    for nested_root in (".copilot-plugin", ".github"):
+        ns_names, ns_errs = reader.list_child_dir_names(root / nested_root / "skills", root)
+        for _n, reason in ns_errs:
+            b.note_unknown("nested_skills", reason)
+        nested_candidates.extend(ns_names)
+    nested_skills = b.safe_names(nested_candidates, "nested_skills")
+
+    # gstack ONLY if genuinely present (honest — no machine bleed-through).
+    gstack_flag = "gstack" in plugins or "gstack" in skills or "gstack" in nested_skills
+
+    # A repo may commit an MCP config; read names only if present, else nothing.
+    mcps: list[str] = []
+    for mcp_name in (".mcp.json", "mcp-config.json"):
+        mcp_cfg = reader.read_json(root / mcp_name, root)
+        if mcp_cfg.ok and isinstance(mcp_cfg.value, dict):
+            servers = mcp_cfg.value.get("mcpServers")
+            if isinstance(servers, dict):
+                mcps = b.safe_names(list(servers.keys()), "mcps")
+                break
+
+    manifest: dict[str, Any] = {
+        "harness": "repo",
+        "harness_name": harness_name,
+        "model": "unknown",  # a repo declares no runtime model; honest by default
+        "gstack": gstack_flag,
+        "skills": skills,
+        "nested_skills": nested_skills,
+        "tools": [],
+        "mcps": mcps,
+        "plugins": plugins,
+        "custom_agents_count": custom_agents_count,
+        "cli_version": {"binary": "repo", "version": "unknown", "path": "unknown",
+                        "sha256": "unknown"},
+        "unknown_runtime": [{"field": "runtime", "reason": "repo_static_only"}],
+        "unknown": b.unknown,
+        "probe_version": PROBE_VERSION,
+    }
+    return manifest
+
+
 def probe(home: Path | None = None, harness: str | None = None) -> ProbeResult:
     """Harness-agnostic entry point: fingerprint the local coding-agent harness.
 

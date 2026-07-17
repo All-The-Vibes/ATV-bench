@@ -55,32 +55,38 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--metadata", required=True, help="real match metadata.json")
     ap.add_argument("--out", default="docs/proof/showcase")
-    ap.add_argument("--phoenix-home", default=None)
-    ap.add_argument("--hve-home", default=None)
+    ap.add_argument("--phoenix-repo", required=True,
+                    help="path to a cloned ATV-Phoenix repo (fingerprinted as-is)")
+    ap.add_argument("--hve-repo", required=True,
+                    help="path to a cloned hve-core repo (fingerprinted as-is)")
     ap.add_argument("--repeat", type=int, default=12,
                     help="repeat the real outcome N times so the row clears the rated gate")
     args = ap.parse_args()
 
     from atv_bench.elo import MatchResult, Outcome
+    from atv_bench.fingerprint import probe
     from atv_bench.leaderboard import build_leaderboard_doc, validate_leaderboard
 
     metadata = json.loads(Path(args.metadata).read_text())
     token = _outcome_for_board(metadata)
 
-    homes = {"copilot-cli": args.phoenix_home, "claude-code": args.hve_home}
+    repos = {
+        "all-the-vibes/ATV-Phoenix": args.phoenix_repo,
+        "microsoft/hve-core": args.hve_repo,
+    }
     submissions: dict[str, dict] = {}
     for entry in SHOWCASE:
-        fp = _fingerprint(entry["harness"], homes[entry["harness"]])
-        # The harness NAME on the board is the repo name (locked requirement). harness_name
-        # derives from fp["harness"]; a repo slug like "microsoft/hve-core" isn't a safe
-        # single-token name, so publish a safe slug and keep the repo in identity/pr_url.
+        repo = entry["repo"]
+        # Fingerprint the REAL cloned repo in its own layout — no machine bleed-through.
+        fp = probe.probe_repo(repos[repo], harness_name=repo)
+        # harness_name on the board = the repo's own name (safe slug of the leaf).
         fp = dict(fp)
-        fp["harness"] = entry["repo"].split("/")[-1]  # e.g. hve-core / ATV-Phoenix
-        submissions[entry["repo"]] = {
-            "identity": entry["repo"].replace("/", "-"),
+        fp["harness"] = repo.split("/")[-1]  # e.g. hve-core / ATV-Phoenix
+        submissions[repo] = {
+            "identity": repo.replace("/", "-"),
             "fingerprint": fp,
             "bot_sha256": "0" * 64,
-            "pr_url": f"https://github.com/{entry['repo']}",
+            "pr_url": f"https://github.com/{repo}",
             "logs_url": "https://github.com/All-The-Vibes/ATV-bench",
         }
 

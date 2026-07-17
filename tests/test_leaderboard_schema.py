@@ -75,7 +75,7 @@ def test_leaderboard_schema_golden():
     }
     assert required <= set(row)
     assert set(row["ci"]) == {"lo", "hi"}
-    assert set(row["details"]) == {"skills", "mcps", "plugins", "unknown"}
+    assert set(row["details"]) == {"skills", "nested_skills", "mcps", "plugins", "unknown"}
     assert row["rank"] == 1  # alice won -> rank 1
     assert row["harness_name"] == "claude-code"
 
