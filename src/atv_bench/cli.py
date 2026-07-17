@@ -647,19 +647,52 @@ def demo_match_cmd(
     b_bot: Path = typer.Option(None, "--b-bot", help="Bot file for player B (default: bundled sample)."),
     a_name: str = typer.Option("ATV-StarterKit", "--a-name", help="Display name for player A."),
     b_name: str = typer.Option("ATV-Phoenix", "--b-name", help="Display name for player B."),
+    terminal: bool = typer.Option(False, "--terminal",
+                                  help="Render the feed in the terminal instead of the browser."),
+    open_browser: bool = typer.Option(True, "--open/--no-open",
+                                      help="Browser mode: open a browser. --no-open serves the URL without launching/blocking."),
+    turn_delay: float = typer.Option(0.12, "--turn-delay",
+                                     help="Browser mode: seconds between streamed turns (watchability)."),
     live: bool = typer.Option(True, "--live/--no-live",
-                              help="Animate the feed with a per-turn delay (--no-live for CI/scripts)."),
+                              help="Terminal mode: animate the feed with a per-turn delay (--no-live for CI/scripts)."),
     board: bool = typer.Option(True, "--board/--no-board",
-                               help="After the match, build the leaderboard + insights."),
+                               help="Terminal mode: after the match, build the leaderboard + insights."),
     seed: int = typer.Option(0, "--seed", help="Trusted engine seed (reproducible match)."),
 ) -> None:
     """Play two harness bots head-to-head in Tron with a live feed, then show the board.
 
     The demo in three acts: (1) two named harnesses enter, (2) a live turn-by-turn Tron
-    feed renders each frame, (3) the leaderboard + gstack insights are shown. With no bot
-    paths it uses two distinct bundled sample bots (greedy-survivor vs wall-hugger) so
-    the demo runs with zero setup and produces a real, decisive head-to-head.
+    feed, (3) the leaderboard + gstack insights. With no bot paths it uses two distinct
+    bundled sample bots (greedy-survivor vs wall-hugger) so the demo runs with zero setup
+    and produces a real, decisive head-to-head.
+
+    Default surface is the BROWSER: a canvas Tron feed streamed live over SSE, then the
+    leaderboard + insights reveal on the same page. Use --terminal for the in-terminal
+    ASCII feed (what CI/scripts use), or --no-open to serve the browser URL without
+    launching a browser or blocking.
     """
+    default_a, default_b = _default_demo_bots()
+    a_path = str(a_bot) if a_bot is not None else default_a
+    b_path = str(b_bot) if b_bot is not None else default_b
+    for _label, _p in ((a_name, a_path), (b_name, b_path)):
+        if not Path(_p).is_file():
+            typer.echo(f"Bot for {_label} not found: {_p}")
+            raise typer.Exit(2)
+
+    # Default surface: browser SSE live stream (Act 2 live feed + Act 3 board, one page).
+    # --no-live / --no-board are terminal-only knobs; using either implies the terminal
+    # path (backward compatible with pre-browser scripts + CI invocations).
+    use_terminal = terminal or (not live) or (not board)
+    if not use_terminal:
+        from atv_bench.arena.live_server import serve_live_match
+        typer.echo(f"\n  {a_name}  ⚔  {b_name}   —  Lightcycles (Tron), live in your browser\n")
+        serve_live_match(
+            a_bot=a_path, b_bot=b_path, a_name=a_name, b_name=b_name,
+            seed=seed, turn_delay=turn_delay, open_browser=open_browser,
+            echo=typer.echo,
+        )
+        return
+
     import time
 
     from atv_bench.arena.engine import Direction, TronEngine
