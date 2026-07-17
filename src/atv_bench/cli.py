@@ -803,15 +803,8 @@ def _run_live(cfg, out_dir, a_home, b_home, json_out):  # pragma: no cover - Doc
 
 
 def _summarize_tournament(raw, cfg):  # pragma: no cover - shape depends on live run
-    """Extract (outcome, player_models) from a CodeClash tournament metadata dict."""
-    meta = raw.get("metadata", {})
-    round_stats = meta.get("round_stats", {})
-    winners = [rs.get("winner") for rs in round_stats.values()] if isinstance(round_stats, dict) else []
-    winner = max(set(winners), key=winners.count) if winners else "draw"
-    outcome = {"winner": winner, "round_winners": winners}
-    # model tags come from each agent's captured AdapterResult where available.
-    models = {cfg.a: (cfg.model, "parsed"), cfg.b: (cfg.model, "parsed")}
-    return outcome, models
+    from atv_bench.runner import summarize_tournament
+    return summarize_tournament(raw, cfg)
 
 
 if __name__ == "__main__":

@@ -130,6 +130,38 @@ def fingerprint_harness_repo(harness: str, home: Path | None) -> tuple[str, dict
     return hashlib.sha256(blob).hexdigest(), manifest
 
 
+def summarize_tournament(raw: dict, cfg: RunConfig) -> tuple[dict, dict]:
+    """Extract (outcome, player_models) from a CodeClash tournament metadata dict.
+
+    `outcome.winner` is the harness that won the most non-tie rounds (excluding the
+    identical-seed round 0). player_models maps harness → (model, source); Phase 1 uses
+    the requested model as the parsed tag (best-effort) pending gateway verification.
+    """
+    meta = raw.get("metadata", {})
+    round_stats = meta.get("round_stats", {})
+    decisive: list[str] = []
+    if isinstance(round_stats, dict):
+        for rnum, rs in round_stats.items():
+            if str(rnum) == "0":
+                continue  # identical-seed control round
+            w = rs.get("winner")
+            if w and w != "Tie":
+                decisive.append(w)
+    winner = max(set(decisive), key=decisive.count) if decisive else "tie"
+    outcome = {"winner": winner, "round_winners": decisive,
+               "round_stats": _compact_round_stats(round_stats)}
+    models = {cfg.a: (cfg.model, "parsed"), cfg.b: (cfg.model, "parsed")}
+    return outcome, models
+
+
+def _compact_round_stats(round_stats: dict) -> dict:
+    out = {}
+    if isinstance(round_stats, dict):
+        for rnum, rs in round_stats.items():
+            out[str(rnum)] = {"winner": rs.get("winner"), "scores": rs.get("scores", {})}
+    return out
+
+
 def run_live_match(cfg: RunConfig, *, output_dir: Path,
                    homes: dict[str, Path | None] | None = None) -> dict[str, Any]:  # pragma: no cover - Docker + live CLIs
     """Drive a real host-subprocess harness-vs-harness match via CodeClash (Docker).

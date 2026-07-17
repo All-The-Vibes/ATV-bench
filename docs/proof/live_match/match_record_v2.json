@@ -1,0 +1,55 @@
+{
+  "schema_version": 2,
+  "game": "lightcycles",
+  "game_version": "lightcycles@1",
+  "prompt_version": "edit@1",
+  "codeclash_version": "vendored@f0694c64ecf6",
+  "rounds": 1,
+  "outcome": {
+    "winner": "claude-code-A",
+    "round_winners": [
+      "claude-code-A"
+    ],
+    "round_stats": {
+      "0": {
+        "winner": "Tie",
+        "scores": {
+          "claude-code-B": 3,
+          "claude-code-A": 3,
+          "Tie": 4
+        }
+      },
+      "1": {
+        "winner": "claude-code-A",
+        "scores": {
+          "claude-code-A": 6,
+          "claude-code-B": 4
+        }
+      }
+    }
+  },
+  "replay_path": "docs/proof/live_match/",
+  "players": [
+    {
+      "harness": "claude-code",
+      "model": "claude-opus-4-8",
+      "model_source": "parsed",
+      "verified": false,
+      "tools": [],
+      "nested_skills": [],
+      "fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "adapter_version": "1.0.0"
+    },
+    {
+      "harness": "claude-code",
+      "model": "claude-opus-4-8",
+      "model_source": "parsed",
+      "verified": false,
+      "tools": [],
+      "nested_skills": [],
+      "fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "adapter_version": "1.0.0"
+    }
+  ],
+  "verified": false
+}
