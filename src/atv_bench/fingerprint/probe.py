@@ -6,7 +6,9 @@ new secret-bearing field would pass straight through). Every value that lands in
 manifest has been through `scan.is_safe_name` / `scan.is_secret`; anything that fails
 becomes an `unknown[{field, reason}]` entry, never a raw emit.
 
-v1 parity target: claude-code only. Other harnesses emit their surfaces as unknown[].
+v1 ships a live reader for claude-code (below); other harnesses are registered as planned
+in `atv_bench.harnesses` and the generic `probe()` dispatcher fails closed on them until a
+reader lands. See `probe()` at the bottom of this module for the harness-agnostic entry.
 """
 from __future__ import annotations
 
@@ -128,3 +130,37 @@ def probe_claude_code(home: Path) -> ProbeResult:
           f"{len(skills)} skills, {len(mcps)} mcps, {len(plugins)} plugins, "
           f"{custom_agents_count} agents, {len(b.unknown)} unknown")
     return ProbeResult(manifest=manifest, log="\n".join(b.log_lines))
+
+
+# Harness key -> reader. Only LIVE harnesses (a real leak-safe reader) appear here; a
+# planned harness has no entry and `probe()` fails closed rather than emit a placeholder.
+_READERS = {"claude-code": probe_claude_code}
+
+
+def probe(home: Path | None = None, harness: str | None = None) -> ProbeResult:
+    """Harness-agnostic entry point: fingerprint the local coding-agent harness.
+
+    Resolves the harness (explicit `harness=`, else auto-detected from which config dir
+    exists, else the default) via `atv_bench.harnesses`, then dispatches to that harness's
+    leak-safe reader. `home` overrides the config root's parent ($HOME); when omitted the
+    harness registry supplies the standard per-harness config dir.
+
+    Fails closed with a ValueError (actionable message) for an unknown or planned harness —
+    a harness with no reader must never yield an empty/placeholder fingerprint.
+    """
+    from atv_bench import harnesses as hz
+
+    key = harness or hz.detect_harness() or hz.DEFAULT_HARNESS
+    hz.assert_probeable(key)  # raises ValueError for unknown/planned harness
+
+    reader_fn = _READERS.get(key)
+    if reader_fn is None:  # live in registry but no reader wired — treat as planned
+        raise ValueError(
+            f"harness {key!r} has no fingerprint reader wired in this build "
+            f"(see `atv-bench harnesses`)."
+        )
+
+    # If the caller passed an explicit config root, honor it; otherwise use the standard
+    # per-harness dir under $HOME from the registry.
+    root = Path(home) if home is not None else hz.config_root_for(key)
+    return reader_fn(root)

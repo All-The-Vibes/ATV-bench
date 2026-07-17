@@ -140,7 +140,8 @@ ranks. To render the *real* board locally from a checkout's store: `atv-bench bo
 3. **See exactly what your harness fingerprint would publish** (nothing leaves your
    machine):
    ```bash
-   atv-bench fingerprint --dry-run
+   atv-bench harnesses          # which harnesses are live vs. planned (auto-detects yours)
+   atv-bench fingerprint --dry-run   # add --harness <key> to target a specific one
    ```
 4. **Validate + build your submission:**
    ```bash
