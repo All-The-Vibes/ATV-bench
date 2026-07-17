@@ -67,9 +67,14 @@ def _probe_or_exit(home: Path | None, harness: str | None) -> fp.ProbeResult:
 
 
 def _warn_if_config_absent(harness_key: str, home: Path | None, result: fp.ProbeResult) -> None:
-    """Fail loudly (exit 2) when the harness's primary config file is missing, so an empty
-    manifest never passes silently as a real fingerprint (M9)."""
+    """Fail loudly (exit 2) when the harness's primary config file is missing, empty, or
+    malformed, so an empty manifest never passes silently as a real fingerprint (M9).
+
+    Missing is caught by a file-existence check; empty/malformed is caught by inspecting
+    the probe result — the readers surface an unknown[{field:"model", reason:"empty"|
+    "malformed"}] entry when the primary config parsed to nothing usable."""
     from atv_bench import harnesses as hz
+    from atv_bench.fingerprint import reader as _reader
 
     root = Path(home) if home is not None else hz.config_root_for(harness_key)
     primary = {
@@ -86,6 +91,26 @@ def _warn_if_config_absent(harness_key: str, home: Path | None, result: fp.Probe
             f"  cause:   {harness_key} is not set up at {root}, or the wrong --home was passed.\n"
             f"  fix:     run {harness_key} at least once to create {primary}, or pass the "
             f"correct --home / --harness (see `atv-bench harnesses`)."
+        )
+        raise typer.Exit(2)
+
+    # File exists but parsed to nothing usable (empty / malformed): the readers flag the
+    # model field as unknown with an empty/malformed reason. Fail closed there too — the
+    # published fingerprint would be an empty shell that reads as a confident real one.
+    unusable = {_reader.REASON_EMPTY, _reader.REASON_MALFORMED}
+    model_bad = any(
+        u.get("field") == "model" and u.get("reason") in unusable
+        for u in result.manifest.get("unknown", [])
+    )
+    if model_bad:
+        typer.echo(
+            f"Cannot fingerprint {harness_key}: {primary} in {root} is empty or malformed.\n"
+            f"  problem: the harness config file has no usable content, so the fingerprint "
+            f"would be an empty shell.\n"
+            f"  cause:   {primary} is blank or not valid "
+            f"{'TOML' if primary.endswith('.toml') else 'JSON'}.\n"
+            f"  fix:     repair or re-generate {primary} (run {harness_key} so it rewrites a "
+            f"valid config), then re-run (see `atv-bench harnesses`)."
         )
         raise typer.Exit(2)
 
@@ -360,6 +385,12 @@ def harnesses(
 ) -> None:
     """List the coding-agent harnesses you can fingerprint (which are live vs. planned)."""
     detected = detect_harness()
+    # Mirror the M10 detect-guard: if >1 live harness config is present, auto-detect is
+    # ambiguous and the probing commands refuse to guess — so this listing must NOT claim
+    # a single confident default either. Both surfaces tell the same story.
+    live_present = [h.key for h in HARNESSES if h.live
+                    and (Path.home() / h.config_root).exists()]
+    ambiguous = len(live_present) > 1
     if json_out:
         payload = [
             {"key": h.key, "title": h.title, "live": h.live,
@@ -376,9 +407,16 @@ def harnesses(
         here = "  ← detected on this machine" if h.key == detected else ""
         typer.echo(f"  {mark} {h.key}  [{status}]  — {h.title}{here}")
         typer.echo(f"      {h.summary}")
-    default_note = detected or DEFAULT_HARNESS
-    typer.echo(f"\nDefault (auto-detected): {default_note}. "
-               f"Override with `--harness <key>`.")
+    if ambiguous:
+        typer.echo(
+            f"\nMultiple harnesses detected ({', '.join(live_present)}): auto-detect is "
+            "ambiguous. Name one explicitly with `--harness <key>` — the probing commands "
+            "won't guess which to publish."
+        )
+    else:
+        default_note = detected or DEFAULT_HARNESS
+        typer.echo(f"\nDefault (auto-detected): {default_note}. "
+                   f"Override with `--harness <key>`.")
 
 
 @app.command()

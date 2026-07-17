@@ -111,6 +111,43 @@ def test_codex_missing_config_actionable_message(tmp_path):
     assert result.exit_code != 0 or "no " in out or "not found" in out
 
 
+def test_probe_empty_primary_config_fails_closed(tmp_path):
+    """Santa PR#9 (reviewer B): _warn_if_config_absent promises to fail on absent OR
+    empty configs, but only checked .exists(). An empty settings.json (file present,
+    zero bytes) must NOT publish a confident empty fingerprint — fail closed like a
+    missing file does."""
+    home = tmp_path / ".claude"
+    home.mkdir()
+    (home / "settings.json").write_text("   \n")  # present but empty
+    result = runner.invoke(app, ["fingerprint", "--harness", "claude-code", "--home", str(home)])
+    assert result.exit_code != 0, result.output
+    assert "settings.json" in result.output.lower()
+
+
+def test_harnesses_multi_detect_consistent_with_probe_guard(tmp_path, monkeypatch):
+    """Santa PR#9 (reviewer B): the `harnesses` command must not claim a single
+    'Default (auto-detected): <one>' on a machine where >1 live harness config is
+    present, because the probing commands REFUSE to auto-pick there (M10 guard). The
+    two surfaces must tell the same story: on multi-harness machines, auto-detect is
+    ambiguous and an explicit --harness is required."""
+    base = tmp_path / "home"
+    (base / ".claude" / "skills" / "gstack").mkdir(parents=True)
+    (base / ".claude" / "settings.json").write_text(json.dumps({"model": "claude-opus-4-8"}))
+    (base / ".codex" / "skills" / "gstack").mkdir(parents=True)
+    (base / ".codex" / "config.toml").write_text('model = "gpt-5.5"\n')
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: base))
+    result = runner.invoke(app, ["harnesses"])
+    assert result.exit_code == 0, result.output
+    low = result.output.lower()
+    # Must NOT present a single confident default when detection is ambiguous.
+    assert "default (auto-detected): claude-code." not in low
+    assert "default (auto-detected): codex." not in low
+    # Must instead signal ambiguity + point at --harness.
+    assert "--harness" in low
+    assert "multiple" in low or "ambiguous" in low
+
+
+
 # --- T7: validate-harness failure copy names harness + prose + fix (M11) ---
 
 def test_validate_harness_success_names_harness(tmp_path):

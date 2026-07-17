@@ -6,10 +6,10 @@ new secret-bearing field would pass straight through). Every value that lands in
 manifest has been through `scan.is_safe_name` / `scan.is_secret`; anything that fails
 becomes an `unknown[{field, reason}]` entry, never a raw emit.
 
-v1 ships live readers for claude-code and copilot-cli (below); other harnesses are
-registered as planned in `atv_bench.harnesses` and the generic `probe()` dispatcher fails
-closed on them until a reader lands. See `probe()` at the bottom of this module for the
-harness-agnostic entry.
+v1 ships live readers for claude-code, copilot-cli, and codex (below); other harnesses
+are registered as planned in `atv_bench.harnesses` and the generic `probe()` dispatcher
+fails closed on them until a reader lands. See `probe()` at the bottom of this module for
+the harness-agnostic entry.
 """
 from __future__ import annotations
 
@@ -333,7 +333,12 @@ def probe_codex(home: Path) -> ProbeResult:
             # Read only the KEYS (server names), never the table bodies (command/env/url).
             mcp_candidates = list(servers.keys())
     elif not config.ok and config.reason != reader.REASON_NOT_READABLE:
-        b.note_unknown("model", config.reason or reader.REASON_MALFORMED)
+        # config.toml is the single untrusted source for BOTH model and mcps — an
+        # unreadable/empty/malformed config must flag every dependent field, else
+        # mcps=[] reads as a confident "no MCP servers" when the truth is "unreadable".
+        reason = config.reason or reader.REASON_MALFORMED
+        b.note_unknown("model", reason)
+        b.note_unknown("mcps", reason)
 
     mcps = b.safe_names(mcp_candidates, "mcps")
 

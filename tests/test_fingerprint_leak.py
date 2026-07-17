@@ -783,3 +783,20 @@ def test_codex_probe_does_not_read_skill_or_prompt_bodies(tmp_path, monkeypatch)
     for p in opened:
         assert not p.endswith("SKILL.md"), f"probe read skill body: {p}"
         assert "/prompts/" not in p, f"probe read prompt body: {p}"
+
+
+def test_codex_malformed_config_flags_mcps_unknown(tmp_path):
+    """Santa PR#9 (reviewer B): a malformed config.toml zeroes BOTH model and mcps —
+    they come from the SAME untrusted config, so an unreadable config must surface an
+    unknown[] entry for every dependent field, not just `model`. Otherwise mcps=[]
+    reads as a confident 'no MCP servers' when the truth is 'config unreadable'."""
+    home = tmp_path / ".codex"
+    home.mkdir()
+    (home / "config.toml").write_text("this is = = broken toml [[[")
+    result = fp.probe_codex(home)
+    fields = {u["field"] for u in result.manifest["unknown"]}
+    assert "model" in fields
+    assert "mcps" in fields, (
+        "malformed config.toml must flag mcps unknown too (same untrusted source), "
+        f"got unknown={result.manifest['unknown']}"
+    )
