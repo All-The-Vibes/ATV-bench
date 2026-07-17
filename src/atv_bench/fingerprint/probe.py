@@ -96,8 +96,12 @@ def probe_claude_code(home: Path) -> ProbeResult:
         raw_model = settings.value.get("model")
         if isinstance(raw_model, str) and is_safe_name(raw_model):
             model = raw_model
-        elif raw_model is not None:
+        elif isinstance(raw_model, str):
+            # a real string that fails the safety scan → scrub (consent boundary).
             b.note_unknown("model", reader.REASON_NAME_UNSAFE)
+        elif raw_model is not None:
+            # wrong TYPE (number/bool/list/dict) → structurally malformed config field.
+            b.note_unknown("model", reader.REASON_MALFORMED)
         ep = settings.value.get("enabledPlugins")
         if isinstance(ep, dict):
             enabled_plugins_raw = ep
@@ -230,8 +234,12 @@ def probe_copilot_cli(home: Path) -> ProbeResult:
         raw_model = settings.value.get("model")
         if isinstance(raw_model, str) and is_safe_name(raw_model):
             model = raw_model
-        elif raw_model is not None:
+        elif isinstance(raw_model, str):
+            # a real string that fails the safety scan → scrub (consent boundary).
             b.note_unknown("model", reader.REASON_NAME_UNSAFE)
+        elif raw_model is not None:
+            # wrong TYPE (number/bool/list/dict) → structurally malformed config field.
+            b.note_unknown("model", reader.REASON_MALFORMED)
         ep = settings.value.get("enabledPlugins")
         if isinstance(ep, dict):
             enabled_plugins_raw = ep
@@ -341,8 +349,12 @@ def probe_codex(home: Path) -> ProbeResult:
         raw_model = config.value.get("model")
         if isinstance(raw_model, str) and is_safe_name(raw_model):
             model = raw_model
-        elif raw_model is not None:
+        elif isinstance(raw_model, str):
+            # a real string that fails the safety scan → scrub (consent boundary).
             b.note_unknown("model", reader.REASON_NAME_UNSAFE)
+        elif raw_model is not None:
+            # wrong TYPE (number/bool/list/dict) → structurally malformed config field.
+            b.note_unknown("model", reader.REASON_MALFORMED)
         # NB: we touch ONLY config.value["model"]. model_provider / model_providers /
         # http_headers (base_urls + api keys) are never read — allowlist by construction.
         servers = config.value.get("mcp_servers")

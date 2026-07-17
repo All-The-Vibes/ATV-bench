@@ -17,7 +17,7 @@ Plan: `~/.gstack/projects/All-The-Vibes-ATV-bench/sschofield-main-design-2026071
 
 ## Tests
 
-486 hermetic tests pass (`uv run pytest -m "not live and not integration"`), +62 over the
+493 hermetic tests pass (`uv run pytest -m "not live and not integration"`), +69 over the
 424 baseline. New: `read_toml` unit suite (6), non-UTF8 regression (read_json + read_toml),
 codex canary + edge tests (7), claude real-layout canaries (installPath escape ×3, symlink
 escape, infra-not-plugins, disabled-plugin exclusion, real mcp source, manifest guard ×4,
@@ -30,7 +30,9 @@ installed_plugins.json bad-internal-shape markers, multi-harness ambiguity consi
 an existing-but-unreadable config fails closed while a genuinely-absent optional config does
 not (config.toml / settings.json / ~/.claude.json / installed_plugins.json), and `--home
 <root>` without `--harness` resolves the harness from the root basename (`.codex` → codex)
-instead of $HOME auto-detect (which mis-probed a codex root as claude-code).
+instead of $HOME auto-detect (which mis-probed a codex root as claude-code), and a
+wrong-TYPE model value (`model = 123`) is flagged malformed + fails closed (distinct from an
+unsafe-STRING model, which stays a scrub-not-fail consent boundary).
 
 ## Adversarial leak-safety verification (Workflow: 3 independent skeptics)
 

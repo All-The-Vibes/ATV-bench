@@ -740,6 +740,58 @@ def test_codex_model_absent_is_unknown_no_unknown_entry(tmp_path):
     assert not any(u["field"] == "model" for u in result.manifest["unknown"])
 
 
+@pytest.mark.parametrize("probe_fn,root,model_toml_or_json,is_toml", [
+    (fp.probe_codex, ".codex", "model = 123", True),
+    (fp.probe_codex, ".codex", "model = 1.5", True),
+    (fp.probe_codex, ".codex", "model = true", True),
+])
+def test_codex_nonstring_model_type_is_malformed_not_name_unsafe(
+        tmp_path, probe_fn, root, model_toml_or_json, is_toml):
+    """Santa PR#9 round 5 (reviewer B): a model of the WRONG TYPE (a number/bool, e.g.
+    `model = 123`) is a structurally malformed config field, NOT a scrubbed unsafe-name
+    secret. It must be flagged REASON_MALFORMED so the CLI fail-closed guard fires —
+    distinct from an unsafe-STRING model (e.g. 'hunter2'), which stays a scrub-not-fail
+    consent boundary (model=unknown, exit 0)."""
+    home = tmp_path / root
+    home.mkdir()
+    (home / "config.toml").write_text(model_toml_or_json + "\n")
+    result = probe_fn(home)
+    reasons = {(u["field"], u["reason"]) for u in result.manifest["unknown"]}
+    assert ("model", "malformed") in reasons, (
+        f"wrong-type model ({model_toml_or_json}) must be malformed, got {result.manifest['unknown']}"
+    )
+
+
+@pytest.mark.parametrize("probe_fn,root", [
+    (fp.probe_claude_code, ".claude"),
+    (fp.probe_copilot_cli, ".copilot"),
+])
+def test_claude_copilot_nonstring_model_type_is_malformed(tmp_path, probe_fn, root):
+    """Same wrong-type-model fail-closed for claude-code + copilot-cli settings.json."""
+    home = tmp_path / root
+    (home / "skills").mkdir(parents=True)
+    (home / "settings.json").write_text(json.dumps({"model": 123}))
+    result = probe_fn(home)
+    reasons = {(u["field"], u["reason"]) for u in result.manifest["unknown"]}
+    assert ("model", "malformed") in reasons, (
+        f"wrong-type model must be malformed, got {result.manifest['unknown']}"
+    )
+
+
+def test_unsafe_string_model_stays_scrub_not_fail(tmp_path):
+    """Guard the boundary: an unsafe-STRING model (a real string that fails the safety
+    scan) must remain name_failed_safety_scan (scrub, model=unknown), NOT malformed —
+    preserving the documented consent-surface behavior. Only wrong-TYPE models fail closed."""
+    home = tmp_path / ".claude"
+    (home / "skills").mkdir(parents=True)
+    (home / "settings.json").write_text(json.dumps({"model": "sk-proj-leaked-key"}))
+    result = fp.probe_claude_code(home)
+    reasons = {(u["field"], u["reason"]) for u in result.manifest["unknown"]}
+    assert ("model", "name_failed_safety_scan") in reasons
+    assert ("model", "malformed") not in reasons
+    assert result.manifest["model"] == "unknown"
+
+
 def test_codex_never_reads_provider_or_http_headers(tmp_path):
     """The probe must key ONLY off top-level model; model_provider / model_providers /
     http_headers carry base_urls + embedded api keys and must never enter the manifest."""

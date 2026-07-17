@@ -213,6 +213,17 @@ def test_codex_existing_unreadable_config_fails_closed(tmp_path):
     assert "config.toml" in result.output.lower()
 
 
+def test_nonstring_model_type_fails_closed(tmp_path):
+    """Santa PR#9 round 5 (reviewer B): a wrong-TYPE model (config.toml `model = 123`)
+    must fail closed at the CLI, not exit 0 publishing a confident empty manifest."""
+    home = tmp_path / ".codex"
+    home.mkdir()
+    (home / "config.toml").write_text("model = 123\n")
+    result = runner.invoke(app, ["fingerprint", "--harness", "codex", "--home", str(home)])
+    assert result.exit_code != 0, result.output
+    assert "config.toml" in result.output.lower()
+
+
 def test_home_without_harness_resolves_from_root_not_real_home(tmp_path, monkeypatch):
     """Santa PR#9 round 4 (reviewer B): passing --home <codex-root> WITHOUT --harness
     must fingerprint codex from that root — not mis-resolve the harness via
