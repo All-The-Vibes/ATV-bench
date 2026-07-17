@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ATV-bench — Live Match</title>
+<style>
+  :root {
+    --bg: oklch(21% 0.02 265);
+    --surface: oklch(26% 0.02 265);
+    --surface-2: oklch(30% 0.02 265);
+    --text: oklch(96% 0.01 265);
+    --muted: oklch(72% 0.02 265);
+    --line: oklch(38% 0.02 265);
+    --accent: oklch(78% 0.16 155);
+    --rank-1: oklch(85% 0.15 95);
+    --a: oklch(72% 0.15 250);   /* player A — blue */
+    --b: oklch(70% 0.17 25);    /* player B — red  */
+    --chip: oklch(34% 0.03 265);
+    --radius: 14px;
+    --mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, monospace;
+    --sans: "Inter", system-ui, -apple-system, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: var(--sans); min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center; padding: 28px 16px 60px;
+  }
+  h1 { font-size: 20px; font-weight: 650; margin: 0 0 2px; letter-spacing: .2px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; text-align: center; }
+  .players {
+    display: flex; gap: 14px; align-items: center; margin-bottom: 14px; font-family: var(--mono);
+    font-size: 14px;
+  }
+  .pill { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: var(--surface);
+    border: 1px solid var(--line); border-radius: 999px; }
+  .swatch { width: 12px; height: 12px; border-radius: 3px; }
+  .swatch.a { background: var(--a); } .swatch.b { background: var(--b); }
+  .vs { color: var(--muted); font-size: 12px; }
+  .stage { position: relative; }
+  canvas {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: 0 8px 30px rgba(0,0,0,.35); display: block;
+  }
+  .hud { font-family: var(--mono); font-size: 13px; color: var(--muted); margin-top: 10px;
+    text-align: center; min-height: 20px; }
+  .banner {
+    position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+    background: color-mix(in oklch, var(--bg) 62%, transparent); border-radius: var(--radius);
+    font-family: var(--mono); font-size: 22px; font-weight: 700; text-align: center; padding: 0 10px;
+  }
+  .banner.show { display: flex; animation: fade .4s ease; }
+  @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+  .board { margin-top: 26px; width: min(680px, 94vw); display: none; }
+  .board.show { display: block; animation: fade .5s ease; }
+  .board h2 { font-size: 13px; color: var(--muted); font-weight: 600; margin: 0 0 10px;
+    text-transform: uppercase; letter-spacing: .08em; }
+  .row {
+    display: grid; grid-template-columns: 34px 78px 1fr; align-items: center; gap: 12px;
+    padding: 10px 14px; background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; margin-bottom: 8px; font-family: var(--mono);
+  }
+  .row .rank { color: var(--muted); font-weight: 700; }
+  .row .elo { color: var(--accent); font-weight: 700; }
+  .row.win { border-color: color-mix(in oklch, var(--accent) 55%, var(--line)); }
+  .row .who b { font-weight: 650; } .row .who .chip { color: var(--muted); font-size: 12px; }
+  .insights { margin-top: 16px; }
+  .insights ul { margin: 0; padding-left: 20px; }
+  .insights li { color: var(--text); margin: 6px 0; font-size: 14px; }
+</style>
+</head>
+<body>
+  <h1>ATV-bench — Live Match</h1>
+  <div class="sub">Two harnesses' bots, head-to-head in Lightcycles (Tron). Live feed, streamed turn by turn.</div>
+
+  <div class="players">
+    <span class="pill"><span class="swatch a"></span><span id="nameA">Player A</span></span>
+    <span class="vs">vs</span>
+    <span class="pill"><span class="swatch b"></span><span id="nameB">Player B</span></span>
+  </div>
+
+  <div class="stage">
+    <canvas id="arena" width="600" height="600"></canvas>
+    <div class="banner" id="banner"></div>
+  </div>
+  <div class="hud" id="hud">Connecting to match feed…</div>
+
+  <div class="board" id="board">
+    <h2>Leaderboard</h2>
+    <div id="rows"></div>
+    <div class="insights"><h2>Insights</h2><ul id="insights"></ul></div>
+  </div>
+
+<script>
+(function () {
+  const canvas = document.getElementById('arena');
+  const ctx = canvas.getContext('2d');
+  const hud = document.getElementById('hud');
+  const banner = document.getElementById('banner');
+  const CSS = getComputedStyle(document.documentElement);
+  const COL_A = CSS.getPropertyValue('--a').trim();
+  const COL_B = CSS.getPropertyValue('--b').trim();
+  const COL_LINE = CSS.getPropertyValue('--line').trim();
+  const COL_SURF = CSS.getPropertyValue('--surface-2').trim();
+
+  let cell = 24, W = 25, H = 25;
+
+  function fit(frame) {
+    W = frame.width; H = frame.height;
+    const target = Math.min(window.innerWidth - 40, 600);
+    cell = Math.max(6, Math.floor(target / Math.max(W, H)));
+    canvas.width = W * cell; canvas.height = H * cell;
+  }
+
+  function draw(frame) {
+    ctx.fillStyle = COL_SURF;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = COL_LINE; ctx.globalAlpha = 0.25; ctx.lineWidth = 1;
+    for (let x = 0; x <= W; x++) { ctx.beginPath(); ctx.moveTo(x*cell,0); ctx.lineTo(x*cell,H*cell); ctx.stroke(); }
+    for (let y = 0; y <= H; y++) { ctx.beginPath(); ctx.moveTo(0,y*cell); ctx.lineTo(W*cell,y*cell); ctx.stroke(); }
+    ctx.globalAlpha = 1;
+
+    const trail = (cells, color, alpha) => {
+      ctx.fillStyle = color; ctx.globalAlpha = alpha;
+      for (const c of cells) ctx.fillRect(c[0]*cell+1, c[1]*cell+1, cell-2, cell-2);
+      ctx.globalAlpha = 1;
+    };
+    trail(frame.trail_a, COL_A, 0.55);
+    trail(frame.trail_b, COL_B, 0.55);
+    const head = (pos, color) => {
+      ctx.shadowColor = color; ctx.shadowBlur = 12; ctx.fillStyle = color;
+      ctx.fillRect(pos[0]*cell+1, pos[1]*cell+1, cell-2, cell-2);
+      ctx.shadowBlur = 0;
+    };
+    head(frame.head_a, COL_A);
+    head(frame.head_b, COL_B);
+  }
+
+  const es = new EventSource('/events');
+  let started = false;
+
+  es.onmessage = (e) => {
+    const frame = JSON.parse(e.data);
+    if (!started) {
+      started = true;
+      fit(frame);
+      document.getElementById('nameA').textContent = frame.label_a;
+      document.getElementById('nameB').textContent = frame.label_b;
+    }
+    draw(frame);
+    hud.textContent = 'turn ' + frame.turn;
+  };
+
+  es.addEventListener('result', (e) => {
+    const r = JSON.parse(e.data);
+    let text;
+    if (r.outcome === 'a_wins') text = '★ ' + r.player_a + ' wins';
+    else if (r.outcome === 'b_wins') text = '★ ' + r.player_b + ' wins';
+    else text = '— draw —';
+    banner.textContent = text; banner.classList.add('show');
+    hud.textContent = text;
+  });
+
+  es.addEventListener('board', (e) => {
+    const board = JSON.parse(e.data);
+    const rowsEl = document.getElementById('rows');
+    rowsEl.innerHTML = '';
+    for (const r of board.rows) {
+      const div = document.createElement('div');
+      div.className = 'row' + (r.rank === 1 ? ' win' : '');
+      const chip = r.fingerprint_summary ? ' · ' + r.fingerprint_summary : '';
+      const rank = document.createElement('span'); rank.className = 'rank'; rank.textContent = '#' + r.rank;
+      const elo = document.createElement('span'); elo.className = 'elo'; elo.textContent = Math.round(r.elo);
+      const who = document.createElement('span'); who.className = 'who';
+      const b = document.createElement('b'); b.textContent = '@' + r.identity;
+      const meta = document.createElement('span'); meta.className = 'chip';
+      meta.textContent = ' (' + r.harness_name + ')' + chip;
+      who.appendChild(b); who.appendChild(meta);
+      div.appendChild(rank); div.appendChild(elo); div.appendChild(who);
+      rowsEl.appendChild(div);
+    }
+    const ul = document.getElementById('insights');
+    ul.innerHTML = '';
+    for (const line of board.insights) {
+      const li = document.createElement('li'); li.textContent = line; ul.appendChild(li);
+    }
+    document.getElementById('board').classList.add('show');
+    es.close();
+  });
+
+  es.onerror = () => { if (!started) hud.textContent = 'Waiting for match feed…'; };
+})();
+</script>
+</body>
+</html>

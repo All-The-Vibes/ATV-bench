@@ -121,3 +121,22 @@ def test_demo_board_shows_distinct_fingerprints_for_the_two_players():
     assert elos["ATV-StarterKit"] != elos["ATV-Phoenix"], (
         "both players show identical ELO — self-play draw, not a real head-to-head:\n" + board
     )
+
+
+# --- browser live-stream wiring (default surface) ---
+
+def test_demo_match_terminal_mode_still_works():
+    # Backward compat: --terminal keeps the in-terminal feed (no server, no browser).
+    result = runner.invoke(app, ["demo-match", "--terminal", "--no-live", "--no-board"])
+    assert result.exit_code == 0, result.output
+    assert "turn" in result.output.lower()
+    assert "wins" in result.output.lower() or "draw" in result.output.lower()
+
+
+def test_demo_match_browser_no_open_prints_url_and_returns():
+    # Default surface is the browser stream. --no-open serves without launching a browser
+    # and without blocking, printing the local URL (headless/CI friendly).
+    result = runner.invoke(app, ["demo-match", "--no-open"])
+    assert result.exit_code == 0, result.output
+    assert "http://127.0.0.1:" in result.output
+    assert "/" in result.output

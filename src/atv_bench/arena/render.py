@@ -59,6 +59,43 @@ def render_frame(
     return "\n".join(lines)
 
 
+def frame_to_dict(
+    state: GameState,
+    engine: TronEngine,
+    *,
+    label_a: str = "A",
+    label_b: str = "B",
+) -> dict:
+    """A pure, JSON-serializable snapshot of one frame for the browser SSE live feed.
+
+    Mirrors `render_frame` (same state → same data) but emits primitives the browser
+    canvas draws: board dimensions, both trails as `[x, y]` cell lists, both heads, and
+    the terminal/outcome. No I/O, no time, no randomness — unit-testable without a
+    server, and `json.dumps`-safe (lists not tuples/sets, enum value not the enum).
+    """
+    def _cells(trail) -> list[list[int]]:
+        # Sorted for determinism (frozenset iteration order is not guaranteed).
+        return [[int(x), int(y)] for (x, y) in sorted(trail)]
+
+    ax, ay = state.pos_a
+    bx, by = state.pos_b
+    return {
+        "turn": int(state.turn),
+        "width": int(engine.width),
+        "height": int(engine.height),
+        "label_a": label_a,
+        "label_b": label_b,
+        "head_a": [int(ax), int(ay)],
+        "head_b": [int(bx), int(by)],
+        "dir_a": state.dir_a.value,
+        "dir_b": state.dir_b.value,
+        "trail_a": _cells(state.trail_a),
+        "trail_b": _cells(state.trail_b),
+        "terminal": bool(state.terminal),
+        "outcome": state.outcome.value if state.outcome is not None else None,
+    }
+
+
 def _outcome_line(outcome: Outcome | None, label_a: str, label_b: str) -> str:
     if outcome == Outcome.A_WINS:
         return f"★ {label_a} wins"

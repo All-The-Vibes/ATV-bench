@@ -68,3 +68,53 @@ def test_render_frame_marks_terminal_outcome():
     # The winner is surfaced by name on a terminal frame.
     assert "Alpha" in frame
     assert "win" in frame.lower()
+
+
+# --- frame_to_dict: JSON-serializable frame for the browser SSE live feed (Act 2) ---
+
+def test_frame_to_dict_is_pure_and_json_serializable():
+    import json
+    from atv_bench.arena.render import frame_to_dict
+
+    eng = _engine()
+    st = eng.initial_state()
+    a = frame_to_dict(st, eng, label_a="StarterKit", label_b="Phoenix")
+    b = frame_to_dict(st, eng, label_a="StarterKit", label_b="Phoenix")
+    assert a == b                       # pure: same input -> identical dict
+    json.dumps(a)                       # must be JSON-serializable (no tuples-as-keys, sets, etc.)
+
+
+def test_frame_to_dict_has_board_shape_and_positions():
+    from atv_bench.arena.render import frame_to_dict
+
+    eng = _engine()
+    st = eng.initial_state()
+    d = frame_to_dict(st, eng, label_a="StarterKit", label_b="Phoenix")
+    assert d["width"] == 5 and d["height"] == 3
+    assert d["turn"] == 0
+    assert d["label_a"] == "StarterKit" and d["label_b"] == "Phoenix"
+    # Heads reported as [x, y] pairs matching the engine start positions.
+    assert d["head_a"] == [0, 1] and d["head_b"] == [4, 1]
+    # Trails are lists of [x, y] cells (JSON arrays, not sets/tuples).
+    assert isinstance(d["trail_a"], list) and isinstance(d["trail_b"], list)
+    for cell in d["trail_a"] + d["trail_b"]:
+        assert isinstance(cell, list) and len(cell) == 2
+    assert d["terminal"] is False
+    assert d["outcome"] is None
+
+
+def test_frame_to_dict_reports_terminal_outcome():
+    from atv_bench.arena.render import frame_to_dict
+    from atv_bench.arena.engine import Direction, TronEngine
+
+    # Tiny board so a deterministic terminal state is easy to reach.
+    eng = TronEngine(width=3, height=3, start_a=(0, 0), start_b=(2, 2),
+                     dir_a=Direction.RIGHT, dir_b=Direction.LEFT, max_turns=2)
+    st = eng.initial_state()
+    # Drive to a terminal state.
+    while not st.terminal:
+        st = eng.tick(st, st.dir_a, st.dir_b)
+    d = frame_to_dict(st, eng, label_a="A", label_b="B")
+    assert d["terminal"] is True
+    # Outcome is a JSON string (enum value) or None, never a raw enum object.
+    assert d["outcome"] is None or isinstance(d["outcome"], str)
