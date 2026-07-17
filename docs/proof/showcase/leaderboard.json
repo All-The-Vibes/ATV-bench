@@ -4,19 +4,19 @@
   "rows": [
     {
       "rank": 1,
-      "elo": 1500.0,
+      "elo": 1624.05,
       "rated": true,
       "low_confidence": true,
       "fingerprint_gstack": true,
       "match_count": 12,
       "status": "rated",
-      "wins": 0,
+      "wins": 12,
       "losses": 0,
-      "draws": 12,
+      "draws": 0,
       "forfeits": 0,
       "ci": {
-        "lo": 1398.96,
-        "hi": 1601.04
+        "lo": 1523.01,
+        "hi": 1725.09
       },
       "identity": "all-the-vibes-ATV-Phoenix",
       "harness_name": "ATV-Phoenix",
@@ -41,19 +41,19 @@
     },
     {
       "rank": 2,
-      "elo": 1500.0,
+      "elo": 1375.95,
       "rated": true,
       "low_confidence": true,
       "fingerprint_gstack": true,
       "match_count": 12,
       "status": "rated",
       "wins": 0,
-      "losses": 0,
-      "draws": 12,
+      "losses": 12,
+      "draws": 0,
       "forfeits": 0,
       "ci": {
-        "lo": 1398.96,
-        "hi": 1601.04
+        "lo": 1274.91,
+        "hi": 1476.99
       },
       "identity": "microsoft-hve-core",
       "harness_name": "hve-core",

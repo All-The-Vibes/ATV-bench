@@ -1,0 +1,152 @@
+{
+  "name": "PvpTournament",
+  "tournament_id": "PvpTournament.LightCycles.260717160125",
+  "config": {
+    "tournament": {
+      "rounds": 1
+    },
+    "game": {
+      "name": "LightCycles",
+      "sims_per_round": 10,
+      "args": {}
+    },
+    "players": [
+      {
+        "agent": "copilot-cli",
+        "name": "copilot-cli",
+        "config": {
+          "model": "claude-opus-4.8",
+          "bot_file": "main.py",
+          "harness": "copilot-cli"
+        },
+        "commit_label": ""
+      },
+      {
+        "agent": "claude-code",
+        "name": "claude-code",
+        "config": {
+          "model": "claude-opus-4.8",
+          "bot_file": "main.py",
+          "harness": "claude-code"
+        },
+        "commit_label": ""
+      }
+    ],
+    "prompts": {
+      "edit": "Improve `main.py` so your Tron light-cycle bot wins more games. It must implement `get_move(obs) -> str` returning one of 'N','S','E','W'. Avoid walls, your own trail, and opponents' trails; try to survive longest and claim the most territory. Edit only the bot; keep the function signature."
+    },
+    "_meta": {
+      "game_version": "lightcycles@1",
+      "prompt_version": "edit@1",
+      "model": "claude-opus-4.8"
+    }
+  },
+  "created_timestamp": 1784322085,
+  "aws": {},
+  "round_stats": {
+    "0": {
+      "round_num": 0,
+      "winner": "Tie",
+      "details": [],
+      "scores": {
+        "claude-code": 3,
+        "Tie": 4,
+        "copilot-cli": 3
+      },
+      "player_stats": {
+        "copilot-cli": {
+          "name": "copilot-cli",
+          "invalid_reason": "",
+          "score": 3,
+          "valid_submit": true
+        },
+        "claude-code": {
+          "name": "claude-code",
+          "invalid_reason": "",
+          "score": 3,
+          "valid_submit": true
+        }
+      }
+    },
+    "1": {
+      "round_num": 1,
+      "winner": "copilot-cli",
+      "details": [],
+      "scores": {
+        "claude-code": 2,
+        "Tie": 2,
+        "copilot-cli": 6
+      },
+      "player_stats": {
+        "claude-code": {
+          "name": "claude-code",
+          "invalid_reason": "",
+          "score": 2,
+          "valid_submit": true
+        },
+        "copilot-cli": {
+          "name": "copilot-cli",
+          "invalid_reason": "",
+          "score": 6,
+          "valid_submit": true
+        }
+      }
+    }
+  },
+  "game": {
+    "name": "LightCycles",
+    "config": {
+      "name": "LightCycles",
+      "sims_per_round": 10,
+      "args": {}
+    },
+    "game_id": "PvpTournament.LightCycles.260717160125",
+    "created_timestamp": 1784322085
+  },
+  "agents": [
+    {
+      "name": "claude-code",
+      "player_unique_id": "eb8dc022-247b-4c0d-9ab0-fd447c19c34c",
+      "created_timestamp": 1784322088,
+      "config": {
+        "agent": "claude-code",
+        "name": "claude-code",
+        "config": {
+          "model": "claude-opus-4.8",
+          "bot_file": "main.py",
+          "harness": "claude-code"
+        },
+        "commit_label": ""
+      },
+      "initial_commit_hash": "32e4218844805340371e9fe11902a49e5a1e40a6",
+      "branch_name": "PvpTournament.LightCycles.260717160125.claude-code",
+      "round_tags": {
+        "0": "eb8dc022-247b-4c0d-9ab0-fd447c19c34c-round-0",
+        "1": "eb8dc022-247b-4c0d-9ab0-fd447c19c34c-round-1"
+      },
+      "agent_stats": {}
+    },
+    {
+      "name": "copilot-cli",
+      "player_unique_id": "ce3a8223-1a3d-44e8-998b-91bb734d5149",
+      "created_timestamp": 1784322086,
+      "config": {
+        "agent": "copilot-cli",
+        "name": "copilot-cli",
+        "config": {
+          "model": "claude-opus-4.8",
+          "bot_file": "main.py",
+          "harness": "copilot-cli"
+        },
+        "commit_label": ""
+      },
+      "initial_commit_hash": "32e4218844805340371e9fe11902a49e5a1e40a6",
+      "branch_name": "PvpTournament.LightCycles.260717160125.copilot-cli",
+      "round_tags": {
+        "0": "ce3a8223-1a3d-44e8-998b-91bb734d5149-round-0",
+        "1": "ce3a8223-1a3d-44e8-998b-91bb734d5149-round-1"
+      },
+      "agent_stats": {}
+    }
+  ]
+}
