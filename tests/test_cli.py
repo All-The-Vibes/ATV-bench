@@ -147,6 +147,60 @@ def test_harnesses_multi_detect_consistent_with_probe_guard(tmp_path, monkeypatc
     assert "multiple" in low or "ambiguous" in low
 
 
+def test_harnesses_multi_detect_suppresses_detected_marker_text(tmp_path, monkeypatch):
+    """Santa PR#9 round 2 (reviewer B): when auto-detect is ambiguous (>1 live config),
+    the text listing must not stamp a single harness with '← detected on this machine',
+    which contradicts the M10 'won't guess' story."""
+    base = tmp_path / "home"
+    (base / ".claude" / "skills" / "gstack").mkdir(parents=True)
+    (base / ".claude" / "settings.json").write_text(json.dumps({"model": "claude-opus-4-8"}))
+    (base / ".codex" / "skills" / "gstack").mkdir(parents=True)
+    (base / ".codex" / "config.toml").write_text('model = "gpt-5.5"\n')
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: base))
+    result = runner.invoke(app, ["harnesses"])
+    assert result.exit_code == 0, result.output
+    assert "detected on this machine" not in result.output.lower()
+
+
+def test_harnesses_json_multi_detect_no_single_detected(tmp_path, monkeypatch):
+    """Same ambiguity, JSON surface: no single harness may be marked detected:true when
+    auto-detect is ambiguous."""
+    base = tmp_path / "home"
+    (base / ".claude" / "skills" / "gstack").mkdir(parents=True)
+    (base / ".claude" / "settings.json").write_text(json.dumps({"model": "claude-opus-4-8"}))
+    (base / ".codex" / "skills" / "gstack").mkdir(parents=True)
+    (base / ".codex" / "config.toml").write_text('model = "gpt-5.5"\n')
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: base))
+    result = runner.invoke(app, ["harnesses", "--json"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert not any(h.get("detected") for h in payload), (
+        "ambiguous auto-detect must not mark any single harness detected:true"
+    )
+
+
+def test_probe_permission_denied_primary_config_fails_closed(tmp_path, monkeypatch):
+    """Santa PR#9 round 2 (reviewer B): a primary config that can't be read
+    (permission_denied) must fail closed too — not just empty/malformed — so an
+    unreadable config never publishes a confident empty fingerprint."""
+    home = tmp_path / ".claude"
+    (home / "skills").mkdir(parents=True)
+    (home / "settings.json").write_text(json.dumps({"model": "claude-opus-4-8"}))
+    from atv_bench.fingerprint import reader as _reader
+    real_read_json = _reader.read_json
+
+    def deny_settings(path, root):
+        if path.name == "settings.json":
+            return _reader.ReadOutcome(reason=_reader.REASON_PERMISSION)
+        return real_read_json(path, root)
+
+    monkeypatch.setattr("atv_bench.fingerprint.probe.reader.read_json", deny_settings)
+    result = runner.invoke(app, ["fingerprint", "--harness", "claude-code", "--home", str(home)])
+    assert result.exit_code != 0, result.output
+    assert "settings.json" in result.output.lower()
+
+
+
 
 # --- T7: validate-harness failure copy names harness + prose + fix (M11) ---
 

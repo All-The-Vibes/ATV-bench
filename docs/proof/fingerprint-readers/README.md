@@ -17,12 +17,16 @@ Plan: `~/.gstack/projects/All-The-Vibes-ATV-bench/sschofield-main-design-2026071
 
 ## Tests
 
-457 hermetic tests pass (`uv run pytest -m "not live and not integration"`), +33 over the
+477 hermetic tests pass (`uv run pytest -m "not live and not integration"`), +53 over the
 424 baseline. New: `read_toml` unit suite (6), non-UTF8 regression (read_json + read_toml),
 codex canary + edge tests (7), claude real-layout canaries (installPath escape ×3, symlink
 escape, infra-not-plugins, disabled-plugin exclusion, real mcp source, manifest guard ×4,
 gstack-as-nested-skill, cross-plugin dedup), CLI detect-guard/model-consent/codex-msg (4),
-validate-harness copy (2), harness-agnostic codex-live updates.
+validate-harness copy (2), harness-agnostic codex-live updates. Santa-loop dual-review
+hardening (+20): fail-closed on empty/malformed/unreadable primary config, non-dict primary
+config flagged malformed (claude + copilot), codex malformed config flags mcps unknown,
+installed_plugins.json bad-internal-shape markers, multi-harness ambiguity consistency
+(detect-guard vs `harnesses` text + JSON).
 
 ## Adversarial leak-safety verification (Workflow: 3 independent skeptics)
 

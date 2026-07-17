@@ -103,7 +103,12 @@ def probe_claude_code(home: Path) -> ProbeResult:
             enabled_plugins_raw = ep
         # NB: only model + enabledPlugins are read. env/apiKeyHelper/awsSecret and any
         # future field are never read — allowlist by construction.
-    elif not settings.ok:
+    elif settings.ok:
+        # Parseable but NOT a dict (a JSON array/scalar/null): the config is structurally
+        # wrong, so treat it as malformed rather than silently falling through to an empty
+        # confident manifest (M9 fail-closed depends on this unknown[model] marker).
+        b.note_unknown("model", reader.REASON_MALFORMED)
+    else:
         b.note_unknown("model", settings.reason or reader.REASON_NOT_READABLE)
 
     # Enabled plugin KEYS ("name@marketplace" truthy only). The strip-@ name is the
@@ -134,12 +139,17 @@ def probe_claude_code(home: Path) -> ProbeResult:
                 if key not in enabled_keys:  # M5: only enabled plugins contribute
                     continue
                 if not isinstance(entries, list):
+                    # Enabled plugin with a wrong-shaped entry list → its nested skills/
+                    # agents are silently lost; surface a marker so the gap is visible.
+                    b.note_unknown("plugins", reader.REASON_MALFORMED)
                     continue
                 for entry in entries:
                     if not isinstance(entry, dict):
+                        b.note_unknown("plugins", reader.REASON_MALFORMED)
                         continue
                     install_path = entry.get("installPath")
                     if not isinstance(install_path, str) or not install_path:
+                        b.note_unknown("plugins", reader.REASON_MALFORMED)
                         continue
                     proot = Path(install_path)
                     ns_names, ns_errs = reader.list_child_dir_names(proot / "skills", home)
@@ -151,6 +161,9 @@ def probe_claude_code(home: Path) -> ProbeResult:
                     for _name, reason in na_errs:
                         b.note_unknown("custom_agents_count", reason)
                     custom_agents_count += na_count
+        elif plugins_map is not None:
+            # version==2 but plugins is present and not a dict → malformed manifest.
+            b.note_unknown("plugins", reader.REASON_MALFORMED)
     elif not manifest_out.ok and manifest_out.reason != reader.REASON_NOT_READABLE:
         b.note_unknown("plugins", manifest_out.reason or reader.REASON_MALFORMED)
 
@@ -230,7 +243,11 @@ def probe_copilot_cli(home: Path) -> ProbeResult:
             disabled_mcps = {s for s in dm if isinstance(s, str)}
         # NB: we read ONLY these named keys. theme/logLevel/experimental/etc. and any
         # future field are never emitted — allowlist by construction.
-    elif not settings.ok:
+    elif settings.ok:
+        # Parseable but NOT a dict → structurally wrong config; flag malformed so the
+        # fail-closed guard fires instead of publishing an empty confident manifest.
+        b.note_unknown("model", reader.REASON_MALFORMED)
+    else:
         b.note_unknown("model", settings.reason or reader.REASON_NOT_READABLE)
 
     # --- plugins (enabledPlugins keys are "name@marketplace"; take the name) ---

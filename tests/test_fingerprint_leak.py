@@ -800,3 +800,61 @@ def test_codex_malformed_config_flags_mcps_unknown(tmp_path):
         "malformed config.toml must flag mcps unknown too (same untrusted source), "
         f"got unknown={result.manifest['unknown']}"
     )
+
+
+@pytest.mark.parametrize("shape", ["[]", "42", '"a string"', "null", "true"])
+def test_claude_nondict_primary_config_flags_model_malformed(tmp_path, shape):
+    """Santa PR#9 round 2 (both reviewers): a PARSEABLE but non-dict settings.json
+    (a JSON array/scalar/null) is ok=True yet not a dict. It must NOT fall through
+    silently — it must flag model malformed so the CLI fail-closed guard can fire.
+    Otherwise claude-code publishes a confident EMPTY manifest from a broken config."""
+    home = tmp_path / ".claude"
+    (home / "skills").mkdir(parents=True)
+    (home / "settings.json").write_text(shape)
+    result = fp.probe_claude_code(home)
+    reasons = {(u["field"], u["reason"]) for u in result.manifest["unknown"]}
+    assert ("model", "malformed") in reasons, (
+        f"non-dict settings.json ({shape}) must flag model malformed, "
+        f"got unknown={result.manifest['unknown']}"
+    )
+
+
+@pytest.mark.parametrize("shape", ["[]", "42", '"a string"', "null", "true"])
+def test_copilot_nondict_primary_config_flags_model_malformed(tmp_path, shape):
+    """Same fail-closed gap as claude-code, for copilot-cli's settings.json."""
+    home = tmp_path / ".copilot"
+    (home / "skills").mkdir(parents=True)
+    (home / "settings.json").write_text(shape)
+    result = fp.probe_copilot_cli(home)
+    reasons = {(u["field"], u["reason"]) for u in result.manifest["unknown"]}
+    assert ("model", "malformed") in reasons, (
+        f"non-dict settings.json ({shape}) must flag model malformed, "
+        f"got unknown={result.manifest['unknown']}"
+    )
+
+
+@pytest.mark.parametrize("manifest_json", [
+    '{"version": 2, "plugins": "not-a-dict"}',       # plugins non-dict
+    '{"version": 2, "plugins": {"p@m": "not-a-list"}}',  # entries non-list
+    '{"version": 2, "plugins": {"p@m": ["not-a-dict"]}}',  # entry non-dict
+    '{"version": 2, "plugins": {"p@m": [{}]}}',       # entry missing installPath
+])
+def test_claude_installed_plugins_bad_internal_shape_flags_unknown(tmp_path, manifest_json):
+    """Santa PR#9 round 2 (both reviewers): bad INTERNAL shapes of a version-2
+    installed_plugins.json (plugins non-dict, entries non-list, entry non-dict,
+    missing installPath) for an ENABLED plugin silently dropped nested skills/agents
+    with no marker. Surface an unknown[] entry so the loss is visible, never silent."""
+    home = tmp_path / ".claude"
+    (home / "skills" / "top-skill").mkdir(parents=True)
+    (home / "plugins").mkdir()
+    (home / "plugins" / "installed_plugins.json").write_text(manifest_json)
+    (home / "settings.json").write_text(json.dumps({
+        "model": "claude-opus-4-8",
+        "enabledPlugins": {"p@m": True},
+    }))
+    result = fp.probe_claude_code(home)  # must not raise
+    fields = {u["field"] for u in result.manifest["unknown"]}
+    assert "plugins" in fields or "skills" in fields or "custom_agents_count" in fields, (
+        "bad installed_plugins.json internal shape for an enabled plugin must surface "
+        f"an unknown[] marker, got unknown={result.manifest['unknown']}"
+    )

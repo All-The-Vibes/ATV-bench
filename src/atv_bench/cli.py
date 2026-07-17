@@ -94,21 +94,27 @@ def _warn_if_config_absent(harness_key: str, home: Path | None, result: fp.Probe
         )
         raise typer.Exit(2)
 
-    # File exists but parsed to nothing usable (empty / malformed): the readers flag the
-    # model field as unknown with an empty/malformed reason. Fail closed there too — the
-    # published fingerprint would be an empty shell that reads as a confident real one.
-    unusable = {_reader.REASON_EMPTY, _reader.REASON_MALFORMED}
+    # File exists but is unusable (empty / malformed / unreadable / symlink-escaped): the
+    # readers flag the model field as unknown with one of these reasons. Fail closed there
+    # too — the published fingerprint would be an empty shell reading as a confident one.
+    unusable = {
+        _reader.REASON_EMPTY, _reader.REASON_MALFORMED,
+        _reader.REASON_PERMISSION, _reader.REASON_SYMLINK_ESCAPE,
+        _reader.REASON_NOT_READABLE,
+    }
     model_bad = any(
         u.get("field") == "model" and u.get("reason") in unusable
         for u in result.manifest.get("unknown", [])
     )
     if model_bad:
         typer.echo(
-            f"Cannot fingerprint {harness_key}: {primary} in {root} is empty or malformed.\n"
+            f"Cannot fingerprint {harness_key}: {primary} in {root} is empty, malformed, "
+            f"or unreadable.\n"
             f"  problem: the harness config file has no usable content, so the fingerprint "
             f"would be an empty shell.\n"
-            f"  cause:   {primary} is blank or not valid "
-            f"{'TOML' if primary.endswith('.toml') else 'JSON'}.\n"
+            f"  cause:   {primary} is blank, not valid "
+            f"{'TOML' if primary.endswith('.toml') else 'JSON'}, or not readable "
+            f"(permissions / symlink).\n"
             f"  fix:     repair or re-generate {primary} (run {harness_key} so it rewrites a "
             f"valid config), then re-run (see `atv-bench harnesses`)."
         )
@@ -391,11 +397,14 @@ def harnesses(
     live_present = [h.key for h in HARNESSES if h.live
                     and (Path.home() / h.config_root).exists()]
     ambiguous = len(live_present) > 1
+    # When ambiguous, no single harness is "the detected one" — the probing commands
+    # refuse to guess, so neither surface may stamp a winner.
+    marked = None if ambiguous else detected
     if json_out:
         payload = [
             {"key": h.key, "title": h.title, "live": h.live,
              "config_root": h.config_root, "summary": h.summary,
-             "detected": h.key == detected}
+             "detected": h.key == marked}
             for h in HARNESSES
         ]
         typer.echo(json.dumps(payload, indent=2))
@@ -404,7 +413,7 @@ def harnesses(
     for h in HARNESSES:
         status = "live" if h.live else "planned"
         mark = "✓" if h.live else "·"
-        here = "  ← detected on this machine" if h.key == detected else ""
+        here = "  ← detected on this machine" if h.key == marked else ""
         typer.echo(f"  {mark} {h.key}  [{status}]  — {h.title}{here}")
         typer.echo(f"      {h.summary}")
     if ambiguous:
