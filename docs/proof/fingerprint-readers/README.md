@@ -17,7 +17,7 @@ Plan: `~/.gstack/projects/All-The-Vibes-ATV-bench/sschofield-main-design-2026071
 
 ## Tests
 
-530 hermetic tests pass (`uv run pytest -m "not live and not integration"`), +106 over the
+531 hermetic tests pass (`uv run pytest -m "not live and not integration"`), +107 over the
 424 baseline. New: `read_toml` unit suite (6), non-UTF8 regression (read_json + read_toml),
 codex canary + edge tests (7), claude real-layout canaries (installPath escape ×3, symlink
 escape, infra-not-plugins, disabled-plugin exclusion, real mcp source, manifest guard ×4,
@@ -42,7 +42,9 @@ config.toml) no longer triggers false multi-harness ambiguity, and a present-but
 mcp_servers / enabledPlugins as a list/scalar instead of a dict/table) flags its dependent
 field malformed instead of silently emitting an empty list, and enabledPlugins VALUES are strictly honored — only
 boolean true publishes a plugin (false disables, a non-bool value flags plugins malformed
-and publishes nothing), fixing a copilot bug where disabled plugins leaked into the manifest.
+and publishes nothing), fixing a copilot bug where disabled plugins leaked into the manifest, and copilot's nested skills/agents walk is now
+gated on the enabled-plugin key set so a disabled plugin's nested skills/agents no longer
+leak into the manifest.
 
 ## Adversarial leak-safety verification (Workflow: 3 independent skeptics)
 

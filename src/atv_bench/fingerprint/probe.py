@@ -320,6 +320,11 @@ def probe_copilot_cli(home: Path) -> ProbeResult:
         for _name, reason in plug_errs:
             b.note_unknown("skills", reason)
         for plug in plug_names:
+            # M5 (copilot): only ENABLED plugins contribute nested skills/agents. The dir
+            # layout <marketplace>/<plugin> maps to the enabledPlugins key <plugin>@<mkt>;
+            # a disabled (or non-enabled) plugin's nested content must not leak.
+            if f"{plug}@{mkt}" not in enabled_keys:
+                continue
             s_names, s_errs = reader.list_child_dir_names(plugins_root / mkt / plug / "skills", home)
             for _name, reason in s_errs:
                 b.note_unknown("skills", reason)

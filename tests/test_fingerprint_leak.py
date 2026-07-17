@@ -1113,3 +1113,31 @@ def test_copilot_nonbool_enabledplugin_value_flags_malformed(tmp_path, bad_val):
         f"non-bool enabledPlugins value ({bad_val}) must flag plugins malformed, "
         f"got unknown={result.manifest['unknown']}")
     assert "bad-plugin" not in result.manifest["plugins"], result.manifest["plugins"]
+
+
+def test_copilot_disabled_plugin_nested_skills_agents_excluded(tmp_path):
+    """Santa PR#9 round 12 (reviewer B): copilot's nested walk iterated installed-plugins/
+    on disk unconditionally, so a DISABLED plugin's nested skills/agents still leaked into
+    the manifest even though the plugin itself was excluded. The nested walk must be gated
+    on the enabled-plugin key set (dir <mkt>/<plug> ↔ enabled key <plug>@<mkt>)."""
+    home = tmp_path / ".copilot"
+    (home / "skills").mkdir(parents=True)
+    (home / "settings.json").write_text(json.dumps({
+        "model": "gpt-x",
+        "enabledPlugins": {"on@mkt": True, "off@mkt": False},
+    }))
+    # enabled plugin: on@mkt → dir mkt/on
+    on_root = home / "installed-plugins" / "mkt" / "on"
+    (on_root / "skills" / "enabledskill").mkdir(parents=True)
+    (on_root / "agents").mkdir(parents=True)
+    (on_root / "agents" / "e.md").write_text("x")
+    # disabled plugin: off@mkt → dir mkt/off — its nested content must NOT be counted
+    off_root = home / "installed-plugins" / "mkt" / "off"
+    (off_root / "skills" / "secretskill").mkdir(parents=True)
+    (off_root / "agents").mkdir(parents=True)
+    (off_root / "agents" / "s.md").write_text("x")
+    result = fp.probe_copilot_cli(home)
+    assert result.manifest["plugins"] == ["on"], result.manifest["plugins"]
+    assert "enabledskill" in result.manifest["skills"], result.manifest["skills"]
+    assert "secretskill" not in result.manifest["skills"], result.manifest["skills"]
+    assert result.manifest["custom_agents_count"] == 1, result.manifest["custom_agents_count"]
