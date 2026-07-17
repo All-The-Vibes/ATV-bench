@@ -87,7 +87,11 @@ def _warn_if_config_absent(harness_key: str, home: Path | None, result: fp.Probe
     }.get(harness_key)
     if primary is None:
         return
-    if not (root / primary).exists():
+    primary_path = root / primary
+    # A dangling symlink is NOT "missing" — the file is present as a link, just unreadable.
+    # Treat it as present here so the accurate empty/malformed/unreadable branch below fires
+    # (the probe already flagged it not_readable) rather than the "missing file" message.
+    if not primary_path.exists() and not primary_path.is_symlink():
         typer.echo(
             f"Cannot fingerprint {harness_key}: no {primary} found in {root}.\n"
             f"  problem: the harness config file is missing, so the fingerprint would be empty.\n"

@@ -224,6 +224,21 @@ def test_nonstring_model_type_fails_closed(tmp_path):
     assert "config.toml" in result.output.lower()
 
 
+def test_dangling_symlink_primary_config_reports_unreadable_not_missing(tmp_path):
+    """Santa PR#9 round 8 (reviewer B): a dangling primary-config symlink fails closed
+    (correct) but must report it as empty/malformed/unreadable — NOT 'no config.toml
+    found' (missing) — since the file IS present as a symlink."""
+    home = tmp_path / ".codex"
+    home.mkdir()
+    (home / "config.toml").symlink_to(home / "missing-target.toml")  # dangling, within root
+    result = runner.invoke(app, ["fingerprint", "--harness", "codex", "--home", str(home)])
+    assert result.exit_code != 0, result.output
+    low = result.output.lower()
+    assert "config.toml" in low
+    assert "unreadable" in low
+    assert "no config.toml found" not in low
+
+
 def test_home_without_harness_resolves_from_root_not_real_home(tmp_path, monkeypatch):
     """Santa PR#9 round 4 (reviewer B): passing --home <codex-root> WITHOUT --harness
     must fingerprint codex from that root — not mis-resolve the harness via

@@ -17,7 +17,7 @@ Plan: `~/.gstack/projects/All-The-Vibes-ATV-bench/sschofield-main-design-2026071
 
 ## Tests
 
-504 hermetic tests pass (`uv run pytest -m "not live and not integration"`), +80 over the
+505 hermetic tests pass (`uv run pytest -m "not live and not integration"`), +81 over the
 424 baseline. New: `read_toml` unit suite (6), non-UTF8 regression (read_json + read_toml),
 codex canary + edge tests (7), claude real-layout canaries (installPath escape ×3, symlink
 escape, infra-not-plugins, disabled-plugin exclusion, real mcp source, manifest guard ×4,
