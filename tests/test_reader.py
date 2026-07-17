@@ -115,6 +115,31 @@ def test_read_toml_existing_unreadable_is_not_readable(tmp_path):
     assert out.reason == reader.REASON_NOT_READABLE
 
 
+def test_read_toml_broken_symlink_is_not_readable(tmp_path):
+    """Santa PR#9 round 6 (reviewer B): a config that is a DANGLING symlink (target
+    within root, missing) must be REASON_NOT_READABLE, not ABSENT — the config file IS
+    present (as a symlink), just unreadable, so it must fail closed rather than be
+    silently skipped like a genuinely-absent optional config."""
+    root = tmp_path / ".codex"
+    root.mkdir()
+    link = root / "config.toml"
+    link.symlink_to(root / "missing-target.toml")  # target within root, doesn't exist
+    out = reader.read_toml(link, root)
+    assert not out.ok
+    assert out.reason == reader.REASON_NOT_READABLE, out.reason
+
+
+def test_read_json_broken_symlink_is_not_readable(tmp_path):
+    """Same dangling-symlink fail-closed for read_json."""
+    root = tmp_path / ".claude"
+    root.mkdir()
+    link = root / "settings.json"
+    link.symlink_to(root / "missing-target.json")
+    out = reader.read_json(link, root)
+    assert not out.ok
+    assert out.reason == reader.REASON_NOT_READABLE, out.reason
+
+
 def test_read_json_missing_file_is_absent(tmp_path):
     out = reader.read_json(tmp_path / "nope.json", tmp_path)
     assert not out.ok

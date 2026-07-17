@@ -57,6 +57,10 @@ def read_json(path: Path, root: Path) -> ReadOutcome:
     if not _within_root(path, root):
         return ReadOutcome(reason=REASON_SYMLINK_ESCAPE)
     try:
+        # A dangling symlink (present as a link, target missing) is NOT genuinely absent —
+        # the config file exists, it's just unreadable — so fail closed, don't skip it.
+        if path.is_symlink() and not path.exists():
+            return ReadOutcome(reason=REASON_NOT_READABLE)
         if not path.exists():
             return ReadOutcome(reason=REASON_ABSENT)
         raw = path.read_text(encoding="utf-8")
@@ -85,6 +89,9 @@ def read_toml(path: Path, root: Path) -> ReadOutcome:
     if not _within_root(path, root):
         return ReadOutcome(reason=REASON_SYMLINK_ESCAPE)
     try:
+        # A dangling symlink is present-but-unreadable, not genuinely absent → fail closed.
+        if path.is_symlink() and not path.exists():
+            return ReadOutcome(reason=REASON_NOT_READABLE)
         if not path.exists():
             return ReadOutcome(reason=REASON_ABSENT)
         raw = path.read_text(encoding="utf-8")
