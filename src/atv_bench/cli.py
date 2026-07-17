@@ -82,9 +82,62 @@ def _render_consent(manifest: dict) -> str:
     return "\n".join(lines)
 
 
+def _render_full_assessment(manifest: dict, harness_key: str | None = None) -> str:
+    """A COMPLETE, untruncated read-back of what the fingerprint found in the harness.
+
+    Unlike the one-line consent view (which truncates lists for a quick glance), this
+    prints the model plus every skill / MCP / plugin name and the agent count — the full
+    inventory of what makes this harness what it is.
+    """
+    m = manifest
+    hb = "═" * 64
+
+    def _block(label: str, items: list[str]) -> list[str]:
+        out = [f"\n  {label} ({len(items)}):"]
+        if not items:
+            out.append("    (none)")
+        else:
+            for name in items:
+                out.append(f"    • {name}")
+        return out
+
+    lines = [
+        hb,
+        f"  HARNESS ASSESSMENT — {harness_key or m['harness']}",
+        hb,
+        f"  Harness type : {m['harness']}",
+        f"  Model        : {m['model']}",
+        f"  gstack       : {str(m['gstack']).lower()}",
+        f"  Custom agents: {m['custom_agents_count']}",
+        f"  Totals       : {len(m['skills'])} skills · {len(m['mcps'])} MCP servers · "
+        f"{len(m['plugins'])} plugins",
+    ]
+    lines += _block("Skills", m["skills"])
+    lines += _block("MCP servers", m["mcps"])
+    lines += _block("Plugins", m["plugins"])
+    # Surface anything the scanner withheld or couldn't read, honestly.
+    scrubbed = [u for u in m["unknown"] if u["reason"] == "name_failed_safety_scan"]
+    other = [u for u in m["unknown"] if u["reason"] != "name_failed_safety_scan"]
+    lines.append("")
+    if scrubbed:
+        fields = ", ".join(sorted({u["field"] for u in scrubbed}))
+        lines.append(f"  Scrubbed     : {len(scrubbed)} secret-like value(s) withheld "
+                     f"(fields: {fields})")
+    else:
+        lines.append("  Scrubbed     : 0 (scanner ran, nothing looked secret-like)")
+    if other:
+        parts = "; ".join(f"{u['field']}: {u['reason']}" for u in other)
+        lines.append(f"  Unread       : {parts}")
+    else:
+        lines.append("  Unread       : (all surfaces read cleanly)")
+    lines.append(hb)
+    return "\n".join(lines)
+
+
 @app.command()
 def fingerprint(
     dry_run: bool = typer.Option(False, "--dry-run", help="Show the consent view (default human)."),
+    full: bool = typer.Option(False, "--full", help="Full read-back: model + EVERY skill/MCP/plugin/agent (untruncated)."),
     json_out: bool = typer.Option(False, "--json", help="Emit the raw manifest as JSON."),
     harness: str = typer.Option(None, "--harness", help="Harness to probe (default: auto-detect; see `atv-bench harnesses`)."),
     home: Path = typer.Option(None, "--home", help="Harness config root (default: harness's standard dir under $HOME)."),
@@ -93,6 +146,9 @@ def fingerprint(
     result = _probe_or_exit(home, harness)
     if json_out:
         typer.echo(json.dumps(result.manifest, indent=2))
+        return
+    if full:
+        typer.echo(_render_full_assessment(result.manifest, harness))
         return
     # default + --dry-run both show the consent view (dry-run is the documented verb)
     typer.echo(_render_consent(result.manifest))
@@ -369,6 +425,7 @@ def play(
     player: str = typer.Option(None, "--player", help="Named bot to play as (see `atv-bench bots`)."),
     player_bot: Path = typer.Option(None, "--player-bot", help="Path to YOUR harness-built bot file (main.py) to play as."),
     opponent: str = typer.Option(None, "--opponent", help="Named opponent bot (default: greedy anchor)."),
+    opponent_bot: Path = typer.Option(None, "--opponent-bot", help="Path to a harness-built bot file to play AS the opponent (harness-vs-harness)."),
     seed: int = typer.Option(0, "--seed", help="Match label/id (matches are already fully deterministic; seed only labels the replay)."),
     out: Path = typer.Option(None, "--out", help="Where to write the replay (default: ./_replay)."),
     open_browser: bool = typer.Option(True, "--open/--no-open", help="Open the animated replay in a browser."),
@@ -383,12 +440,16 @@ def play(
 
         atv-bench play --player bare --opponent greedy
         atv-bench play --player-bot main.py --opponent wall_hugger
+        atv-bench play --player-bot mine.py --opponent-bot theirs.py   # harness vs harness
     """
     from atv_bench.bots import DEFAULT_OPPONENT
     from atv_bench.play import Contestant, build_replay_html, render_ascii, run_local_match
 
     if player_bot is not None and player is not None:
         typer.echo("Pick one of --player <bot> or --player-bot <file>, not both.")
+        raise typer.Exit(2)
+    if opponent_bot is not None and opponent is not None:
+        typer.echo("Pick one of --opponent <bot> or --opponent-bot <file>, not both.")
         raise typer.Exit(2)
     if player_bot is not None:
         if not player_bot.is_file():
@@ -397,7 +458,13 @@ def play(
         me = Contestant(bot_path=str(player_bot), label=player_bot.stem)
     else:
         me = Contestant(key=player or "bare")
-    opp = Contestant(key=opponent or DEFAULT_OPPONENT)
+    if opponent_bot is not None:
+        if not opponent_bot.is_file():
+            typer.echo(f"No bot file at {opponent_bot}.")
+            raise typer.Exit(2)
+        opp = Contestant(bot_path=str(opponent_bot), label=opponent_bot.stem)
+    else:
+        opp = Contestant(key=opponent or DEFAULT_OPPONENT)
 
     try:
         result = run_local_match(game=game, player=me, opponent=opp, seed=seed)
