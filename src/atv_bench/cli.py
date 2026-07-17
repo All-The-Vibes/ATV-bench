@@ -15,7 +15,7 @@ import typer
 
 from atv_bench.fingerprint import probe as fp
 from atv_bench.games import GAMES, DEFAULT_GAME, assert_playable
-from atv_bench.harnesses import HARNESSES, DEFAULT_HARNESS, detect_harness
+from atv_bench.harnesses import HARNESSES, DEFAULT_HARNESS, detect_harness, harness_config_present
 from atv_bench.submit import run_preflight, submission_status_trail
 
 app = typer.Typer(
@@ -42,7 +42,7 @@ def _probe_or_exit(home: Path | None, harness: str | None) -> fp.ProbeResult:
 
     if harness is None and home is None:
         detected = [h.key for h in HARNESSES if h.live
-                    and (Path.home() / h.config_root).exists()]
+                    and hz.harness_config_present(h.key)]
         if len(detected) > 1:
             typer.echo(
                 "Multiple coding-agent harnesses detected on this machine: "
@@ -80,11 +80,7 @@ def _warn_if_config_absent(harness_key: str, home: Path | None, result: fp.Probe
     from atv_bench.fingerprint import reader as _reader
 
     root = Path(home) if home is not None else hz.config_root_for(harness_key)
-    primary = {
-        "codex": "config.toml",
-        "claude-code": "settings.json",
-        "copilot-cli": "settings.json",
-    }.get(harness_key)
+    primary = hz.PRIMARY_CONFIG.get(harness_key)
     if primary is None:
         return
     primary_path = root / primary
@@ -402,7 +398,7 @@ def harnesses(
     # ambiguous and the probing commands refuse to guess — so this listing must NOT claim
     # a single confident default either. Both surfaces tell the same story.
     live_present = [h.key for h in HARNESSES if h.live
-                    and (Path.home() / h.config_root).exists()]
+                    and harness_config_present(h.key)]
     ambiguous = len(live_present) > 1
     # When ambiguous, no single harness is "the detected one" — the probing commands
     # refuse to guess, so neither surface may stamp a winner.

@@ -98,6 +98,42 @@ def test_detect_guard_single_harness_ok(tmp_path, monkeypatch):
     assert "gpt-5.5" in result.output
 
 
+def test_stale_empty_sibling_root_not_counted_as_detected(tmp_path, monkeypatch):
+    """Santa PR#9 round 9 (reviewer B): a stale EMPTY sibling config root (dir present,
+    no primary config file — e.g. a leftover ~/.codex/ with no config.toml) must NOT
+    register as a detected harness. Detection is based on the primary config FILE, not the
+    bare dir, matching the reader taxonomy (absent primary → skip). With one valid harness
+    plus an empty sibling, auto-detect must proceed (not false-ambiguous)."""
+    base = tmp_path / "home"
+    (base / ".claude" / "skills").mkdir(parents=True)
+    (base / ".claude" / "settings.json").write_text(json.dumps({"model": "claude-opus-4-8"}))
+    (base / ".codex").mkdir()  # stale empty codex root — no config.toml
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: base))
+    result = runner.invoke(app, ["fingerprint"])
+    assert result.exit_code == 0, result.output  # not false-ambiguous
+    assert "multiple" not in result.output.lower()
+
+
+def test_harnesses_stale_empty_sibling_not_detected(tmp_path, monkeypatch):
+    """Same on the `harnesses` surfaces (text + JSON): a stale empty ~/.codex/ must not be
+    marked detected, and must not trigger the ambiguity banner."""
+    base = tmp_path / "home"
+    (base / ".claude" / "skills").mkdir(parents=True)
+    (base / ".claude" / "settings.json").write_text(json.dumps({"model": "claude-opus-4-8"}))
+    (base / ".codex").mkdir()  # stale empty
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: base))
+    text = runner.invoke(app, ["harnesses"])
+    assert text.exit_code == 0, text.output
+    assert "multiple harnesses detected" not in text.output.lower()
+    # claude-code (the one with a real primary config) is the detected one.
+    assert "claude-code  [live]  — claude code  ← detected on this machine" in text.output.lower()
+    jz = runner.invoke(app, ["harnesses", "--json"])
+    payload = json.loads(jz.output)
+    detected = {h["key"] for h in payload if h.get("detected")}
+    assert detected == {"claude-code"}, payload
+
+
+
 def test_codex_missing_config_actionable_message(tmp_path):
     """M9: an empty ~/.codex (no config.toml) probed explicitly → actionable message,
     never a green empty manifest passing silently."""

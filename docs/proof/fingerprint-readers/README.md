@@ -17,7 +17,7 @@ Plan: `~/.gstack/projects/All-The-Vibes-ATV-bench/sschofield-main-design-2026071
 
 ## Tests
 
-505 hermetic tests pass (`uv run pytest -m "not live and not integration"`), +81 over the
+508 hermetic tests pass (`uv run pytest -m "not live and not integration"`), +84 over the
 424 baseline. New: `read_toml` unit suite (6), non-UTF8 regression (read_json + read_toml),
 codex canary + edge tests (7), claude real-layout canaries (installPath escape ×3, symlink
 escape, infra-not-plugins, disabled-plugin exclusion, real mcp source, manifest guard ×4,
@@ -36,7 +36,9 @@ unsafe-STRING model, which stays a scrub-not-fail consent boundary), and a dangl
 symlink (present as a link, target missing) fails closed as not_readable instead of being
 skipped as absent, and a non-dict SECONDARY source (parseable-but-non-dict ~/.claude.json /
 mcp-config.json, or unusable installed_plugins.json while enabled plugins exist) flags its
-dependent field unknown instead of silently emitting an empty list.
+dependent field unknown instead of silently emitting an empty list, and harness DETECTION/ambiguity is based on the primary
+config FILE (not a bare config dir), so a stale empty sibling root (e.g. ~/.codex/ with no
+config.toml) no longer triggers false multi-harness ambiguity.
 
 ## Adversarial leak-safety verification (Workflow: 3 independent skeptics)
 

@@ -36,15 +36,38 @@ def test_all_v1_harnesses_live():
 def test_detect_harness_finds_live_config(tmp_path):
     # No config dir → nothing detected.
     assert hz.detect_harness(home=tmp_path) is None
-    # Create the claude-code config root → detected.
+    # A bare config DIR with no primary config file is NOT a detected harness (detection
+    # is based on the primary config file, not the dir — matches the reader taxonomy).
     (tmp_path / ".claude").mkdir()
+    assert hz.detect_harness(home=tmp_path) is None
+    # Create the primary config file → detected.
+    (tmp_path / ".claude" / "settings.json").write_text('{"model": "claude-opus-4-8"}')
     assert hz.detect_harness(home=tmp_path) == "claude-code"
 
 
 def test_detect_finds_codex_now_live(tmp_path):
-    # codex is now live, so its config dir IS detected.
+    # codex is now live: a config.toml (primary config) under ~/.codex IS detected.
     (tmp_path / ".codex").mkdir()
+    (tmp_path / ".codex" / "config.toml").write_text('model = "gpt-5.5"\n')
     assert hz.detect_harness(home=tmp_path) == "codex"
+
+
+def test_harness_config_present_needs_primary_file(tmp_path):
+    """Santa PR#9 round 9: harness_config_present is True only when the PRIMARY config
+    file exists — a bare config dir is not enough; a dangling-symlink primary counts as
+    present (it exists as a link, probe/CLI fails it closed)."""
+    # bare dir → not present
+    (tmp_path / ".codex").mkdir()
+    assert hz.harness_config_present("codex", base=tmp_path) is False
+    # primary file present → present
+    (tmp_path / ".codex" / "config.toml").write_text('model = "gpt-5.5"\n')
+    assert hz.harness_config_present("codex", base=tmp_path) is True
+    # dangling-symlink primary → still present (fails closed later, not skipped)
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").symlink_to(tmp_path / ".claude" / "missing.json")
+    assert hz.harness_config_present("claude-code", base=tmp_path) is True
+    # unknown / planned harness → False
+    assert hz.harness_config_present("bogus", base=tmp_path) is False
 
 
 def test_config_root_for_uses_registry(tmp_path):
