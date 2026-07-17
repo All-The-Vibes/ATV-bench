@@ -13,7 +13,6 @@ to the TreeContainerLike protocol players.py expects.
 """
 from __future__ import annotations
 
-import tarfile
 import tempfile
 from pathlib import Path
 
@@ -107,22 +106,24 @@ class _DockerTreeContainer:  # pragma: no cover - requires Docker
         self.workdir = workdir
 
     def read_tree(self) -> dict[str, str]:
-        # tar the workdir out of the container, read text files.
-        res = self.env.execute(f"tar -C {self.workdir} -cf - .")
-        raw = res["output"] if isinstance(res, dict) else res
+        # docker cp the workdir to a host temp dir (binary-safe, unlike tar-via-execute).
+        from codeclash.utils.environment import copy_from_container
+
         out: dict[str, str] = {}
         with tempfile.TemporaryDirectory() as tmp:
-            tar_path = Path(tmp) / "t.tar"
-            tar_path.write_bytes(raw.encode("latin-1") if isinstance(raw, str) else raw)
-            with tarfile.open(tar_path) as tf:
-                tf.extractall(tmp)
-            base = Path(tmp)
-            for p in base.rglob("*"):
-                if p.is_file() and p.name != "t.tar" and ".git" not in p.parts:
-                    try:
-                        out[p.relative_to(base).as_posix()] = p.read_text()
-                    except UnicodeDecodeError:
-                        continue
+            dest = Path(tmp) / "work"
+            copy_from_container(self.env, self.workdir, dest)
+            # `docker cp <dir>` yields dest/<basename>/... — find the real root.
+            base = dest if dest.is_dir() else Path(tmp)
+            for p in sorted(base.rglob("*")):
+                if not p.is_file():
+                    continue
+                if ".git" in p.relative_to(base).parts:
+                    continue
+                try:
+                    out[p.relative_to(base).as_posix()] = p.read_text(encoding="utf-8")
+                except (UnicodeDecodeError, OSError):
+                    continue  # skip binaries; the bot itself is text
         return out
 
     def write_tree(self, files: dict[str, str]) -> None:
