@@ -566,6 +566,168 @@ def _serve_and_open(site: Path) -> None:
         typer.echo("\nStopped.")
 
 
+def _record_demo_match(store_dir: str, result: dict, a_name: str, b_name: str) -> None:
+    """Seed the two demo players + the match they just played into the demo store.
+
+    The demo's whole point is "play a match, then see IT on the board". Without this,
+    Act 3 shows only the canned build_demo_store roster and the two harnesses the user
+    just watched (a_name vs b_name) never appear. We add a submission for each (so they
+    get a leaderboard row with a fingerprint chip) and replay the just-played, fully
+    deterministic outcome across enough seeded match_ids to clear the rated gate — the
+    result is honest (same adjudicated outcome every time), just repeated so the row is
+    rated rather than "waiting for opponent".
+    """
+    from atv_bench.store import LeagueStore
+    from atv_bench.elo import MIN_RATED_MATCHES
+
+    store = LeagueStore(store_dir)
+
+    def _fingerprint(harness: str, gstack: bool, skills: list[str]) -> dict:
+        return {
+            "harness": harness, "model": "demo", "gstack": gstack,
+            "skills": skills, "mcps": [], "plugins": [], "custom_agents_count": 0,
+            "probe_version": "1.0.0", "unknown": [],
+        }
+
+    entrants = (
+        (a_name, "claude-code", True, ["gstack"]),
+        (b_name, "copilot-cli", False, []),
+    )
+    for identity, harness, gstack, skills in entrants:
+        store.add_submission({
+            "identity": identity,
+            "game": "lightcycles",
+            "bot_sha256": (identity.encode().hex() * 8)[:64].ljust(64, "0"),
+            "pr_url": "https://github.com/All-The-Vibes/ATV-bench/pull/1",
+            "logs_url": "https://all-the-vibes.github.io/ATV-bench/logs/1",
+            "fingerprint": _fingerprint(harness, gstack, skills),
+        })
+
+    outcome = result.get("outcome", "draw")
+    # Replay the identical adjudicated outcome across distinct match_ids so the pairing
+    # clears MIN_RATED_MATCHES and shows as a real rated row, not "waiting for opponent".
+    for i in range(MIN_RATED_MATCHES + 2):
+        store.append_match({
+            "player_a": a_name,
+            "player_b": b_name,
+            "outcome": outcome,
+            "match_id": f"demo-match-{i}",
+            "game": "lightcycles",
+            "seed": i,
+        })
+
+
+@app.command(name="demo-match")
+def demo_match_cmd(
+    a_bot: Path = typer.Option(None, "--a-bot", help="Bot file for player A (default: bundled sample)."),
+    b_bot: Path = typer.Option(None, "--b-bot", help="Bot file for player B (default: bundled sample)."),
+    a_name: str = typer.Option("ATV-StarterKit", "--a-name", help="Display name for player A."),
+    b_name: str = typer.Option("ATV-Phoenix", "--b-name", help="Display name for player B."),
+    live: bool = typer.Option(True, "--live/--no-live",
+                              help="Animate the feed with a per-turn delay (--no-live for CI/scripts)."),
+    board: bool = typer.Option(True, "--board/--no-board",
+                               help="After the match, build the leaderboard + insights."),
+    seed: int = typer.Option(0, "--seed", help="Trusted engine seed (reproducible match)."),
+) -> None:
+    """Play two harness bots head-to-head in Tron with a live feed, then show the board.
+
+    The demo in three acts: (1) two named harnesses enter, (2) a live turn-by-turn Tron
+    feed renders each frame, (3) the leaderboard + gstack insights are shown. With no bot
+    paths it uses two bundled greedy-survivor sample bots so the demo runs with zero setup.
+    """
+    import time
+
+    from atv_bench.arena.engine import Direction, TronEngine
+    from atv_bench.arena.referee import SubprocessMoveSource, run_match
+    from atv_bench.arena.render import render_frame
+    from atv_bench.arena import sample_bots
+
+    sample = Path(sample_bots.__file__).parent / "greedy_survivor.py"
+    a_path = str(a_bot) if a_bot is not None else str(sample)
+    b_path = str(b_bot) if b_bot is not None else str(sample)
+
+    for label, p in ((a_name, a_path), (b_name, b_path)):
+        if not Path(p).is_file():
+            typer.echo(f"Bot for {label} not found: {p}")
+            raise typer.Exit(2)
+
+    board_w = board_h = 25
+    engine = TronEngine(
+        width=board_w, height=board_h,
+        start_a=(1, 1), start_b=(board_w - 2, board_h - 2),
+        dir_a=Direction.RIGHT, dir_b=Direction.LEFT, max_turns=400,
+    )
+
+    typer.echo(f"\n  {a_name}  ⚔  {b_name}   —  Lightcycles (Tron)\n")
+
+    def _observe(state):
+        frame = render_frame(state, engine, label_a=a_name, label_b=b_name)
+        if live:
+            # Clear + redraw for an in-place animation in a real terminal.
+            typer.echo("\x1b[2J\x1b[H" + frame)
+            time.sleep(0.06)
+        else:
+            typer.echo(frame)
+
+    source_a = SubprocessMoveSource([sys.executable, a_path], per_turn_timeout=2.0)
+    source_b = SubprocessMoveSource([sys.executable, b_path], per_turn_timeout=2.0)
+    try:
+        result = run_match(
+            engine, source_a, source_b,
+            player_a=a_name, player_b=b_name, match_id="demo-local",
+            game="lightcycles", seed=seed, observer=_observe,
+        )
+    finally:
+        source_a.close()
+        source_b.close()
+
+    outcome = result.get("outcome")
+    winner = {"a_wins": a_name, "b_wins": b_name}.get(outcome)
+    if winner:
+        typer.echo(f"\n★ Result: {winner} wins ({outcome}).")
+    else:
+        typer.echo(f"\n— Result: draw between {a_name} and {b_name}.")
+
+    if not board:
+        return
+
+    # Act 3: record the match into a throwaway store, build the board, show insights.
+    import tempfile
+    import shutil
+    from datetime import datetime, timezone
+    from atv_bench.demo import build_demo_store
+    from atv_bench.store import LeagueStore
+    from atv_bench.publish import build_site
+    from atv_bench.leaderboard import build_insights
+
+    tmp_store = Path(tempfile.mkdtemp(prefix="atv-demo-match-"))
+    out_dir = Path(tempfile.mkdtemp(prefix="atv-demo-board-"))
+    try:
+        build_demo_store(str(tmp_store))
+        # Record the match that JUST played so Act 3's board reflects it — otherwise the
+        # user watches ATV-StarterKit vs ATV-Phoenix, then sees an unrelated canned roster.
+        _record_demo_match(str(tmp_store), result, a_name, b_name)
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        site = build_site(str(out_dir), store_dir=str(tmp_store), updated_at=now)
+        doc = json.loads((site / "leaderboard.json").read_text())
+        rows = doc.get("rows", [])
+
+        typer.echo("\n=== Leaderboard ===")
+        for r in rows:
+            typer.echo(
+                f"  #{r.get('rank')}  {round(float(r.get('elo', 0)))} ELO  "
+                f"@{r.get('identity')} ({r.get('harness_name')})  "
+                f"— {r.get('fingerprint_summary', '')}"
+            )
+        typer.echo("\n=== Insights ===")
+        for line in build_insights(rows):
+            typer.echo(f"  • {line}")
+        typer.echo(f"\n  Static board written to: {site / 'index.html'}")
+    finally:
+        shutil.rmtree(tmp_store, ignore_errors=True)
+        # Leave the built board on disk for the user to open; only clean the store.
+
+
 @app.command()
 def doctor(
     harness: str = typer.Option(None, "--harness", help="Harness to check for (default: auto-detect; see `atv-bench harnesses`)."),
