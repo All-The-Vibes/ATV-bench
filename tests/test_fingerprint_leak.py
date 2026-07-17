@@ -972,3 +972,36 @@ def test_claude_installed_plugins_bad_internal_shape_flags_unknown(tmp_path, man
         "bad installed_plugins.json internal shape for an enabled plugin must surface "
         f"an unknown[] marker, got unknown={result.manifest['unknown']}"
     )
+
+
+@pytest.mark.parametrize("shape", ["[]", "42", '"a string"', "null", "true"])
+def test_claude_nondict_mcp_source_flags_mcps_malformed(tmp_path, shape):
+    """Santa PR#9 round 7 (reviewer B): a PARSEABLE but non-dict ~/.claude.json (the mcp
+    source) is ok=True yet not a dict, so it fell through and emitted mcps=[] with no
+    marker — reading as a confident 'no MCP servers' when the source is actually
+    malformed. Must flag mcps malformed."""
+    home = tmp_path / ".claude"
+    (home / "skills").mkdir(parents=True)
+    (home / "settings.json").write_text(json.dumps({"model": "claude-opus-4-8"}))
+    (home.parent / ".claude.json").write_text(shape)
+    result = fp.probe_claude_code(home)
+    reasons = {(u["field"], u["reason"]) for u in result.manifest["unknown"]}
+    assert ("mcps", "malformed") in reasons, (
+        f"non-dict ~/.claude.json ({shape}) must flag mcps malformed, "
+        f"got unknown={result.manifest['unknown']}"
+    )
+
+
+@pytest.mark.parametrize("shape", ["[]", "42", '"a string"', "null"])
+def test_copilot_nondict_mcp_source_flags_mcps_malformed(tmp_path, shape):
+    """Same non-dict mcp source gap for copilot-cli's mcp-config.json."""
+    home = tmp_path / ".copilot"
+    (home / "skills").mkdir(parents=True)
+    (home / "settings.json").write_text(json.dumps({"model": "gpt-x"}))
+    (home / "mcp-config.json").write_text(shape)
+    result = fp.probe_copilot_cli(home)
+    reasons = {(u["field"], u["reason"]) for u in result.manifest["unknown"]}
+    assert ("mcps", "malformed") in reasons, (
+        f"non-dict mcp-config.json ({shape}) must flag mcps malformed, "
+        f"got unknown={result.manifest['unknown']}"
+    )

@@ -168,6 +168,11 @@ def probe_claude_code(home: Path) -> ProbeResult:
         elif plugins_map is not None:
             # version==2 but plugins is present and not a dict → malformed manifest.
             b.note_unknown("plugins", reader.REASON_MALFORMED)
+    elif manifest_out.ok and enabled_keys:
+        # Parseable but unusable (non-dict, or version != 2) installed_plugins.json while
+        # enabled plugins exist → their nested skills/agents can't be resolved; flag it so
+        # the loss is visible rather than a silent undercount.
+        b.note_unknown("plugins", reader.REASON_MALFORMED)
     elif not manifest_out.ok and manifest_out.reason != reader.REASON_ABSENT:
         b.note_unknown("plugins", manifest_out.reason or reader.REASON_MALFORMED)
 
@@ -187,7 +192,11 @@ def probe_claude_code(home: Path) -> ProbeResult:
         if isinstance(servers, dict):
             # Read only the KEYS (server names), never the values (command/env/url/token).
             mcps = b.safe_names(list(servers.keys()), "mcps")
-    elif not mcp_cfg.ok and mcp_cfg.reason != reader.REASON_ABSENT:
+    elif mcp_cfg.ok:
+        # Parseable but non-dict ~/.claude.json → malformed mcp source, flag it (don't
+        # present mcps:[] as a confident "no MCP servers").
+        b.note_unknown("mcps", reader.REASON_MALFORMED)
+    elif mcp_cfg.reason != reader.REASON_ABSENT:
         b.note_unknown("mcps", mcp_cfg.reason or reader.REASON_MALFORMED)
 
     manifest: dict[str, Any] = {
@@ -302,7 +311,10 @@ def probe_copilot_cli(home: Path) -> ProbeResult:
             # Read only the KEYS (server names), never the values (command/env/url/token).
             names = [k for k in servers.keys() if k not in disabled_mcps]
             mcps = b.safe_names(names, "mcps")
-    elif not mcp_cfg.ok and mcp_cfg.reason != reader.REASON_ABSENT:
+    elif mcp_cfg.ok:
+        # Parseable but non-dict mcp-config.json → malformed mcp source, flag it.
+        b.note_unknown("mcps", reader.REASON_MALFORMED)
+    elif mcp_cfg.reason != reader.REASON_ABSENT:
         b.note_unknown("mcps", mcp_cfg.reason or reader.REASON_MALFORMED)
 
     manifest: dict[str, Any] = {

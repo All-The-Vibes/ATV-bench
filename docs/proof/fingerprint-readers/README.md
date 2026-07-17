@@ -17,7 +17,7 @@ Plan: `~/.gstack/projects/All-The-Vibes-ATV-bench/sschofield-main-design-2026071
 
 ## Tests
 
-495 hermetic tests pass (`uv run pytest -m "not live and not integration"`), +71 over the
+504 hermetic tests pass (`uv run pytest -m "not live and not integration"`), +80 over the
 424 baseline. New: `read_toml` unit suite (6), non-UTF8 regression (read_json + read_toml),
 codex canary + edge tests (7), claude real-layout canaries (installPath escape ×3, symlink
 escape, infra-not-plugins, disabled-plugin exclusion, real mcp source, manifest guard ×4,
@@ -34,7 +34,9 @@ instead of $HOME auto-detect (which mis-probed a codex root as claude-code), and
 wrong-TYPE model value (`model = 123`) is flagged malformed + fails closed (distinct from an
 unsafe-STRING model, which stays a scrub-not-fail consent boundary), and a dangling config
 symlink (present as a link, target missing) fails closed as not_readable instead of being
-skipped as absent.
+skipped as absent, and a non-dict SECONDARY source (parseable-but-non-dict ~/.claude.json /
+mcp-config.json, or unusable installed_plugins.json while enabled plugins exist) flags its
+dependent field unknown instead of silently emitting an empty list.
 
 ## Adversarial leak-safety verification (Workflow: 3 independent skeptics)
 
