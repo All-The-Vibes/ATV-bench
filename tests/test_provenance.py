@@ -279,3 +279,20 @@ def test_keyed_verifier_accepts_legit_unkeyed_self_attested_token():
     assert res.signed is False     # but still reported as the self-attested tier
 
 
+
+
+@pytest.mark.parametrize("bad_signed", ["yes", 1, 0, "", [], {}, None, 1.0])
+def test_nonbool_signed_facet_rejected(bad_signed):
+    """Santa PR#10 (reviewer B): the `signed` tier facet must be a strict BOOLEAN. A
+    non-bool value (truthy or falsy) must fail closed as malformed — never be bool()-
+    coerced and accepted, and a keyed token must never report signed=True off a non-bool
+    tier bit."""
+    tok = _capture(key="server-key")            # honest keyed token
+    tok = copy.deepcopy(tok)
+    tok["signed"] = bad_signed
+    res = verify_provenance(
+        provenance=tok, harness="claude-code", bot_sha256=BOT_A,
+        fingerprint=FP_CLAUDE, key="server-key",
+    )
+    assert res.ok is False, f"non-bool signed {bad_signed!r} verified"
+    assert res.signed is False, f"non-bool signed {bad_signed!r} reported signed=True"

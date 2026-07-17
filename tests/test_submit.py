@@ -231,3 +231,15 @@ def test_submit_cli_dry_run_shows_provenance_line(tmp_path):
     assert result.exit_code == 0, result.output
     assert "Provenance:" in result.output
     assert "self-attested" in result.output  # no key set in this env
+
+
+@pytest.mark.parametrize("bad_fp", ["not-a-dict", 42, ["a"], None])
+def test_verify_submission_provenance_malformed_fingerprint_fails_closed(bad_fp):
+    """Santa PR#10 (reviewer B): a malformed (non-dict) fingerprint in the record must
+    FAIL CLOSED with ok=False, not crash the verifier with an AttributeError — an
+    untrusted merged record must never be able to DoS the merge-time provenance gate."""
+    from atv_bench.submit import verify_submission_provenance
+    rec = {"identity": "octocat", "game": "battlesnake", "bot_sha256": "a" * 64,
+           "fingerprint": bad_fp, "provenance": {"version": "1.0.0"}}
+    res = verify_submission_provenance(rec)  # must not raise
+    assert res.ok is False

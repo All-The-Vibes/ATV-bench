@@ -186,11 +186,20 @@ def verify_submission_provenance(record: dict[str, Any],
         bot_sha256 = hashlib.sha256(Path(bot_path).read_bytes()).hexdigest()
     else:
         bot_sha256 = str(record.get("bot_sha256", ""))
+    # A committed record is untrusted and hand-editable: a non-dict fingerprint must fail
+    # closed here, never crash the merge-time gate with an AttributeError (an untrusted
+    # record could otherwise DoS the verifier). verify_provenance still fails on the
+    # unknown harness / hash mismatch, so a malformed fingerprint never verifies.
+    fp = record.get("fingerprint")
+    if not isinstance(fp, dict):
+        return VerifyResult(
+            ok=False, signed=False,
+            reasons=["submission fingerprint is missing or not an object"])
     return verify_provenance(
         provenance=record.get("provenance"),
-        harness=str(record.get("fingerprint", {}).get("harness", "unknown")),
+        harness=str(fp.get("harness", "unknown")),
         bot_sha256=bot_sha256,
-        fingerprint=record.get("fingerprint", {}),
+        fingerprint=fp,
         key=key if key is not None else os.environ.get("ATV_PROVENANCE_KEY"),
     )
 

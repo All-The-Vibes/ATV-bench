@@ -55,7 +55,7 @@ def fingerprint_hash(fingerprint: dict[str, Any]) -> str:
     return hashlib.sha256(_canonical(fingerprint).encode("utf-8")).hexdigest()
 
 
-def _sign(payload: dict[str, str], key: str | None) -> str:
+def _sign(payload: dict[str, Any], key: str | None) -> str:
     """Digest over the canonical signed payload. HMAC-SHA256 when keyed, salted SHA-256
     otherwise. The exact same construction is recomputed in verify."""
     msg = _canonical(payload).encode("utf-8")
@@ -129,6 +129,18 @@ def verify_provenance(*, provenance: dict[str, Any] | None, harness: str,
     if missing:
         return VerifyResult(ok=False, signed=False,
                             reasons=[f"provenance token is malformed (missing: {', '.join(sorted(missing))})"])
+
+    # The `signed` tier facet must be a strict boolean. A non-bool value (a string/number/
+    # list — truthy or falsy) is a malformed token: fail closed and never bool()-coerce it,
+    # else a keyed token with signed="yes"/1 would be accepted and reported as the HMAC tier.
+    if not isinstance(provenance["signed"], bool):
+        return VerifyResult(
+            ok=False, signed=False,
+            reasons=["provenance token is malformed (signed tier must be a boolean)"])
+    if not isinstance(provenance["version"], str):
+        return VerifyResult(
+            ok=False, signed=False,
+            reasons=["provenance token is malformed (version must be a string)"])
 
     # Recompute the signature over the token's OWN claimed payload. The CONSTRUCTION is
     # chosen from the token's own `signed` claim, not the verifier's key: an honest unkeyed

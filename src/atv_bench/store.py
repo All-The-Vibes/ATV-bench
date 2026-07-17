@@ -325,6 +325,29 @@ class LeagueStore:
         trusted_sha = hashlib.sha256(bot_bytes).hexdigest()
         if data.get("bot_sha256") != trusted_sha:
             data = {**data, "bot_sha256": trusted_sha}
+
+        # UC1 provenance (santa PR#10): when a record carries a provenance token, VERIFY it
+        # at the trust boundary — bind it to the TRUSTED bot hash (the committed main.py
+        # bytes, not the record's claim) + the published fingerprint + harness. A tampered
+        # fingerprint (leaner stack than captured), a swapped harness, a swapped bot, or a
+        # forged/malformed token fails closed here so a hand-edited merged submission can't
+        # publish a manifest that never earned it. A legacy record with NO provenance loads
+        # (the corpus predates binding); a present-but-invalid token is rejected.
+        if "provenance" in data:
+            from atv_bench.fingerprint.provenance import verify_provenance
+            fp_obj = data.get("fingerprint")
+            harness = fp_obj.get("harness", "unknown") if isinstance(fp_obj, dict) else "unknown"
+            prov_res = verify_provenance(
+                provenance=data.get("provenance"),
+                harness=str(harness),
+                bot_sha256=trusted_sha,
+                fingerprint=fp_obj if isinstance(fp_obj, dict) else {},
+            )
+            if not prov_res.ok:
+                raise ValueError(
+                    f"submission {d.name!r} provenance does not verify: "
+                    + "; ".join(prov_res.reasons)
+                )
         return identity, data
 
     # --- matches ---
