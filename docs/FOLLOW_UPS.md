@@ -3,6 +3,14 @@
 Tracked here because issue creation is unavailable on this account (Enterprise
 Managed User restriction). These are genuinely deferred v1-adjacent scope, not bugs.
 
+> **Status (issue #2): all items RESOLVED and merged to `main`.**
+> The two items originally deferred in GitHub issue #2 — (1) adjudicated match
+> outcome and (2) live `gh` PR submission — are both implemented, tested, and
+> shipped (see sections 1 and 2 below; delivered via PR #3). The re-review
+> follow-ons (items 3–8) are likewise resolved. Full suite: `uv run pytest` →
+> 408 passed; `main` CI green. This PR closes issue #2, which the EMU token
+> restriction blocks closing directly (`closeIssue`/`addComment` → Unauthorized).
+
 ## 1. Adjudicated match outcome (live match-orchestration) — ✅ RESOLVED
 
 PR #1 closes **identity + match_id forgery**: the trusted publish job binds an `ok`
