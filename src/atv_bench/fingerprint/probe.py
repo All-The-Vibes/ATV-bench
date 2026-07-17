@@ -105,6 +105,10 @@ def probe_claude_code(home: Path) -> ProbeResult:
         ep = settings.value.get("enabledPlugins")
         if isinstance(ep, dict):
             enabled_plugins_raw = ep
+        elif ep is not None:
+            # present but wrong-shaped enabledPlugins (list/scalar, not a dict) → flag
+            # plugins malformed, don't silently emit plugins:[].
+            b.note_unknown("plugins", reader.REASON_MALFORMED)
         # NB: only model + enabledPlugins are read. env/apiKeyHelper/awsSecret and any
         # future field are never read — allowlist by construction.
     elif settings.ok:
@@ -192,6 +196,10 @@ def probe_claude_code(home: Path) -> ProbeResult:
         if isinstance(servers, dict):
             # Read only the KEYS (server names), never the values (command/env/url/token).
             mcps = b.safe_names(list(servers.keys()), "mcps")
+        elif servers is not None:
+            # present but wrong-shaped mcpServers field (a list/scalar, not a dict) →
+            # flag malformed, don't silently emit mcps:[] as "no MCP servers".
+            b.note_unknown("mcps", reader.REASON_MALFORMED)
     elif mcp_cfg.ok:
         # Parseable but non-dict ~/.claude.json → malformed mcp source, flag it (don't
         # present mcps:[] as a confident "no MCP servers").
@@ -252,6 +260,9 @@ def probe_copilot_cli(home: Path) -> ProbeResult:
         ep = settings.value.get("enabledPlugins")
         if isinstance(ep, dict):
             enabled_plugins_raw = ep
+        elif ep is not None:
+            # present but wrong-shaped enabledPlugins → flag plugins malformed.
+            b.note_unknown("plugins", reader.REASON_MALFORMED)
         ds = settings.value.get("disabledSkills")
         if isinstance(ds, list):
             disabled_skills = {s for s in ds if isinstance(s, str)}
@@ -311,6 +322,9 @@ def probe_copilot_cli(home: Path) -> ProbeResult:
             # Read only the KEYS (server names), never the values (command/env/url/token).
             names = [k for k in servers.keys() if k not in disabled_mcps]
             mcps = b.safe_names(names, "mcps")
+        elif servers is not None:
+            # present but wrong-shaped mcpServers field → flag malformed, not silent [].
+            b.note_unknown("mcps", reader.REASON_MALFORMED)
     elif mcp_cfg.ok:
         # Parseable but non-dict mcp-config.json → malformed mcp source, flag it.
         b.note_unknown("mcps", reader.REASON_MALFORMED)
@@ -373,6 +387,10 @@ def probe_codex(home: Path) -> ProbeResult:
         if isinstance(servers, dict):
             # Read only the KEYS (server names), never the table bodies (command/env/url).
             mcp_candidates = list(servers.keys())
+        elif servers is not None:
+            # present but wrong-shaped mcp_servers (an array/scalar, not a table) →
+            # flag malformed, don't silently emit mcps:[] as "no MCP servers".
+            b.note_unknown("mcps", reader.REASON_MALFORMED)
     elif not config.ok and config.reason != reader.REASON_ABSENT:
         # config.toml is the single untrusted source for BOTH model and mcps — an
         # unreadable/empty/malformed config must flag every dependent field, else

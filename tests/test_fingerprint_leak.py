@@ -1005,3 +1005,65 @@ def test_copilot_nondict_mcp_source_flags_mcps_malformed(tmp_path, shape):
         f"non-dict mcp-config.json ({shape}) must flag mcps malformed, "
         f"got unknown={result.manifest['unknown']}"
     )
+
+
+@pytest.mark.parametrize("bad_servers", ['["github"]', '"github"', '42', 'true'])
+def test_claude_wrongshaped_mcpservers_field_flags_malformed(tmp_path, bad_servers):
+    """Santa PR#9 round 10 (reviewer B): a valid-dict ~/.claude.json whose mcpServers
+    FIELD is the wrong shape (a list/scalar, not a dict) must flag mcps malformed, not
+    silently emit mcps=[] (reading as 'no MCP servers')."""
+    home = tmp_path / ".claude"
+    (home / "skills").mkdir(parents=True)
+    (home / "settings.json").write_text(json.dumps({"model": "claude-opus-4-8"}))
+    (home.parent / ".claude.json").write_text('{"mcpServers": ' + bad_servers + '}')
+    result = fp.probe_claude_code(home)
+    reasons = {(u["field"], u["reason"]) for u in result.manifest["unknown"]}
+    assert ("mcps", "malformed") in reasons, (
+        f"wrong-shaped mcpServers ({bad_servers}) must flag mcps malformed, "
+        f"got unknown={result.manifest['unknown']}"
+    )
+
+
+@pytest.mark.parametrize("bad_servers", ['["github"]', '"github"', '42'])
+def test_copilot_wrongshaped_mcpservers_field_flags_malformed(tmp_path, bad_servers):
+    """Same wrong-shaped-field gap for copilot mcp-config.json."""
+    home = tmp_path / ".copilot"
+    (home / "skills").mkdir(parents=True)
+    (home / "settings.json").write_text(json.dumps({"model": "gpt-x"}))
+    (home / "mcp-config.json").write_text('{"mcpServers": ' + bad_servers + '}')
+    result = fp.probe_copilot_cli(home)
+    reasons = {(u["field"], u["reason"]) for u in result.manifest["unknown"]}
+    assert ("mcps", "malformed") in reasons, (
+        f"wrong-shaped mcpServers ({bad_servers}) must flag mcps malformed, "
+        f"got unknown={result.manifest['unknown']}"
+    )
+
+
+def test_codex_wrongshaped_mcp_servers_field_flags_malformed(tmp_path):
+    """A codex config.toml with mcp_servers as an ARRAY (not a table) must flag mcps
+    malformed, not silently emit mcps=[]."""
+    home = tmp_path / ".codex"
+    home.mkdir()
+    (home / "config.toml").write_text('model = "gpt-5.5"\nmcp_servers = ["github"]\n')
+    result = fp.probe_codex(home)
+    reasons = {(u["field"], u["reason"]) for u in result.manifest["unknown"]}
+    assert ("mcps", "malformed") in reasons, (
+        f"wrong-shaped mcp_servers must flag mcps malformed, got {result.manifest['unknown']}"
+    )
+
+
+@pytest.mark.parametrize("bad_ep", ['["foo"]', '"foo"', '42'])
+def test_claude_wrongshaped_enabledplugins_flags_malformed(tmp_path, bad_ep):
+    """Santa PR#9 round 10 (reviewer B suggestion): a present-but-wrong-shaped
+    enabledPlugins field (list/scalar, not a dict) must flag plugins malformed, not
+    silently emit plugins=[]."""
+    home = tmp_path / ".claude"
+    (home / "skills").mkdir(parents=True)
+    (home / "settings.json").write_text(
+        '{"model": "claude-opus-4-8", "enabledPlugins": ' + bad_ep + '}')
+    result = fp.probe_claude_code(home)
+    reasons = {(u["field"], u["reason"]) for u in result.manifest["unknown"]}
+    assert ("plugins", "malformed") in reasons, (
+        f"wrong-shaped enabledPlugins ({bad_ep}) must flag plugins malformed, "
+        f"got unknown={result.manifest['unknown']}"
+    )
