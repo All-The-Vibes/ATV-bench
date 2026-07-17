@@ -566,46 +566,69 @@ def _serve_and_open(site: Path) -> None:
         typer.echo("\nStopped.")
 
 
-def _record_demo_match(store_dir: str, result: dict, a_name: str, b_name: str) -> None:
+def _default_demo_bots() -> tuple[str, str]:
+    """Paths to the two DISTINCT bundled sample bots for the zero-setup demo.
+
+    Player A defaults to greedy_survivor (keeps heading, else first safe neighbor);
+    player B defaults to wall_hugger (steers to the nearest wall and traces it). They
+    must be different files — defaulting both players to the same bot made the demo a
+    deterministic mirror self-play that always drew, producing a flat 1500/1500 board.
+    """
+    from atv_bench.arena import sample_bots
+
+    base = Path(sample_bots.__file__).parent
+    return str(base / "greedy_survivor.py"), str(base / "wall_hugger.py")
+
+
+def _record_demo_match(
+    store_dir: str, result: dict, a_name: str, b_name: str,
+    a_bot_label: str, b_bot_label: str,
+) -> None:
     """Seed the two demo players + the match they just played into the demo store.
 
     The demo's whole point is "play a match, then see IT on the board". Without this,
-    Act 3 shows only the canned build_demo_store roster and the two harnesses the user
-    just watched (a_name vs b_name) never appear. We add a submission for each (so they
-    get a leaderboard row with a fingerprint chip) and replay the just-played, fully
-    deterministic outcome across enough seeded match_ids to clear the rated gate — the
-    result is honest (same adjudicated outcome every time), just repeated so the row is
-    rated rather than "waiting for opponent".
+    Act 3 shows only the canned build_demo_store roster and the two bots the user just
+    watched (a_name vs b_name) never appear. We add a submission for each and record the
+    just-played outcome.
+
+    IMPORTANT — the winner is decided by PLAY, never by the fingerprint. The fingerprint
+    is only metadata describing which bot/harness produced the entry; it never touches
+    adjudication. The bundled sample bots are plain scripts, NOT built by a real harness,
+    so we label each entrant by the STRATEGY it actually ran (harness = "sample-bot")
+    rather than fabricating a "claude-code beat copilot-cli" story the match never earned.
+    Whichever bot survives longer wins; the ELO simply follows that result.
     """
     from atv_bench.store import LeagueStore
     from atv_bench.elo import MIN_RATED_MATCHES
 
     store = LeagueStore(store_dir)
 
-    def _fingerprint(harness: str, gstack: bool, skills: list[str]) -> dict:
+    def _fingerprint(skill: str) -> dict:
+        # Harness-neutral: these are bundled sample scripts, not harness-authored bots.
         return {
-            "harness": harness, "model": "demo", "gstack": gstack,
-            "skills": skills, "mcps": [], "plugins": [], "custom_agents_count": 0,
+            "harness": "sample-bot", "model": "demo", "gstack": False,
+            "skills": [skill], "mcps": [], "plugins": [], "custom_agents_count": 0,
             "probe_version": "1.0.0", "unknown": [],
         }
 
     entrants = (
-        (a_name, "claude-code", True, ["gstack"]),
-        (b_name, "copilot-cli", False, []),
+        (a_name, a_bot_label),
+        (b_name, b_bot_label),
     )
-    for identity, harness, gstack, skills in entrants:
+    for identity, skill in entrants:
         store.add_submission({
             "identity": identity,
             "game": "lightcycles",
             "bot_sha256": (identity.encode().hex() * 8)[:64].ljust(64, "0"),
             "pr_url": "https://github.com/All-The-Vibes/ATV-bench/pull/1",
             "logs_url": "https://all-the-vibes.github.io/ATV-bench/logs/1",
-            "fingerprint": _fingerprint(harness, gstack, skills),
+            "fingerprint": _fingerprint(skill),
         })
 
     outcome = result.get("outcome", "draw")
     # Replay the identical adjudicated outcome across distinct match_ids so the pairing
     # clears MIN_RATED_MATCHES and shows as a real rated row, not "waiting for opponent".
+    # This repeats the match the bots ACTUALLY played — it does not invent a result.
     for i in range(MIN_RATED_MATCHES + 2):
         store.append_match({
             "player_a": a_name,
@@ -615,6 +638,7 @@ def _record_demo_match(store_dir: str, result: dict, a_name: str, b_name: str) -
             "game": "lightcycles",
             "seed": i,
         })
+
 
 
 @app.command(name="demo-match")
@@ -633,18 +657,23 @@ def demo_match_cmd(
 
     The demo in three acts: (1) two named harnesses enter, (2) a live turn-by-turn Tron
     feed renders each frame, (3) the leaderboard + gstack insights are shown. With no bot
-    paths it uses two bundled greedy-survivor sample bots so the demo runs with zero setup.
+    paths it uses two distinct bundled sample bots (greedy-survivor vs wall-hugger) so
+    the demo runs with zero setup and produces a real, decisive head-to-head.
     """
     import time
 
     from atv_bench.arena.engine import Direction, TronEngine
     from atv_bench.arena.referee import SubprocessMoveSource, run_match
     from atv_bench.arena.render import render_frame
-    from atv_bench.arena import sample_bots
 
-    sample = Path(sample_bots.__file__).parent / "greedy_survivor.py"
-    a_path = str(a_bot) if a_bot is not None else str(sample)
-    b_path = str(b_bot) if b_bot is not None else str(sample)
+    default_a, default_b = _default_demo_bots()
+    a_path = str(a_bot) if a_bot is not None else default_a
+    b_path = str(b_bot) if b_bot is not None else default_b
+
+    # Strategy label = the bot file's stem (e.g. "greedy_survivor"), so the board row
+    # describes the bot that actually played rather than a fabricated harness identity.
+    a_bot_label = Path(a_path).stem
+    b_bot_label = Path(b_path).stem
 
     for label, p in ((a_name, a_path), (b_name, b_path)):
         if not Path(p).is_file():
@@ -652,9 +681,14 @@ def demo_match_cmd(
             raise typer.Exit(2)
 
     board_w = board_h = 25
+    # Deliberately ASYMMETRIC starts. A point-symmetric arena (corner vs opposite corner,
+    # mirrored directions) forces the two bots to reach a fatal cell on the SAME turn →
+    # mutual crash → draw, no matter how differently they play. Offsetting player B's row
+    # breaks that mirror so a real skill difference decides the match (and the board shows
+    # a genuine ELO spread instead of a flat 1500/1500).
     engine = TronEngine(
         width=board_w, height=board_h,
-        start_a=(1, 1), start_b=(board_w - 2, board_h - 2),
+        start_a=(1, 1), start_b=(board_w - 2, board_h - 5),
         dir_a=Direction.RIGHT, dir_b=Direction.LEFT, max_turns=400,
     )
 
@@ -706,7 +740,7 @@ def demo_match_cmd(
         build_demo_store(str(tmp_store))
         # Record the match that JUST played so Act 3's board reflects it — otherwise the
         # user watches ATV-StarterKit vs ATV-Phoenix, then sees an unrelated canned roster.
-        _record_demo_match(str(tmp_store), result, a_name, b_name)
+        _record_demo_match(str(tmp_store), result, a_name, b_name, a_bot_label, b_bot_label)
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         site = build_site(str(out_dir), store_dir=str(tmp_store), updated_at=now)
         doc = json.loads((site / "leaderboard.json").read_text())
