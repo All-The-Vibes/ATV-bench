@@ -266,6 +266,33 @@ def submit(
         out_path.write_text(json.dumps(record, indent=2, sort_keys=True))
         typer.echo(f"\nWrote submission record: {out_path}")
 
+        # UC1 provenance: the record binds harness+bot+fingerprint into a token. Report the
+        # tier the CURRENT (Phase-1, keyless) board will assign — NOT the tier a key-holding
+        # local verify would grant. A contributor who set ATV_PROVENANCE_KEY built an
+        # HMAC-signed token, but the Phase-1 board holds no key and publishes the row as
+        # self-attested until a trusted sandbox re-signs (Phase 2). Verify keyless here so
+        # the reported tier matches what the board will actually show — never over-claim.
+        from atv_bench.submit import verify_submission_provenance
+        board_res = verify_submission_provenance(record, bot_path=str(bot), key=None)
+        prov = record["provenance"]
+        keyed_build = bool(prov.get("signed"))
+        if board_res.ok:
+            # board tier is self-attested in Phase 1 (keyless); board_res.signed is False.
+            typer.echo(f"Provenance: bound to harness={prov['harness']} "
+                       f"bot+fingerprint — self-attested (unkeyed) on the current board.")
+            if keyed_build:
+                typer.echo("  Your token is HMAC-signed (ATV_PROVENANCE_KEY set), but the "
+                           "Phase-1 board is keyless, so the row publishes as self-attested "
+                           "until a trusted sandbox re-fingerprints and re-signs "
+                           "(COMMUNITY_LEAGUE.md#provenance).")
+            else:
+                typer.echo("  Set ATV_PROVENANCE_KEY before building for an HMAC token; rows "
+                           "stay self-attested until a trusted sandbox re-fingerprints "
+                           "(COMMUNITY_LEAGUE.md#provenance).")
+        else:
+            typer.echo("Provenance: ✗ does not verify — "
+                       + "; ".join(board_res.reasons))
+
     typer.echo("\nSubmission status trail:")
     for step in submission_status_trail(is_first_time=True):
         typer.echo(f"  {step}")

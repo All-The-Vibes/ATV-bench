@@ -308,3 +308,86 @@ def test_append_match_skips_duplicate_match_id_at_write_time(tmp_path):
     store.append_match(m)
     store.append_match(dict(m))  # same match_id again
     assert len(store.load_matches()) == 1  # deduped at write time
+
+
+# --- UC1 provenance: the trusted board must verify a present provenance token ---
+
+def _provenance_sub(tmp_path, identity, *, bot_src="def move(s):\n    return 'up'\n"):
+    """A submission record with a real provenance token bound to bot_src bytes + its
+    fingerprint, committed with the same bytes as main.py."""
+    from atv_bench.submit import build_submission
+    bot = tmp_path / f"{identity}_bot.py"
+    bot.write_text(bot_src)
+    fp = {"harness": "claude-code", "model": "claude-opus-4-8", "gstack": True,
+          "skills": ["gstack"], "mcps": ["github"], "plugins": [],
+          "custom_agents_count": 0, "unknown": [], "probe_version": "1.0.0"}
+    rec = build_submission(bot_path=str(bot), fingerprint=fp, identity=identity,
+                           game="battlesnake", captured_at="2026-07-17T00:00:00Z")
+    return rec, bot_src
+
+
+def test_store_rejects_provenance_tampered_fingerprint(tmp_path):
+    """Santa PR#10 (reviewer B): the trusted board build must VERIFY a present provenance
+    token. A hand-edited fingerprint in a merged submission.json (leaner stack than was
+    captured) must be rejected by the strict loader — otherwise provenance is decorative."""
+    store = LeagueStore(str(tmp_path / "league"))
+    rec, bot_src = _provenance_sub(tmp_path, "alice")
+    store.add_submission(rec, bot_source=bot_src)
+    # attacker hand-edits the committed fingerprint to a leaner stack (drops a skill)
+    rec_path = store.submissions_dir / "alice" / "submission.json"
+    tampered = json.loads(rec_path.read_text())
+    tampered["fingerprint"]["skills"] = []
+    rec_path.write_text(json.dumps(tampered))
+    with pytest.raises(ValueError, match="provenance"):
+        store.load_submissions()
+
+
+def test_store_quarantines_provenance_tampered_row(tmp_path):
+    """The quarantining board loader must SKIP + diagnose a provenance-tampered row (not
+    publish it), so a tampered merged entrant never reaches the public board."""
+    store = LeagueStore(str(tmp_path / "league"))
+    good, gsrc = _provenance_sub(tmp_path, "good")
+    bad, bsrc = _provenance_sub(tmp_path, "bad")
+    store.add_submission(good, bot_source=gsrc)
+    store.add_submission(bad, bot_source=bsrc)
+    bad_path = store.submissions_dir / "bad" / "submission.json"
+    tampered = json.loads(bad_path.read_text())
+    tampered["fingerprint"]["harness"] = "codex"  # harness-swap
+    bad_path.write_text(json.dumps(tampered))
+    subs, errors = store.load_submissions_quarantined()
+    assert "good" in subs
+    assert "bad" not in subs
+    assert any("provenance" in e.lower() for e in errors), errors
+
+
+def test_store_accepts_untampered_provenance_row(tmp_path):
+    """A submission with a valid, matching provenance token loads cleanly."""
+    store = LeagueStore(str(tmp_path / "league"))
+    rec, src = _provenance_sub(tmp_path, "honest")
+    store.add_submission(rec, bot_source=src)
+    subs = store.load_submissions()
+    assert "honest" in subs
+
+
+def test_store_loads_legacy_submission_without_provenance(tmp_path):
+    """Back-compat: a legacy record with NO provenance token still loads (provenance is
+    verified only when present — the corpus predates provenance binding)."""
+    store = LeagueStore(str(tmp_path / "league"))
+    store.add_submission(_sub("legacy"))  # _sub has no provenance field
+    subs = store.load_submissions()
+    assert "legacy" in subs
+
+
+def test_store_publishes_keyed_submission_on_keyless_board(tmp_path, monkeypatch):
+    """Santa PR#10 round 2 (reviewer A): a contributor who follows the CLI advice and sets
+    ATV_PROVENANCE_KEY produces a signed (HMAC) token. The Phase-1 board holds no key, so
+    it must still PUBLISH the honest row (as a self-attested downgrade), never quarantine
+    it. Regression guard for the keyed→keyless board interop."""
+    monkeypatch.setenv("ATV_PROVENANCE_KEY", "contributor-secret")
+    rec, src = _provenance_sub(tmp_path, "keyed")
+    assert rec["provenance"]["signed"] is True   # built keyed
+    monkeypatch.delenv("ATV_PROVENANCE_KEY")      # board is keyless
+    store = LeagueStore(str(tmp_path / "league"))
+    store.add_submission(rec, bot_source=src)
+    subs = store.load_submissions()               # must not raise
+    assert "keyed" in subs
