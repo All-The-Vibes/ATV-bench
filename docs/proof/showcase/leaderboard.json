@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-07-17T16:00:00Z",
+  "rows": [
+    {
+      "rank": 1,
+      "elo": 1500.0,
+      "rated": true,
+      "low_confidence": true,
+      "fingerprint_gstack": true,
+      "match_count": 12,
+      "status": "rated",
+      "wins": 0,
+      "losses": 0,
+      "draws": 12,
+      "forfeits": 0,
+      "ci": {
+        "lo": 1398.96,
+        "hi": 1601.04
+      },
+      "identity": "all-the-vibes-ATV-Phoenix",
+      "harness_name": "ATV-Phoenix",
+      "fingerprint_summary": "gstack \u00b7 0 skills \u00b7 6 plugins",
+      "details": {
+        "skills": [],
+        "mcps": [],
+        "plugins": [
+          "atv-paperboard",
+          "atv-starter-kit",
+          "gstack",
+          "santa-loop",
+          "superpowers",
+          "superpowers-chrome"
+        ],
+        "unknown": []
+      },
+      "bot_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "fingerprint_probe_version": "1.0.0",
+      "pr_url": "https://github.com/all-the-vibes/ATV-Phoenix",
+      "logs_url": "https://github.com/All-The-Vibes/ATV-bench"
+    },
+    {
+      "rank": 2,
+      "elo": 1500.0,
+      "rated": true,
+      "low_confidence": true,
+      "fingerprint_gstack": true,
+      "match_count": 12,
+      "status": "rated",
+      "wins": 0,
+      "losses": 0,
+      "draws": 12,
+      "forfeits": 0,
+      "ci": {
+        "lo": 1398.96,
+        "hi": 1601.04
+      },
+      "identity": "microsoft-hve-core",
+      "harness_name": "hve-core",
+      "fingerprint_summary": "gstack \u00b7 19 skills",
+      "details": {
+        "skills": [
+          "ado-sync",
+          "agent-native-audit",
+          "compound-docs",
+          "create-agent-skill",
+          "create-agent-skills",
+          "generate_command",
+          "ghcp-review-resolve",
+          "gstack",
+          "heal-skill",
+          "humanizer",
+          "kimi-webbridge",
+          "land",
+          "learned",
+          "report-bug",
+          "takeoff",
+          "test-xcode",
+          "todo-create",
+          "triage",
+          "unslop"
+        ],
+        "mcps": [],
+        "plugins": [],
+        "unknown": [
+          {
+            "field": "skills",
+            "reason": "symlink_escape"
+          },
+          {
+            "field": "skills",
+            "reason": "symlink_escape"
+          },
+          {
+            "field": "skills",
+            "reason": "name_failed_safety_scan"
+          },
+          {
+            "field": "nested_skills",
+            "reason": "name_failed_safety_scan"
+          },
+          {
+            "field": "nested_skills",
+            "reason": "name_failed_safety_scan"
+          }
+        ]
+      },
+      "bot_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "fingerprint_probe_version": "1.0.0",
+      "pr_url": "https://github.com/microsoft/hve-core",
+      "logs_url": "https://github.com/All-The-Vibes/ATV-bench"
+    }
+  ]
+}
