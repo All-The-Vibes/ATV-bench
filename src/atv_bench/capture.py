@@ -19,6 +19,11 @@ MAX_TOTAL_BYTES = 1024 * 1024  # 1 MiB
 MAX_FILE_BYTES = 512 * 1024
 # Files we scan for secret CONTENT (text). Binary blobs are rejected outright.
 _TEXT_SUFFIXES = {".py", ".txt", ".json", ".yaml", ".yml", ".toml", ".md", ".cfg", ".ini", ""}
+# Transient build/cache artifacts a bot run can drop (bytecode caches, venvs, coverage).
+# These are NOT part of the authored bot — skip them rather than fail the match.
+_IGNORED_DIR_PARTS = {".git", "__pycache__", ".pytest_cache", ".mypy_cache",
+                      ".ruff_cache", "node_modules", ".venv", "venv", ".tox"}
+_IGNORED_SUFFIXES = {".pyc", ".pyo", ".so", ".o", ".class"}
 
 
 class CaptureRejected(Exception):
@@ -61,13 +66,17 @@ def scan_captured_tree(root: Path) -> list[CapturedFile]:
     total = 0
     count = 0
     for path in sorted(root.rglob("*")):
-        # The git metadata dir is not part of the bot tree — skip it entirely.
-        if ".git" in path.relative_to(root).parts:
+        rel_parts = path.relative_to(root).parts
+        # Skip transient build/cache dirs (bytecode caches, venvs) — not the authored bot.
+        if any(part in _IGNORED_DIR_PARTS for part in rel_parts):
             continue
         # Reject ANY symlink (dir or file) — escape + leak surface.
         if path.is_symlink():
             raise CaptureRejected(f"symlink not allowed in captured tree: {path.name}")
         if path.is_dir():
+            continue
+        # Skip transient artifact files (compiled bytecode, object files).
+        if path.suffix.lower() in _IGNORED_SUFFIXES:
             continue
         # Path-escape guard (defense in depth even though rglob stays under root).
         try:

@@ -82,3 +82,16 @@ def test_high_entropy_blob_is_rejected(tmp_path):
     _mk(tmp_path, "data.txt", "sk-ant-api03-SECRETSECRETSECRETSECRETSECRET\n")
     with pytest.raises(CaptureRejected):
         scan_captured_tree(tmp_path)
+
+
+def test_transient_pycache_is_skipped_not_rejected(tmp_path):
+    """A bot run can drop __pycache__/*.pyc — a build artifact, not the authored bot.
+    The allowlist must SKIP it, not fail the whole match (real A/B match surfaced this)."""
+    _mk(tmp_path, "main.py", "def get_move(o): return 'N'\n")
+    pyc = tmp_path / "__pycache__" / "main.cpython-314.pyc"
+    pyc.parent.mkdir(parents=True, exist_ok=True)
+    pyc.write_bytes(b"\x00\x01\x02\xbe\xef")  # binary bytecode
+    files = scan_captured_tree(tmp_path)
+    rels = {f.relpath for f in files}
+    assert "main.py" in rels
+    assert not any("__pycache__" in r for r in rels)

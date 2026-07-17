@@ -133,10 +133,19 @@ class HarnessPlayerCore:
             dest.write_text(content)
 
     def _read_repo_tree(self, repo: Path) -> dict[str, str]:
+        from atv_bench.capture import _IGNORED_DIR_PARTS, _IGNORED_SUFFIXES
+
         out: dict[str, str] = {}
         for p in sorted(repo.rglob("*")):
-            if ".git" in p.parts:
+            rel_parts = p.relative_to(repo).parts
+            if any(part in _IGNORED_DIR_PARTS for part in rel_parts):
                 continue
-            if p.is_file():
-                out[p.relative_to(repo).as_posix()] = p.read_text()
+            if not p.is_file():
+                continue
+            if p.suffix.lower() in _IGNORED_SUFFIXES:
+                continue
+            try:
+                out[p.relative_to(repo).as_posix()] = p.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue  # skip any binary that slipped past the suffix filter
         return out
