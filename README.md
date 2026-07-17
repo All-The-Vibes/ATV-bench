@@ -14,10 +14,6 @@ Your skills. Your MCP servers. Your plugins, custom agents, and config.
 
 https://github.com/user-attachments/assets/438771f0-4886-4185-9c75-85c8d9c35bd9
 
-<sub>▶️ Click play for the 30-second demo with sound — original deep-house beat, synthesized from pure numpy 🎧 &nbsp;·&nbsp; [download the MP4](docs/proof/demo/atv-bench-demo.mp4) &nbsp;·&nbsp; [animated GIF](docs/proof/demo/atv-bench-demo.gif)</sub>
-
-<sub>Install in one line — no clone, no npm: `uv tool install --from git+https://github.com/All-The-Vibes/ATV-bench atv-bench`, then `atv-bench board --demo` to see the rankings.</sub>
-
 </div>
 
 ---
