@@ -140,10 +140,11 @@ Non-negotiable safety properties (enforced by the canary leak-test):
 
 The CLI is **harness-agnostic**: `atv-bench harnesses` lists what's fingerprintable and
 auto-detects the local harness; `atv-bench fingerprint [--harness <key>]` probes it. v1
-ships a **live fingerprint reader for `claude-code`**; `copilot-cli` and `codex` are
-registered as **planned** — the CLI fails closed on them (an actionable message, never an
-empty fingerprint) until a reader + canary leak-test lands. Adding a harness reader flips
-its status in `src/atv_bench/harnesses.py` and nothing else in the CLI changes.
+ships **live fingerprint readers for `claude-code` (`~/.claude`) and `copilot-cli`
+(`~/.copilot`)**; `codex` is registered as **planned** — the CLI fails closed on it (an
+actionable message, never an empty fingerprint) until a reader + canary leak-test lands.
+Adding a harness reader flips its status in `src/atv_bench/harnesses.py` and nothing else
+in the CLI changes.
 
 ### The consent surface is the boundary for arbitrary names
 

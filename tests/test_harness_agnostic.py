@@ -29,7 +29,7 @@ def test_default_harness_is_live():
 
 def test_claude_code_live_others_planned():
     assert hz.is_live("claude-code")
-    assert not hz.is_live("copilot-cli")
+    assert hz.is_live("copilot-cli")
     assert not hz.is_live("codex")
 
 
@@ -43,7 +43,7 @@ def test_detect_harness_finds_live_config(tmp_path):
 
 def test_detect_ignores_planned_harness_config(tmp_path):
     # A planned harness's config dir must NOT be detected — we can't fingerprint it yet.
-    (tmp_path / ".copilot").mkdir()
+    (tmp_path / ".codex").mkdir()
     assert hz.detect_harness(home=tmp_path) is None
 
 
@@ -56,8 +56,9 @@ def test_assert_probeable_rejects_unknown_and_planned():
     with pytest.raises(ValueError, match="unknown harness"):
         hz.assert_probeable("bogus")
     with pytest.raises(ValueError, match="planned"):
-        hz.assert_probeable("copilot-cli")
+        hz.assert_probeable("codex")
     hz.assert_probeable("claude-code")  # does not raise
+    hz.assert_probeable("copilot-cli")  # live — does not raise
 
 
 # --- generic probe() dispatcher -------------------------------------------------------
@@ -85,7 +86,7 @@ def test_probe_explicit_harness_matches_default(tmp_path):
 
 def test_probe_fails_closed_on_planned_harness(tmp_path):
     with pytest.raises(ValueError, match="planned"):
-        fp.probe(home=tmp_path, harness="copilot-cli")
+        fp.probe(home=tmp_path, harness="codex")
 
 
 def test_probe_fails_closed_on_unknown_harness(tmp_path):
@@ -110,11 +111,12 @@ def test_harnesses_json():
     payload = json.loads(result.output)
     keys = {h["key"]: h for h in payload}
     assert keys["claude-code"]["live"] is True
-    assert keys["copilot-cli"]["live"] is False
+    assert keys["copilot-cli"]["live"] is True
+    assert keys["codex"]["live"] is False
 
 
 def test_fingerprint_planned_harness_fails_closed(tmp_path):
-    result = runner.invoke(app, ["fingerprint", "--harness", "copilot-cli", "--home", str(tmp_path)])
+    result = runner.invoke(app, ["fingerprint", "--harness", "codex", "--home", str(tmp_path)])
     assert result.exit_code == 2
     assert "planned" in result.output
 

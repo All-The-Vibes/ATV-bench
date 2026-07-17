@@ -141,9 +141,9 @@ same-repo branches.
 
 ### Add a harness adapter
 
-The CLI is harness-agnostic; v1 ships a **live** fingerprint reader for `claude-code`,
-with `copilot-cli` and `codex` registered as **planned** (`atv-bench harnesses` lists
-them). To make another harness live:
+The CLI is harness-agnostic; v1 ships **live** fingerprint readers for `claude-code`
+(`~/.claude`) and `copilot-cli` (`~/.copilot`), with `codex` registered as **planned**
+(`atv-bench harnesses` lists them). To make another harness live:
 
 1. **Register it** in `src/atv_bench/harnesses.py` (or flip an existing planned entry's
    `live=True`): set its `key`, `title`, and `config_root` (the dir under `$HOME` its
