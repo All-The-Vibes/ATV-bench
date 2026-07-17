@@ -243,3 +243,30 @@ def test_verify_submission_provenance_malformed_fingerprint_fails_closed(bad_fp)
            "fingerprint": bad_fp, "provenance": {"version": "1.0.0"}}
     res = verify_submission_provenance(rec)  # must not raise
     assert res.ok is False
+
+
+def test_submit_cli_keyed_build_does_not_overclaim_signed_on_phase1_board(tmp_path, monkeypatch):
+    """Santa PR#10 round 4 (reviewer B): with ATV_PROVENANCE_KEY set the CLI built an HMAC
+    token and reported 'signed (HMAC)' — but the Phase-1 board is KEYLESS and publishes the
+    row as self-attested. The dry-run message must not over-claim the tier the board will
+    assign: it must make clear the row publishes as self-attested until a trusted sandbox
+    re-signs (Phase 2)."""
+    from typer.testing import CliRunner
+    from atv_bench.cli import app
+    monkeypatch.setenv("ATV_PROVENANCE_KEY", "contributor-secret")
+    home = tmp_path / ".codex"
+    (home / "skills" / "gstack").mkdir(parents=True)
+    (home / "config.toml").write_text('model = "gpt-5.5"\n')
+    bot = tmp_path / "main.py"
+    bot.write_text(_BOT_SRC)
+    result = CliRunner().invoke(app, [
+        "submit", str(bot), "--game", "lightcycles", "--dry-run",
+        "--harness", "codex", "--home", str(home),
+        "--identity", "octocat", "--out", str(tmp_path / "submission.json"),
+    ])
+    assert result.exit_code == 0, result.output
+    low = result.output.lower()
+    # Must communicate the board-assigned reality: self-attested on the Phase-1 board.
+    assert "self-attested" in low, result.output
+    # Must NOT flatly claim the row is signed/verified on the current board.
+    assert "— signed (hmac)." not in low
