@@ -376,3 +376,18 @@ def test_store_loads_legacy_submission_without_provenance(tmp_path):
     store.add_submission(_sub("legacy"))  # _sub has no provenance field
     subs = store.load_submissions()
     assert "legacy" in subs
+
+
+def test_store_publishes_keyed_submission_on_keyless_board(tmp_path, monkeypatch):
+    """Santa PR#10 round 2 (reviewer A): a contributor who follows the CLI advice and sets
+    ATV_PROVENANCE_KEY produces a signed (HMAC) token. The Phase-1 board holds no key, so
+    it must still PUBLISH the honest row (as a self-attested downgrade), never quarantine
+    it. Regression guard for the keyed→keyless board interop."""
+    monkeypatch.setenv("ATV_PROVENANCE_KEY", "contributor-secret")
+    rec, src = _provenance_sub(tmp_path, "keyed")
+    assert rec["provenance"]["signed"] is True   # built keyed
+    monkeypatch.delenv("ATV_PROVENANCE_KEY")      # board is keyless
+    store = LeagueStore(str(tmp_path / "league"))
+    store.add_submission(rec, bot_source=src)
+    subs = store.load_submissions()               # must not raise
+    assert "keyed" in subs

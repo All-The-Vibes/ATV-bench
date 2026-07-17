@@ -226,17 +226,26 @@ def test_verify_result_is_immutable_reasons_list_per_call():
 # --- adversarial hardening (skeptic workflow 2026-07-17) ---
 
 def test_forged_signed_flag_is_rejected_without_key():
-    """F-signed: the `signed` trust bit must be bound. A keyless attacker flipping
-    signed→True must fail verification, not verify as a self-attested-masquerading-as-HMAC
-    row (which the CLI would render as 'signed (HMAC)')."""
+    """F-signed: the `signed` trust bit must never yield the HMAC tier to a keyless
+    attacker. A keyless attacker flipping signed→True is INDISTINGUISHABLE to a keyless
+    verifier from an honest keyed contributor (both are 'signed=True tokens I hold no key
+    for'), so the keyless verifier accepts both as a self-attested DOWNGRADE and must never
+    report signed=True. The security property is the TIER (signed=False) — the attacker
+    gains nothing, and an honest keyed row is not dropped. A KEYED verifier rejects the
+    forgery outright (the bit is bound into the HMAC)."""
     tok = _capture(key=None)
     assert tok["signed"] is False
     forged = {**tok, "signed": True}
     res = verify_provenance(
         provenance=forged, harness="claude-code", bot_sha256=BOT_A, fingerprint=FP_CLAUDE
     )
-    assert res.ok is False
-    assert res.signed is False  # verifier must not report the forged tier
+    assert res.signed is False  # the forged tier is never granted — this is what matters
+    res_keyed = verify_provenance(
+        provenance=forged, harness="claude-code", bot_sha256=BOT_A,
+        fingerprint=FP_CLAUDE, key="server-key",
+    )
+    assert res_keyed.ok is False
+    assert res_keyed.signed is False
 
 
 def test_reported_signed_tier_is_never_true_without_a_key():
@@ -296,3 +305,33 @@ def test_nonbool_signed_facet_rejected(bad_signed):
     )
     assert res.ok is False, f"non-bool signed {bad_signed!r} verified"
     assert res.signed is False, f"non-bool signed {bad_signed!r} reported signed=True"
+
+
+def test_keyless_verifier_accepts_honest_keyed_token_as_self_attested():
+    """Santa PR#10 round 2 (reviewer A): a keyless verifier (the Phase-1 board holds no
+    key) CANNOT validate an HMAC signature, so an honest KEYED token must be accepted as a
+    self-attested downgrade — NOT rejected — mirroring the keyed-verifier-accepts-unkeyed
+    direction. Otherwise a contributor who follows the CLI's 'set ATV_PROVENANCE_KEY'
+    advice loses their leaderboard row. Facet tampering is still caught independently."""
+    tok = _capture(key="contributor-key")   # honest keyed (signed=True) token
+    assert tok["signed"] is True
+    res = verify_provenance(
+        provenance=tok, harness="claude-code", bot_sha256=BOT_A,
+        fingerprint=FP_CLAUDE, key=None,      # keyless board
+    )
+    assert res.ok is True, res.reasons        # accepted, not quarantined
+    assert res.signed is False                # downgraded to self-attested tier
+
+
+def test_keyless_verifier_still_catches_tamper_on_keyed_token():
+    """The keyless downgrade must NOT weaken facet checks: a tampered fingerprint on a
+    keyed token is still rejected by the keyless verifier (via the facet mismatch, which is
+    independent of the unverifiable signature)."""
+    tok = _capture(key="contributor-key")
+    res = verify_provenance(
+        provenance=tok, harness="claude-code", bot_sha256=BOT_A,
+        fingerprint={**FP_CLAUDE, "skills": []},  # leaner than captured
+        key=None,
+    )
+    assert res.ok is False
+    assert any("fingerprint" in r.lower() for r in res.reasons), res.reasons

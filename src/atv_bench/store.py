@@ -334,6 +334,7 @@ class LeagueStore:
         # publish a manifest that never earned it. A legacy record with NO provenance loads
         # (the corpus predates binding); a present-but-invalid token is rejected.
         if "provenance" in data:
+            import os
             from atv_bench.fingerprint.provenance import verify_provenance
             fp_obj = data.get("fingerprint")
             harness = fp_obj.get("harness", "unknown") if isinstance(fp_obj, dict) else "unknown"
@@ -342,6 +343,10 @@ class LeagueStore:
                 harness=str(harness),
                 bot_sha256=trusted_sha,
                 fingerprint=fp_obj if isinstance(fp_obj, dict) else {},
+                # Phase-1 board holds no key → an honest keyed token downgrades to
+                # self-attested rather than being dropped (facet checks still catch tamper).
+                # Phase-2 sets ATV_PROVENANCE_KEY so a sandbox-signed row verifies as signed.
+                key=os.environ.get("ATV_PROVENANCE_KEY"),
             )
             if not prov_res.ok:
                 raise ValueError(

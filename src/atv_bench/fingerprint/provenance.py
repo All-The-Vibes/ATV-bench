@@ -150,21 +150,32 @@ def verify_provenance(*, provenance: dict[str, Any] | None, harness: str,
     # reported as signed). Editing any signed facet — including `signed`/`version` — breaks
     # the recomputed digest regardless. Constant-time compare.
     token_signed = bool(provenance["signed"])
-    sign_key = key if token_signed else None
-    claimed_payload = _signed_payload(
-        version=provenance["version"], harness=provenance["harness"],
-        bot_sha256=provenance["bot_sha256"],
-        fingerprint_sha256=provenance["fingerprint_sha256"],
-        captured_at=provenance["captured_at"], signed=token_signed,
-    )
-    expected_sig = _sign(claimed_payload, sign_key)
-    sig_ok = hmac.compare_digest(str(provenance["signature"]), expected_sig)
-    if not sig_ok:
-        reasons.append("provenance signature does not verify (token tampered or wrong key)")
+    # A keyed (signed=True) token can only have its HMAC signature validated by a verifier
+    # that holds the key. A KEYLESS verifier (the Phase-1 board, key is None) cannot check
+    # an HMAC — so it does NOT recompute/fail on the signature; it downgrades the tier to
+    # self-attested and relies on the facet checks below (fingerprint/harness/bot/version),
+    # which are independent of the signature and still catch every tamper attack. This
+    # mirrors the keyed-verifier-accepts-unkeyed direction: an honest keyed contributor
+    # must not be dropped from a keyless board just because it can't re-derive the HMAC.
+    keyed_token_but_keyless_verifier = token_signed and not key
+    if keyed_token_but_keyless_verifier:
+        sig_ok = False  # not validated (can't be), so the tier is not "signed"
+    else:
+        sign_key = key if token_signed else None
+        claimed_payload = _signed_payload(
+            version=provenance["version"], harness=provenance["harness"],
+            bot_sha256=provenance["bot_sha256"],
+            fingerprint_sha256=provenance["fingerprint_sha256"],
+            captured_at=provenance["captured_at"], signed=token_signed,
+        )
+        expected_sig = _sign(claimed_payload, sign_key)
+        sig_ok = hmac.compare_digest(str(provenance["signature"]), expected_sig)
+        if not sig_ok:
+            reasons.append("provenance signature does not verify (token tampered or wrong key)")
 
     # The reported tier is the token's claim AND a real key that validated it: a keyless
-    # verify (sign_key is None) can never report the signed tier.
-    reported_signed = token_signed and bool(sign_key) and sig_ok
+    # verify can never report the signed tier.
+    reported_signed = token_signed and bool(key) and sig_ok
 
     if provenance["version"] != PROVENANCE_VERSION:
         reasons.append(
