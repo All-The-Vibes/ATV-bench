@@ -141,17 +141,23 @@ same-repo branches.
 
 ### Add a harness adapter
 
-v1 fingerprints **claude-code**. To add copilot/codex/another harness:
+The CLI is harness-agnostic; v1 ships a **live** fingerprint reader for `claude-code`,
+with `copilot-cli` and `codex` registered as **planned** (`atv-bench harnesses` lists
+them). To make another harness live:
 
-1. Implement a reader that returns the fixed fingerprint schema (see
+1. **Register it** in `src/atv_bench/harnesses.py` (or flip an existing planned entry's
+   `live=True`): set its `key`, `title`, and `config_root` (the dir under `$HOME` its
+   config lives in).
+2. Implement a reader that returns the fixed fingerprint schema (see
    `src/atv_bench/fingerprint/probe.py::FINGERPRINT_SCHEMA_KEYS`). Read **names and
    counts only — never file contents**. Route anything unreadable to
-   `unknown[{field, reason}]`.
-2. Run the required leak check:
+   `unknown[{field, reason}]`. Wire it into `probe.py::_READERS[<key>]` so
+   `atv-bench fingerprint --harness <key>` dispatches to it.
+3. Run the required leak check:
    ```bash
-   atv-bench validate-harness
+   atv-bench validate-harness --harness <key>
    ```
-3. **Add a canary leak-test** for your reader modeled on
+4. **Add a canary leak-test** for your reader modeled on
    `tests/test_fingerprint_leak.py`: a synthetic config stuffed with secrets, asserting
    zero canaries reach the manifest or log. This test is **required** — a harness
    reader without one will not be merged. The credibility of the whole league rests on
