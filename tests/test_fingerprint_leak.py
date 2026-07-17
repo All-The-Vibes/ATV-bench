@@ -390,8 +390,9 @@ def test_copilot_probe_canary_no_leaks(tmp_path):
     assert result.manifest["harness"] == "copilot-cli"
     assert result.manifest["model"] == "claude-opus-4.8"
     # office-hours is disabled → excluded; the long slug survives the entropy gate.
-    assert "systematic-debugging" in result.manifest["skills"]
-    assert "office-hours" not in result.manifest["skills"]
+    # Copilot skills are nested under installed-plugins/*/skills → nested_skills.
+    assert "systematic-debugging" in result.manifest["nested_skills"]
+    assert "office-hours" not in result.manifest["nested_skills"]
     # workiq MCP is disabled → excluded; github/grafana remain.
     assert set(result.manifest["mcps"]) == {"github", "grafana"}
     assert set(result.manifest["plugins"]) == {"gstack", "superpowers"}
@@ -410,6 +411,7 @@ def test_copilot_empty_home_is_clean_not_crash(tmp_path):
     result = fp.probe_copilot_cli(tmp_path / ".copilot")
     assert result.manifest["harness"] == "copilot-cli"
     assert result.manifest["skills"] == []
+    assert result.manifest["nested_skills"] == []
     assert result.manifest["plugins"] == []
     assert result.manifest["mcps"] == []
     assert result.manifest["custom_agents_count"] == 0
@@ -442,3 +444,35 @@ def test_high_entropy_blobs_still_flagged(blob):
     """The segment-entropy relaxation must NOT weaken detection of a genuine
     high-entropy token (one unbroken dense run)."""
     assert is_secret(blob) is True, f"{blob!r} should still be flagged as secret"
+
+
+def test_new_surfaces_nested_skills_and_tools_no_leak(tmp_path):
+    """Lane A: canary secrets planted in nested-skill dirs, tool/permission names, and
+    plugin skill dirs must NOT leak into the new tools/nested_skills surfaces."""
+    home = tmp_path / ".claude"
+    (home / "skills" / "tdd").mkdir(parents=True)
+    # nested plugin skill with a SECRET-shaped dir name -> must be scrubbed to unknown[]
+    (home / "plugins" / "compound-engineering" / "skills" / "ce-plan").mkdir(parents=True)
+    (home / "plugins" / "compound-engineering" / "skills"
+     / "ghp_1234567890abcdefghijklmnopqrstuvwxyzAB").mkdir(parents=True)
+    (home / "settings.json").write_text(json.dumps({
+        "model": "claude-opus-4-8",
+        "permissions": {
+            "allow": ["Bash", "sk-ant-api03-SECRETSECRETSECRETSECRETSECRET"],
+            "deny": ["WebFetch"],
+        },
+    }))
+    (home / ".mcp.json").write_text(json.dumps({
+        "mcpServers": {"github": {"env": {"T": "ghp_1234567890abcdefghijklmnopqrstuvwxyzAB"}}}
+    }))
+    result = fp.probe_claude_code(home)
+    manifest = json.dumps(result.manifest)
+    for canary in CANARIES:
+        assert canary not in manifest, f"LEAK in new surfaces: {canary!r}"
+    # accuracy: the clean nested skill + clean tool ARE present
+    assert "ce-plan" in result.manifest["nested_skills"]
+    tool_names = {t["name"] for t in result.manifest["tools"]}
+    assert "Bash" in tool_names
+    # the secret-named skill was dropped, not emitted
+    assert "ghp_1234567890abcdefghijklmnopqrstuvwxyzAB" not in result.manifest["nested_skills"]
+    assert any(u["field"] == "nested_skills" for u in result.manifest["unknown"])

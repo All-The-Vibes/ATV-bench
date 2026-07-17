@@ -13,12 +13,15 @@ harness-agnostic entry.
 """
 from __future__ import annotations
 
+import hashlib
+import shutil
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from atv_bench.fingerprint import reader
-from atv_bench.fingerprint.scan import is_safe_name, is_secret
+from atv_bench.fingerprint.scan import _has_secret_pattern, is_safe_name, is_secret
 
 PROBE_VERSION = "1.0.0"
 
@@ -28,12 +31,21 @@ FINGERPRINT_SCHEMA_KEYS = (
     "model",
     "gstack",
     "skills",
+    "nested_skills",
+    "tools",
     "mcps",
     "plugins",
     "custom_agents_count",
+    "cli_version",
+    "unknown_runtime",
     "unknown",
     "probe_version",
 )
+
+# Which CLI binary each harness invokes at runtime (for the runtime-surface read).
+_HARNESS_BINARY = {"claude-code": "claude", "copilot-cli": "copilot"}
+# Cap the binary hash read so a huge/streamed binary can't stall the probe.
+_MAX_BINARY_HASH_BYTES = 64 * 1024 * 1024
 
 
 @dataclass
@@ -66,6 +78,89 @@ class _Builder:
         return sorted(out)
 
 
+def read_cli_runtime(harness_key: str) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Read the REAL installed CLI's version/path/hash (runtime honesty, gap #16).
+
+    Config-dir names are not the whole harness. This captures the actual binary the
+    harness invokes so the fingerprint admits its runtime surface. Returns
+    (cli_version, unknown_runtime). Everything is leak-safe scanned; a path or version
+    that fails the scan is recorded in unknown_runtime, never emitted raw.
+    """
+    binary = _HARNESS_BINARY.get(harness_key)
+    unknown_runtime: list[dict[str, str]] = []
+    cli: dict[str, Any] = {"binary": binary or "unknown", "version": "unknown",
+                           "path": "unknown", "sha256": "unknown"}
+    if not binary:
+        unknown_runtime.append({"field": "cli_binary", "reason": "no_binary_for_harness"})
+        return cli, unknown_runtime
+
+    path = shutil.which(binary)
+    if not path:
+        unknown_runtime.append({"field": "cli_path", "reason": "not_on_path"})
+        return cli, unknown_runtime
+
+    # The resolved path can carry a username; scan before emitting.
+    rp = Path(path).resolve()
+    posix = rp.as_posix()
+    cli["path"] = posix if not is_secret(posix) else "redacted"
+    if is_secret(posix):
+        unknown_runtime.append({"field": "cli_path", "reason": reader.REASON_NAME_UNSAFE})
+
+    # version string from `<cli> --version`
+    try:
+        proc = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=15)
+        raw = (proc.stdout or proc.stderr or "").strip().splitlines()
+        ver = raw[0].strip() if raw else ""
+        ver = ver[:80]
+        # A version banner ("2.1.195 (Claude Code)") is not a name — don't run the
+        # name-entropy gate on it. Only reject if it matches a hard secret PATTERN
+        # (token shapes / credentials-in-URL), which a version string never should.
+        if ver and not _has_secret_pattern(ver):
+            cli["version"] = ver
+        elif ver:
+            unknown_runtime.append({"field": "cli_version", "reason": reader.REASON_NAME_UNSAFE})
+    except Exception:
+        unknown_runtime.append({"field": "cli_version", "reason": reader.REASON_NOT_READABLE})
+
+    # sha256 of the binary (identity of what actually runs). Bounded read.
+    try:
+        size = rp.stat().st_size
+        if size <= _MAX_BINARY_HASH_BYTES:
+            h = hashlib.sha256()
+            with rp.open("rb") as fh:
+                for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    h.update(chunk)
+            cli["sha256"] = h.hexdigest()
+        else:
+            unknown_runtime.append({"field": "cli_sha256", "reason": "binary_too_large"})
+    except Exception:
+        unknown_runtime.append({"field": "cli_sha256", "reason": reader.REASON_NOT_READABLE})
+
+    return cli, unknown_runtime
+
+
+def _tool_entries(b: "_Builder", raw_tools: list[tuple[str, str, bool]]) -> list[dict[str, Any]]:
+    """Build leak-safe tool entries {name, source, enabled}; unsafe names → unknown[].
+
+    `raw_tools` is (name, source, enabled). source ∈ {permission,builtin,mcp,plugin,
+    unknown}. A tool whose name fails the safety scan is dropped into unknown[] with a
+    reason rather than emitted.
+    """
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for name, source, enabled in raw_tools:
+        if not is_safe_name(name):
+            b.note_unknown("tools", reader.REASON_NAME_UNSAFE)
+            continue
+        key = (name, source)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"name": name, "source": source, "enabled": bool(enabled)})
+    out.sort(key=lambda t: (t["name"], t["source"]))
+    return out
+
+
 def probe_claude_code(home: Path) -> ProbeResult:
     """Probe a claude-code config root (normally ~/.claude) → leak-safe manifest."""
     home = Path(home)
@@ -75,18 +170,29 @@ def probe_claude_code(home: Path) -> ProbeResult:
     model = "unknown"
     settings = reader.read_json(home / "settings.json", home)
     gstack_flag = False
+    raw_tools: list[tuple[str, str, bool]] = []
     if settings.ok and isinstance(settings.value, dict):
         raw_model = settings.value.get("model")
         if isinstance(raw_model, str) and is_safe_name(raw_model):
             model = raw_model
         elif raw_model is not None:
             b.note_unknown("model", reader.REASON_NAME_UNSAFE)
-        # NB: we deliberately touch ONLY settings.value["model"]. env/apiKeyHelper/
-        # awsSecret and any other field are never read — allowlist by construction.
+        # --- tools from permissions (allow => enabled, deny => disabled) ---
+        perms = settings.value.get("permissions")
+        if isinstance(perms, dict):
+            for tname in perms.get("allow", []) or []:
+                if isinstance(tname, str):
+                    # a permission entry can be "Bash(git:*)"; take the tool head only.
+                    raw_tools.append((tname.split("(", 1)[0], "permission", True))
+            for tname in perms.get("deny", []) or []:
+                if isinstance(tname, str):
+                    raw_tools.append((tname.split("(", 1)[0], "permission", False))
+        # NB: we deliberately touch ONLY settings.value["model"] + ["permissions"].
+        # env/apiKeyHelper/awsSecret and any other field are never read.
     elif not settings.ok:
         b.note_unknown("model", settings.reason or reader.REASON_NOT_READABLE)
 
-    # --- skills (dir basenames only) ---
+    # --- skills (top-level dir basenames only) ---
     skill_names, skill_errs = reader.list_child_dir_names(home / "skills", home)
     for _name, reason in skill_errs:
         b.note_unknown("skills", reason)
@@ -94,11 +200,38 @@ def probe_claude_code(home: Path) -> ProbeResult:
     if "gstack" in skills:
         gstack_flag = True
 
-    # --- plugins (dir basenames only) ---
+    # --- plugins (dir basenames only) + nested skills under plugins ---
+    # Two real claude layouts exist:
+    #   (a) plugins/<plugin>/skills/<skill>            (per-plugin install)
+    #   (b) plugins/marketplaces/<marketplace>/skills/<skill>  (marketplace clone)
+    # We only emit real plugin/marketplace names (dir basenames), never config JSON files.
     plugin_names, plugin_errs = reader.list_child_dir_names(home / "plugins", home)
     for _name, reason in plugin_errs:
         b.note_unknown("plugins", reason)
+    # Structural subdirs of ~/.claude/plugins are not plugins themselves.
+    _PLUGIN_STRUCT_DIRS = {"marketplaces", "cache", "data", "repos"}
+    plugin_names = [p for p in plugin_names if p not in _PLUGIN_STRUCT_DIRS]
     plugins = b.safe_names(plugin_names, "plugins")
+
+    nested_candidates: list[str] = []
+    # layout (a): plugins/<plugin>/skills/
+    for plug in plugin_names:
+        ns_names, ns_errs = reader.list_child_dir_names(
+            home / "plugins" / plug / "skills", home)
+        for _name, reason in ns_errs:
+            b.note_unknown("nested_skills", reason)
+        nested_candidates.extend(ns_names)
+    # layout (b): plugins/marketplaces/<marketplace>/skills/
+    mkt_names, _mkt_errs = reader.list_child_dir_names(home / "plugins" / "marketplaces", home)
+    for mkt in mkt_names:
+        ns_names, ns_errs = reader.list_child_dir_names(
+            home / "plugins" / "marketplaces" / mkt / "skills", home)
+        for _name, reason in ns_errs:
+            b.note_unknown("nested_skills", reason)
+        nested_candidates.extend(ns_names)
+    nested_skills = b.safe_names(nested_candidates, "nested_skills")
+    if "gstack" in nested_skills or "gstack" in plugins:
+        gstack_flag = True
 
     # --- mcps (server NAMES only, from .mcp.json keys) ---
     mcps: list[str] = []
@@ -108,27 +241,40 @@ def probe_claude_code(home: Path) -> ProbeResult:
         if isinstance(servers, dict):
             # We read only the KEYS (server names), never the values (command/env/url).
             mcps = b.safe_names(list(servers.keys()), "mcps")
+            # MCP servers also expose tools; record the server as a tool source (name only).
+            for sname in servers.keys():
+                raw_tools.append((sname, "mcp", True))
     elif not mcp_cfg.ok and mcp_cfg.reason != reader.REASON_NOT_READABLE:
         b.note_unknown("mcps", mcp_cfg.reason or reader.REASON_MALFORMED)
+
+    tools = _tool_entries(b, raw_tools)
 
     # --- custom_agents_count (count of agent files, never their contents) ---
     custom_agents_count, agent_errs = reader.count_child_files(home / "agents", home, suffix=".md")
     for _name, reason in agent_errs:
         b.note_unknown("custom_agents_count", reason)
 
+    # --- runtime surface honesty (real CLI version/path/hash) ---
+    cli_version, unknown_runtime = read_cli_runtime("claude-code")
+
     manifest: dict[str, Any] = {
         "harness": "claude-code",
         "model": model,
         "gstack": gstack_flag,
         "skills": skills,
+        "nested_skills": nested_skills,
+        "tools": tools,
         "mcps": mcps,
         "plugins": plugins,
         "custom_agents_count": custom_agents_count,
+        "cli_version": cli_version,
+        "unknown_runtime": unknown_runtime,
         "unknown": b.unknown,
         "probe_version": PROBE_VERSION,
     }
     b.log(f"probed claude-code: "
-          f"{len(skills)} skills, {len(mcps)} mcps, {len(plugins)} plugins, "
+          f"{len(skills)} skills, {len(nested_skills)} nested, {len(tools)} tools, "
+          f"{len(mcps)} mcps, {len(plugins)} plugins, "
           f"{custom_agents_count} agents, {len(b.unknown)} unknown")
     return ProbeResult(manifest=manifest, log="\n".join(b.log_lines))
 
@@ -183,21 +329,24 @@ def probe_copilot_cli(home: Path) -> ProbeResult:
     plugins = b.safe_names(plugin_candidates, "plugins")
 
     # --- skills + custom_agents_count (nested inside each installed plugin) ---
-    skill_candidates: list[str] = []
+    # Copilot's skills are ALL nested under installed-plugins/<mkt>/<plugin>/skills, so
+    # they populate nested_skills; the top-level `skills` list stays empty for copilot
+    # (no top-level skills dir in its layout) unless one is found.
+    nested_candidates: list[str] = []
     custom_agents_count = 0
     plugins_root = home / "installed-plugins"
     mkt_names, mkt_errs = reader.list_child_dir_names(plugins_root, home)
     for _name, reason in mkt_errs:
-        b.note_unknown("skills", reason)
+        b.note_unknown("nested_skills", reason)
     for mkt in mkt_names:
         plug_names, plug_errs = reader.list_child_dir_names(plugins_root / mkt, home)
         for _name, reason in plug_errs:
-            b.note_unknown("skills", reason)
+            b.note_unknown("nested_skills", reason)
         for plug in plug_names:
             s_names, s_errs = reader.list_child_dir_names(plugins_root / mkt / plug / "skills", home)
             for _name, reason in s_errs:
-                b.note_unknown("skills", reason)
-            skill_candidates.extend(s_names)
+                b.note_unknown("nested_skills", reason)
+            nested_candidates.extend(s_names)
             a_count, a_errs = reader.count_child_files(
                 plugins_root / mkt / plug / "agents", home, suffix=".md")
             for _name, reason in a_errs:
@@ -205,14 +354,16 @@ def probe_copilot_cli(home: Path) -> ProbeResult:
             custom_agents_count += a_count
 
     # Dedupe across plugins and drop skills explicitly disabled in settings.
-    effective_skills = sorted({s for s in skill_candidates if s not in disabled_skills})
-    skills = b.safe_names(effective_skills, "skills")
+    effective_nested = sorted({s for s in nested_candidates if s not in disabled_skills})
+    nested_skills = b.safe_names(effective_nested, "nested_skills")
+    skills: list[str] = []  # copilot has no top-level skills dir; all are nested
 
     # gstack ships as either a plugin or a nested skill; count it present either way.
-    gstack_flag = "gstack" in plugins or "gstack" in skills
+    gstack_flag = "gstack" in plugins or "gstack" in nested_skills
 
     # --- mcps (server NAMES from mcp-config.json keys, minus disabled) ---
     mcps: list[str] = []
+    raw_tools: list[tuple[str, str, bool]] = []
     mcp_cfg = reader.read_json(home / "mcp-config.json", home)
     if mcp_cfg.ok and isinstance(mcp_cfg.value, dict):
         servers = mcp_cfg.value.get("mcpServers")
@@ -220,23 +371,37 @@ def probe_copilot_cli(home: Path) -> ProbeResult:
             # Read only the KEYS (server names), never the values (command/env/url/token).
             names = [k for k in servers.keys() if k not in disabled_mcps]
             mcps = b.safe_names(names, "mcps")
+            for sname in names:
+                raw_tools.append((sname, "mcp", True))
     elif not mcp_cfg.ok and mcp_cfg.reason != reader.REASON_NOT_READABLE:
         b.note_unknown("mcps", mcp_cfg.reason or reader.REASON_MALFORMED)
+
+    # enabled plugins are also a tool source (name only).
+    for pname in plugins:
+        raw_tools.append((pname, "plugin", True))
+    tools = _tool_entries(b, raw_tools)
+
+    # --- runtime surface honesty (real CLI version/path/hash) ---
+    cli_version, unknown_runtime = read_cli_runtime("copilot-cli")
 
     manifest: dict[str, Any] = {
         "harness": "copilot-cli",
         "model": model,
         "gstack": gstack_flag,
         "skills": skills,
+        "nested_skills": nested_skills,
+        "tools": tools,
         "mcps": mcps,
         "plugins": plugins,
         "custom_agents_count": custom_agents_count,
+        "cli_version": cli_version,
+        "unknown_runtime": unknown_runtime,
         "unknown": b.unknown,
         "probe_version": PROBE_VERSION,
     }
     b.log(f"probed copilot-cli: "
-          f"{len(skills)} skills, {len(mcps)} mcps, {len(plugins)} plugins, "
-          f"{custom_agents_count} agents, {len(b.unknown)} unknown")
+          f"{len(nested_skills)} nested skills, {len(tools)} tools, {len(mcps)} mcps, "
+          f"{len(plugins)} plugins, {custom_agents_count} agents, {len(b.unknown)} unknown")
     return ProbeResult(manifest=manifest, log="\n".join(b.log_lines))
 
 

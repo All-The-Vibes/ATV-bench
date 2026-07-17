@@ -101,18 +101,33 @@ def _render_full_assessment(manifest: dict, harness_key: str | None = None) -> s
                 out.append(f"    • {name}")
         return out
 
+    cli = m.get("cli_version") or {}
+    cli_line = "unknown"
+    if isinstance(cli, dict) and cli.get("version", "unknown") != "unknown":
+        sha = cli.get("sha256", "unknown")
+        sha_disp = sha[:12] if isinstance(sha, str) and sha != "unknown" else "unknown"
+        cli_line = f"{cli.get('version')}  (sha256:{sha_disp})"
+
+    tools = m.get("tools", [])
+    tool_lines = [f"{t['name']} [{t['source']}{'' if t['enabled'] else ' · off'}]"
+                  for t in tools]
+
     lines = [
         hb,
         f"  HARNESS ASSESSMENT — {harness_key or m['harness']}",
         hb,
         f"  Harness type : {m['harness']}",
         f"  Model        : {m['model']}",
+        f"  CLI runtime  : {cli_line}",
         f"  gstack       : {str(m['gstack']).lower()}",
         f"  Custom agents: {m['custom_agents_count']}",
-        f"  Totals       : {len(m['skills'])} skills · {len(m['mcps'])} MCP servers · "
+        f"  Totals       : {len(m['skills'])} skills · {len(m.get('nested_skills', []))} "
+        f"nested · {len(tools)} tools · {len(m['mcps'])} MCP servers · "
         f"{len(m['plugins'])} plugins",
     ]
     lines += _block("Skills", m["skills"])
+    lines += _block("Nested skills (plugin-provided)", m.get("nested_skills", []))
+    lines += _block("Tools", tool_lines)
     lines += _block("MCP servers", m["mcps"])
     lines += _block("Plugins", m["plugins"])
     # Surface anything the scanner withheld or couldn't read, honestly.
@@ -130,6 +145,11 @@ def _render_full_assessment(manifest: dict, harness_key: str | None = None) -> s
         lines.append(f"  Unread       : {parts}")
     else:
         lines.append("  Unread       : (all surfaces read cleanly)")
+    # Runtime honesty: names of config dirs are not the whole harness.
+    runtime_unknown = m.get("unknown_runtime", [])
+    if runtime_unknown:
+        parts = "; ".join(f"{u['field']}: {u['reason']}" for u in runtime_unknown)
+        lines.append(f"  Runtime gaps : {parts}")
     lines.append(hb)
     return "\n".join(lines)
 

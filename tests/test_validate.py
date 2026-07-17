@@ -20,8 +20,10 @@ from atv_bench.validate import (
 def _clean_fp():
     return {
         "harness": "claude-code", "model": "claude-opus-4-8", "gstack": True,
-        "skills": ["gstack"], "mcps": ["github"], "plugins": [], "custom_agents_count": 0,
-        "unknown": [], "probe_version": "1.0.0",
+        "skills": ["gstack"], "nested_skills": [], "tools": [], "mcps": ["github"],
+        "plugins": [], "custom_agents_count": 0,
+        "cli_version": {"binary": "claude", "version": "1.0.0", "path": "/x", "sha256": "unknown"},
+        "unknown_runtime": [], "unknown": [], "probe_version": "1.0.0",
     }
 
 
