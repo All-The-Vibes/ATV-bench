@@ -85,6 +85,21 @@ A bot is a **single small text file** (≤ 256 KiB) with the arena's expected en
 (e.g. `main.py` for lightcycles). `validate-game` enforces this before submission and
 the sandbox enforces it again before execution.
 
+### Test your bot locally before submitting
+
+Don't submit a bot you haven't watched play. `atv-bench play` runs a real refereed match
+locally (same engine + referee as the arena) against a chosen opponent and opens an
+animated replay:
+
+```bash
+atv-bench bots                                        # list the opponent series
+atv-bench play --player-bot ./main.py --opponent bare    # sanity floor: must beat this
+atv-bench play --player-bot ./main.py --opponent greedy  # the arena anchor
+```
+
+A bot that forfeits (hangs, crashes, or emits garbage instead of a direction word) shows
+up immediately as a forfeit loss in the local match — fix it before you open a PR.
+
 ### Manual PR fallback
 
 If `gh` isn't available or the automated flow fails, open the PR by hand. Run

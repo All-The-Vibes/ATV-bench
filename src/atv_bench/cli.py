@@ -345,6 +345,77 @@ def games(
 
 
 @app.command()
+def bots(
+    json_out: bool = typer.Option(False, "--json", help="Emit the bots list as JSON."),
+) -> None:
+    """List the local opponents you can play the visualization against (`atv-bench play`)."""
+    from atv_bench.bots import BOTS, DEFAULT_OPPONENT
+
+    if json_out:
+        payload = [{"key": b.key, "title": b.title, "summary": b.summary} for b in BOTS]
+        typer.echo(json.dumps(payload, indent=2))
+        return
+    typer.echo("Local opponents for `atv-bench play --opponent <key>`:\n")
+    for b in BOTS:
+        typer.echo(f"  • {b.key}  — {b.title}")
+        typer.echo(f"      {b.summary}")
+    typer.echo(f"\nDefault opponent: {DEFAULT_OPPONENT}. "
+               f"Play your own bot with `--player-bot path/to/main.py`.")
+
+
+@app.command()
+def play(
+    game: str = typer.Option(DEFAULT_GAME, "--game", help="Arena to play (see `atv-bench games`)."),
+    player: str = typer.Option(None, "--player", help="Named bot to play as (see `atv-bench bots`)."),
+    player_bot: Path = typer.Option(None, "--player-bot", help="Path to YOUR harness-built bot file (main.py) to play as."),
+    opponent: str = typer.Option(None, "--opponent", help="Named opponent bot (default: greedy anchor)."),
+    seed: int = typer.Option(0, "--seed", help="Match label/id (matches are already fully deterministic; seed only labels the replay)."),
+    out: Path = typer.Option(None, "--out", help="Where to write the replay (default: ./_replay)."),
+    open_browser: bool = typer.Option(True, "--open/--no-open", help="Open the animated replay in a browser."),
+) -> None:
+    """Run a REAL refereed match locally and watch it — your bot vs the opponent series.
+
+    This is the honest, un-mocked visualization: the same trusted engine + referee the
+    sandboxed arena uses adjudicates the match from real gameplay. Pick a named bot with
+    `--player` or your own harness-built bot with `--player-bot main.py`, choose an
+    `--opponent` from `atv-bench bots`, and it prints an ASCII board + writes an animated
+    HTML replay you can scrub through.
+
+        atv-bench play --player bare --opponent greedy
+        atv-bench play --player-bot main.py --opponent wall_hugger
+    """
+    from atv_bench.bots import DEFAULT_OPPONENT
+    from atv_bench.play import Contestant, build_replay_html, render_ascii, run_local_match
+
+    if player_bot is not None and player is not None:
+        typer.echo("Pick one of --player <bot> or --player-bot <file>, not both.")
+        raise typer.Exit(2)
+    if player_bot is not None:
+        if not player_bot.is_file():
+            typer.echo(f"No bot file at {player_bot}.")
+            raise typer.Exit(2)
+        me = Contestant(bot_path=str(player_bot), label=player_bot.stem)
+    else:
+        me = Contestant(key=player or "bare")
+    opp = Contestant(key=opponent or DEFAULT_OPPONENT)
+
+    try:
+        result = run_local_match(game=game, player=me, opponent=opp, seed=seed)
+    except ValueError as e:
+        typer.echo(f"Cannot play: {e}")
+        raise typer.Exit(2)
+
+    typer.echo(render_ascii(result))
+    out_dir = out or Path("_replay")
+    replay = build_replay_html(result, out_dir, game=game, seed=seed)
+    typer.echo(f"\n✓ Wrote animated replay: {replay}")
+    if open_browser:
+        _serve_and_open(replay.parent, index=replay.name)
+    else:
+        typer.echo(f"  Open it: open {replay}  (or serve: python -m http.server --directory {replay.parent})")
+
+
+@app.command()
 def board(
     store: Path = typer.Option(None, "--store", help="League store dir (default: ./league)."),
     out: Path = typer.Option(None, "--out", help="Where to write the static board (default: ./_board)."),
@@ -405,7 +476,7 @@ def board(
         typer.echo(f"  Open it with: python -m http.server --directory {site}")
 
 
-def _serve_and_open(site: Path) -> None:
+def _serve_and_open(site: Path, index: str = "index.html") -> None:
     """Serve `site` on a local port and open a browser at it (fetch needs http, not file://)."""
     import functools
     import http.server
@@ -415,7 +486,7 @@ def _serve_and_open(site: Path) -> None:
     handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(site))
     httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     port = httpd.server_address[1]
-    url = f"http://127.0.0.1:{port}/index.html"
+    url = f"http://127.0.0.1:{port}/{index}"
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     typer.echo(f"  Serving at {url} (Ctrl-C to stop)")
