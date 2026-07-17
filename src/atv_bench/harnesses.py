@@ -7,10 +7,10 @@ The CLI must therefore never present itself as a claude-code tool — it present
 matches the local machine (or the one the user names with `--harness`).
 
 `live` is True only when a harness has a real, leak-safe fingerprint reader in this repo
-(`fingerprint/probe.py`). v1 ships `claude-code` live; `copilot-cli` and `codex` are
-planned (their surfaces emit as `unknown[]` until a reader + canary leak-test lands — see
-CONTRIBUTING → Add a harness adapter). Adding a harness flips its status here and nothing
-else in the CLI needs to change — this mirrors `games.py`.
+(`fingerprint/probe.py`). v1 ships `claude-code`, `copilot-cli`, and `codex` live (each
+with an allowlist-emit reader + canary leak-test — see CONTRIBUTING → Add a harness
+adapter). Adding a harness flips its status here and nothing else in the CLI needs to
+change — this mirrors `games.py`.
 """
 from __future__ import annotations
 
@@ -52,10 +52,11 @@ HARNESSES: tuple[Harness, ...] = (
     Harness(
         key="codex",
         title="OpenAI Codex CLI",
-        live=False,
+        live=True,
         config_root=".codex",
-        summary="Planned. No leak-safe reader in this repo yet — its surfaces emit as "
-        "unknown[] until a reader + canary leak-test ships (see CONTRIBUTING → Add a harness).",
+        summary="Reads ~/.codex names + counts only (model from config.toml top-level key, "
+        "MCP servers from [mcp_servers.*] tables, skills from skills/, custom agents from "
+        "prompts/) into the fixed leak-safe schema. Never reads provider tables or headers.",
     ),
 )
 

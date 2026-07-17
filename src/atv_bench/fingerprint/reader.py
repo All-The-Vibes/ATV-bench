@@ -7,6 +7,7 @@ outcome instead of a raise or a silent drop. No bare `except: pass`.
 from __future__ import annotations
 
 import json
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -60,6 +61,9 @@ def read_json(path: Path, root: Path) -> ReadOutcome:
         raw = path.read_text(encoding="utf-8")
     except PermissionError:
         return ReadOutcome(reason=REASON_PERMISSION)
+    except UnicodeDecodeError:
+        # non-UTF8 bytes are a malformed config, not a crash (M2 regression).
+        return ReadOutcome(reason=REASON_MALFORMED)
     except OSError:
         return ReadOutcome(reason=REASON_NOT_READABLE)
     if not raw.strip():
@@ -67,6 +71,33 @@ def read_json(path: Path, root: Path) -> ReadOutcome:
     try:
         return ReadOutcome(value=json.loads(raw))
     except (json.JSONDecodeError, ValueError):
+        return ReadOutcome(reason=REASON_MALFORMED)
+
+
+def read_toml(path: Path, root: Path) -> ReadOutcome:
+    """Read + parse a TOML config file, confined to `root`.
+
+    Mirrors `read_json`: same confinement, same reason enums, same text→parse flow.
+    We read text (like read_json) then `tomllib.loads`, NOT `tomllib.load` on a binary
+    handle — so a non-UTF8 file becomes REASON_MALFORMED here too, never a crash.
+    """
+    if not _within_root(path, root):
+        return ReadOutcome(reason=REASON_SYMLINK_ESCAPE)
+    try:
+        if not path.exists():
+            return ReadOutcome(reason=REASON_NOT_READABLE)
+        raw = path.read_text(encoding="utf-8")
+    except PermissionError:
+        return ReadOutcome(reason=REASON_PERMISSION)
+    except UnicodeDecodeError:
+        return ReadOutcome(reason=REASON_MALFORMED)
+    except OSError:
+        return ReadOutcome(reason=REASON_NOT_READABLE)
+    if not raw.strip():
+        return ReadOutcome(reason=REASON_EMPTY)
+    try:
+        return ReadOutcome(value=tomllib.loads(raw))
+    except tomllib.TOMLDecodeError:
         return ReadOutcome(reason=REASON_MALFORMED)
 
 

@@ -27,10 +27,10 @@ def test_default_harness_is_live():
     assert hz.DEFAULT_HARNESS in hz.live_keys()
 
 
-def test_claude_code_live_others_planned():
+def test_all_v1_harnesses_live():
     assert hz.is_live("claude-code")
     assert hz.is_live("copilot-cli")
-    assert not hz.is_live("codex")
+    assert hz.is_live("codex")
 
 
 def test_detect_harness_finds_live_config(tmp_path):
@@ -41,10 +41,10 @@ def test_detect_harness_finds_live_config(tmp_path):
     assert hz.detect_harness(home=tmp_path) == "claude-code"
 
 
-def test_detect_ignores_planned_harness_config(tmp_path):
-    # A planned harness's config dir must NOT be detected — we can't fingerprint it yet.
+def test_detect_finds_codex_now_live(tmp_path):
+    # codex is now live, so its config dir IS detected.
     (tmp_path / ".codex").mkdir()
-    assert hz.detect_harness(home=tmp_path) is None
+    assert hz.detect_harness(home=tmp_path) == "codex"
 
 
 def test_config_root_for_uses_registry(tmp_path):
@@ -52,13 +52,12 @@ def test_config_root_for_uses_registry(tmp_path):
     assert hz.config_root_for("copilot-cli", home=tmp_path) == tmp_path / ".copilot"
 
 
-def test_assert_probeable_rejects_unknown_and_planned():
+def test_assert_probeable_rejects_unknown_accepts_live():
     with pytest.raises(ValueError, match="unknown harness"):
         hz.assert_probeable("bogus")
-    with pytest.raises(ValueError, match="planned"):
-        hz.assert_probeable("codex")
     hz.assert_probeable("claude-code")  # does not raise
     hz.assert_probeable("copilot-cli")  # live — does not raise
+    hz.assert_probeable("codex")        # now live — does not raise
 
 
 # --- generic probe() dispatcher -------------------------------------------------------
@@ -84,9 +83,14 @@ def test_probe_explicit_harness_matches_default(tmp_path):
     assert result.manifest["harness"] == "claude-code"
 
 
-def test_probe_fails_closed_on_planned_harness(tmp_path):
-    with pytest.raises(ValueError, match="planned"):
-        fp.probe(home=tmp_path, harness="codex")
+def test_probe_codex_now_live(tmp_path):
+    """codex is live: probe() dispatches to its reader instead of failing closed."""
+    home = tmp_path / ".codex"
+    home.mkdir()
+    (home / "config.toml").write_text('model = "gpt-5.5"\n')
+    result = fp.probe(home=home, harness="codex")
+    assert result.manifest["harness"] == "codex"
+    assert result.manifest["model"] == "gpt-5.5"
 
 
 def test_probe_fails_closed_on_unknown_harness(tmp_path):
@@ -96,13 +100,13 @@ def test_probe_fails_closed_on_unknown_harness(tmp_path):
 
 # --- CLI surface ----------------------------------------------------------------------
 
-def test_harnesses_command_lists_live_and_planned():
+def test_harnesses_command_lists_live():
     result = runner.invoke(app, ["harnesses"])
     assert result.exit_code == 0
     assert "claude-code" in result.output
     assert "copilot-cli" in result.output
+    assert "codex" in result.output
     assert "[live]" in result.output
-    assert "[planned]" in result.output
 
 
 def test_harnesses_json():
@@ -112,13 +116,19 @@ def test_harnesses_json():
     keys = {h["key"]: h for h in payload}
     assert keys["claude-code"]["live"] is True
     assert keys["copilot-cli"]["live"] is True
-    assert keys["codex"]["live"] is False
+    assert keys["codex"]["live"] is True
 
 
-def test_fingerprint_planned_harness_fails_closed(tmp_path):
-    result = runner.invoke(app, ["fingerprint", "--harness", "codex", "--home", str(tmp_path)])
-    assert result.exit_code == 2
-    assert "planned" in result.output
+def test_fingerprint_codex_now_live_probes(tmp_path):
+    """codex is live: an explicit probe against a real ~/.codex succeeds (no fail-closed)."""
+    home = tmp_path / ".codex"
+    (home / "skills" / "gstack").mkdir(parents=True)
+    (home / "config.toml").write_text('model = "gpt-5.5"\n')
+    result = runner.invoke(app, ["fingerprint", "--json", "--harness", "codex", "--home", str(home)])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["harness"] == "codex"
+    assert payload["model"] == "gpt-5.5"
 
 
 def test_fingerprint_unknown_harness_fails_closed(tmp_path):

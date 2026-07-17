@@ -32,11 +32,61 @@ def _probe_or_exit(home: Path | None, harness: str | None) -> fp.ProbeResult:
     Centralizes the fail-closed handling so every probing command (fingerprint / submit /
     validate-harness) rejects an unknown or planned harness the same way instead of
     emitting an empty/placeholder fingerprint.
+
+    Detect-guard (M10): when the harness is being AUTO-detected (no explicit --harness)
+    against the real $HOME (no --home override) and more than one live harness config is
+    present, refuse to silently pick the first — require an explicit --harness so the user
+    controls which harness is published.
     """
+    from atv_bench import harnesses as hz
+
+    if harness is None and home is None:
+        detected = [h.key for h in HARNESSES if h.live
+                    and (Path.home() / h.config_root).exists()]
+        if len(detected) > 1:
+            typer.echo(
+                "Multiple coding-agent harnesses detected on this machine: "
+                f"{', '.join(detected)}.\n"
+                "Auto-detect won't guess which one to publish. Re-run with an explicit "
+                "harness, e.g. `atv-bench fingerprint --harness "
+                f"{detected[0]}` (see `atv-bench harnesses`)."
+            )
+            raise typer.Exit(2)
+
     try:
-        return fp.probe(home=home, harness=harness)
+        result = fp.probe(home=home, harness=harness)
     except ValueError as e:
         typer.echo(f"Cannot fingerprint: {e}")
+        raise typer.Exit(2)
+
+    # M9: an explicitly-probed harness whose config is absent/empty must not present as a
+    # confident published fingerprint. Surface an actionable problem/cause/fix message.
+    resolved = harness or hz.detect_harness() or hz.DEFAULT_HARNESS
+    _warn_if_config_absent(resolved, home, result)
+    return result
+
+
+def _warn_if_config_absent(harness_key: str, home: Path | None, result: fp.ProbeResult) -> None:
+    """Fail loudly (exit 2) when the harness's primary config file is missing, so an empty
+    manifest never passes silently as a real fingerprint (M9)."""
+    from atv_bench import harnesses as hz
+
+    root = Path(home) if home is not None else hz.config_root_for(harness_key)
+    primary = {
+        "codex": "config.toml",
+        "claude-code": "settings.json",
+        "copilot-cli": "settings.json",
+    }.get(harness_key)
+    if primary is None:
+        return
+    if not (root / primary).exists():
+        typer.echo(
+            f"Cannot fingerprint {harness_key}: no {primary} found in {root}.\n"
+            f"  problem: the harness config file is missing, so the fingerprint would be empty.\n"
+            f"  cause:   {harness_key} is not set up at {root}, or the wrong --home was passed.\n"
+            f"  fix:     run {harness_key} at least once to create {primary}, or pass the "
+            f"correct --home / --harness (see `atv-bench harnesses`)."
+        )
         raise typer.Exit(2)
 
 
@@ -45,7 +95,7 @@ def _render_consent(manifest: dict) -> str:
     lines = []
     lines.append(
         "Will publish:  "
-        f"harness {m['harness']} · gstack {str(m['gstack']).lower()} · "
+        f"harness {m['harness']} · model {m['model']} · gstack {str(m['gstack']).lower()} · "
         f"{len(m['skills'])} skills · {len(m['mcps'])} MCPs · "
         f"{len(m['plugins'])} plugins · {m['custom_agents_count']} agents"
     )
@@ -216,15 +266,24 @@ def validate_harness_cmd(
     home: Path = typer.Option(None, "--home", help="Harness config root (default: harness's standard dir under $HOME)."),
 ) -> None:
     """Probe the local harness and validate its fingerprint is schema-complete + leak-safe."""
-    from atv_bench.validate import validate_harness_fingerprint
-    manifest = _probe_or_exit(home, harness).manifest
-    report = validate_harness_fingerprint(manifest)
+    from atv_bench import validate as _validate
+    from atv_bench import harnesses as hz
+
+    result = _probe_or_exit(home, harness)
+    manifest = result.manifest
+    resolved = manifest.get("harness") or harness or hz.detect_harness() or hz.DEFAULT_HARNESS
+    report = _validate.validate_harness_fingerprint(manifest)
     if report["ok"]:
-        typer.echo("✓ harness fingerprint is schema-complete and leak-safe")
+        typer.echo(f"✓ {resolved} harness fingerprint is schema-complete and leak-safe")
     else:
-        typer.echo("✗ harness fingerprint has issues:")
+        typer.echo(f"✗ {resolved} harness fingerprint has issues — fix before submitting:")
         for e in report["errors"]:
             typer.echo(f"  - {e}")
+        typer.echo(
+            "  fix: adjust your reader / config so every published name passes the safety "
+            "scan and the schema is complete, then re-run `atv-bench validate-harness "
+            f"--harness {resolved}`. See CONTRIBUTING.md → Add a harness adapter."
+        )
         raise typer.Exit(1)
 
 

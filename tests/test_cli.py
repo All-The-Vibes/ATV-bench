@@ -59,6 +59,88 @@ def test_cli_has_expected_commands():
         assert cmd in result.output
 
 
+# --- T5: detect-guard (M10) + model in consent (M13) + codex missing-config msg (M9) ---
+
+def test_fingerprint_consent_includes_model(tmp_path):
+    """M13: the --dry-run consent view must show the model that would be published."""
+    home = _fixture_home(tmp_path)
+    result = runner.invoke(app, ["fingerprint", "--dry-run", "--home", str(home)])
+    assert result.exit_code == 0, result.output
+    assert "claude-opus-4-8" in result.output
+    # and it's labelled, not just floating
+    assert "model" in result.output.lower()
+
+
+def test_detect_guard_requires_explicit_harness_when_multiple(tmp_path, monkeypatch):
+    """M10: >1 live harness config present + no --harness → error listing detected
+    harnesses and requiring an explicit --harness (no silent first-live pick)."""
+    base = tmp_path / "home"
+    (base / ".claude" / "skills" / "gstack").mkdir(parents=True)
+    (base / ".claude" / "settings.json").write_text(json.dumps({"model": "claude-opus-4-8"}))
+    (base / ".codex" / "skills" / "gstack").mkdir(parents=True)
+    (base / ".codex" / "config.toml").write_text('model = "gpt-5.5"\n')
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: base))
+    result = runner.invoke(app, ["fingerprint"])  # no --harness, no --home
+    assert result.exit_code != 0, result.output
+    out = result.output.lower()
+    assert "--harness" in out
+    assert "claude-code" in out and "codex" in out
+
+
+def test_detect_guard_single_harness_ok(tmp_path, monkeypatch):
+    """Only one live config present → auto-detect proceeds without the guard."""
+    base = tmp_path / "home"
+    (base / ".codex" / "skills" / "gstack").mkdir(parents=True)
+    (base / ".codex" / "config.toml").write_text('model = "gpt-5.5"\n')
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: base))
+    result = runner.invoke(app, ["fingerprint"])
+    assert result.exit_code == 0, result.output
+    assert "gpt-5.5" in result.output
+
+
+def test_codex_missing_config_actionable_message(tmp_path):
+    """M9: an empty ~/.codex (no config.toml) probed explicitly → actionable message,
+    never a green empty manifest passing silently."""
+    home = tmp_path / ".codex"
+    home.mkdir()
+    result = runner.invoke(app, ["fingerprint", "--harness", "codex", "--home", str(home)])
+    # empty codex home should not present as a confident published fingerprint
+    out = result.output.lower()
+    assert "config.toml" in out
+    # actionable: names the fix / where to look
+    assert result.exit_code != 0 or "no " in out or "not found" in out
+
+
+# --- T7: validate-harness failure copy names harness + prose + fix (M11) ---
+
+def test_validate_harness_success_names_harness(tmp_path):
+    home = tmp_path / ".claude"
+    (home / "skills" / "gstack").mkdir(parents=True)
+    (home / "settings.json").write_text(json.dumps({"model": "claude-opus-4-8"}))
+    result = runner.invoke(app, ["validate-harness", "--harness", "claude-code", "--home", str(home)])
+    assert result.exit_code == 0, result.output
+    assert "claude-code" in result.output.lower()
+
+
+def test_validate_harness_failure_copy_is_actionable(tmp_path, monkeypatch):
+    """M11: when validate-harness fails, the output names WHICH harness was validated
+    and gives a fix hint — not just bare reason codes a contributor can't act on."""
+    import atv_bench.validate as v
+    home = tmp_path / ".claude"
+    (home / "skills" / "gstack").mkdir(parents=True)
+    (home / "settings.json").write_text(json.dumps({"model": "claude-opus-4-8"}))
+    monkeypatch.setattr(
+        v, "validate_harness_fingerprint",
+        lambda m: {"ok": False, "errors": ["leak risk: skills entry failed safety scan"]},
+    )
+    result = runner.invoke(app, ["validate-harness", "--harness", "claude-code", "--home", str(home)])
+    assert result.exit_code == 1
+    out = result.output.lower()
+    assert "claude-code" in out            # names the harness validated
+    assert "leak risk" in out              # the prose reason
+    assert "contributing" in out or "fix" in out  # a fix hint / where to look
+
+
 def test_submit_dry_run_emits_submission_json(tmp_path):
     """R3 (both reviewers): CONTRIBUTING promises submit --dry-run emits the submission
     JSON, but it only printed preflight text. --dry-run must write a store-ingestable

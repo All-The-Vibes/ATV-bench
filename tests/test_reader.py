@@ -66,3 +66,74 @@ def test_probe_surfaces_agent_symlink_escape_in_unknown(tmp_path):
     assert "sk-proj-escape" not in json.dumps(result.manifest)
     reasons = {u["reason"] for u in result.manifest["unknown"]}
     assert reader.REASON_SYMLINK_ESCAPE in reasons
+
+
+# --- reader.read_toml (NEW, eng T1) ---
+
+def test_read_toml_valid(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text('model = "gpt-5.5"\n[mcp_servers.github]\ncommand = "gh"\n')
+    out = reader.read_toml(p, tmp_path)
+    assert out.ok
+    assert out.value["model"] == "gpt-5.5"
+    assert "github" in out.value["mcp_servers"]
+
+
+def test_read_toml_decode_error_is_malformed(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text("this is = = not valid toml [[[")
+    out = reader.read_toml(p, tmp_path)
+    assert not out.ok
+    assert out.reason == reader.REASON_MALFORMED
+
+
+def test_read_toml_non_utf8_is_malformed_not_crash(tmp_path):
+    """CRITICAL: invalid UTF-8 bytes must become REASON_MALFORMED, never crash."""
+    p = tmp_path / "config.toml"
+    p.write_bytes(b'model = "\xff\xfe not utf8"\n')
+    out = reader.read_toml(p, tmp_path)  # must not raise UnicodeDecodeError
+    assert not out.ok
+    assert out.reason == reader.REASON_MALFORMED
+
+
+def test_read_toml_missing_file_is_not_readable(tmp_path):
+    out = reader.read_toml(tmp_path / "nope.toml", tmp_path)
+    assert not out.ok
+    assert out.reason == reader.REASON_NOT_READABLE
+
+
+def test_read_toml_symlink_escape(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    secret = outside / "secret.toml"
+    secret.write_text('model = "gpt-5.5"\n')
+    root = tmp_path / ".codex"
+    root.mkdir()
+    link = root / "config.toml"
+    try:
+        link.symlink_to(secret)
+    except OSError:
+        pytest.skip("symlinks not supported")
+    out = reader.read_toml(link, root)
+    assert not out.ok
+    assert out.reason == reader.REASON_SYMLINK_ESCAPE
+
+
+def test_read_toml_empty_is_empty(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text("   \n  \n")
+    out = reader.read_toml(p, tmp_path)
+    assert not out.ok
+    assert out.reason == reader.REASON_EMPTY
+
+
+# --- reader.read_json (MODIFIED, M2) — non-UTF8 regression ---
+
+def test_read_json_non_utf8_is_malformed_not_crash(tmp_path):
+    """CRITICAL REGRESSION: non-UTF8 settings.json must become REASON_MALFORMED,
+    not raise UnicodeDecodeError (a ValueError subclass the old path missed)."""
+    p = tmp_path / "settings.json"
+    p.write_bytes(b'{"model": "\xff\xfe"}')
+    out = reader.read_json(p, tmp_path)  # must not raise
+    assert not out.ok
+    assert out.reason == reader.REASON_MALFORMED
