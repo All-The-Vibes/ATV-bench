@@ -412,7 +412,14 @@ def probe(home: Path | None = None, harness: str | None = None) -> ProbeResult:
     """
     from atv_bench import harnesses as hz
 
-    key = harness or hz.detect_harness() or hz.DEFAULT_HARNESS
+    # When an explicit config root is given without --harness, resolve the harness from
+    # that root's basename (e.g. .codex → codex) instead of auto-detecting against $HOME —
+    # otherwise a codex root passed via --home is mis-probed as claude-code on a machine
+    # that also has ~/.claude.
+    key = harness
+    if key is None and home is not None:
+        key = hz.harness_for_root(Path(home))
+    key = key or hz.detect_harness() or hz.DEFAULT_HARNESS
     hz.assert_probeable(key)  # raises ValueError for unknown/planned harness
 
     reader_fn = _READERS.get(key)

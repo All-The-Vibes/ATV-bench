@@ -61,7 +61,10 @@ def _probe_or_exit(home: Path | None, harness: str | None) -> fp.ProbeResult:
 
     # M9: an explicitly-probed harness whose config is absent/empty must not present as a
     # confident published fingerprint. Surface an actionable problem/cause/fix message.
-    resolved = harness or hz.detect_harness() or hz.DEFAULT_HARNESS
+    # The manifest's harness is the source of truth — probe() already resolved it from
+    # --harness, else the --home root basename, else $HOME auto-detect.
+    resolved = (result.manifest.get("harness")
+                or harness or hz.detect_harness() or hz.DEFAULT_HARNESS)
     _warn_if_config_absent(resolved, home, result)
     return result
 

@@ -89,6 +89,22 @@ def config_root_for(key: str, home: Path | None = None) -> Path:
     return Path(base) / root
 
 
+def harness_for_root(root: Path) -> str | None:
+    """Resolve a harness key from an explicit config ROOT (e.g. a `--home` value).
+
+    Matches on the root's basename against each harness's `config_root` (e.g. a directory
+    named `.codex` → codex, `.claude` → claude-code). Returns the LIVE harness key, or
+    None if the basename matches no live harness. This lets `--home <root>` pick the right
+    reader without a `--harness` flag, instead of falling back to $HOME auto-detect (which
+    would mis-resolve a codex root as claude-code on a machine that also has ~/.claude).
+    """
+    name = Path(root).name
+    for h in HARNESSES:
+        if h.live and h.config_root == name:
+            return h.key
+    return None
+
+
 def detect_harness(home: Path | None = None) -> str | None:
     """Best-effort local harness detection: first LIVE harness whose config dir exists.
 

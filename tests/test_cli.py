@@ -213,6 +213,29 @@ def test_codex_existing_unreadable_config_fails_closed(tmp_path):
     assert "config.toml" in result.output.lower()
 
 
+def test_home_without_harness_resolves_from_root_not_real_home(tmp_path, monkeypatch):
+    """Santa PR#9 round 4 (reviewer B): passing --home <codex-root> WITHOUT --harness
+    must fingerprint codex from that root — not mis-resolve the harness via
+    detect_harness() against the REAL $HOME. Previously a codex root passed via --home
+    was probed as claude-code (because the machine's $HOME had ~/.claude), producing
+    'no settings.json found in <codex-root>' instead of a codex fingerprint."""
+    # Real $HOME has claude-code so detect_harness() would say 'claude-code'.
+    fake_real_home = tmp_path / "realhome"
+    (fake_real_home / ".claude").mkdir(parents=True)
+    (fake_real_home / ".claude" / "settings.json").write_text(json.dumps({"model": "x"}))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_real_home))
+    # The --home points at a codex root.
+    codex_root = tmp_path / "elsewhere" / ".codex"
+    codex_root.mkdir(parents=True)
+    (codex_root / "config.toml").write_text('model = "gpt-5.5"\n')
+    result = runner.invoke(app, ["fingerprint", "--json", "--home", str(codex_root)])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["harness"] == "codex", payload
+    assert payload["model"] == "gpt-5.5", payload
+
+
+
 
 
 # --- T7: validate-harness failure copy names harness + prose + fix (M11) ---
