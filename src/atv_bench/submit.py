@@ -8,14 +8,26 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 from atv_bench.errors import AtvError, ErrorCode
+from atv_bench.fingerprint.provenance import (
+    VerifyResult,
+    capture_provenance,
+    verify_provenance,
+)
 from atv_bench.fingerprint.scan import is_secret
+
+# Sentinel so an EXPLICIT key=None forces a keyless verify, distinct from "arg omitted"
+# (which falls back to ATV_PROVENANCE_KEY). Without this, `key=None` could not simulate the
+# keyless Phase-1 board when the env var happened to be set.
+_KEY_FROM_ENV = object()
 
 # Bots are single small files (v1 arena bots). Guard shape/size before execution.
 _MAX_BOT_BYTES = 256 * 1024
@@ -120,27 +132,83 @@ def build_submission(
     game: str,
     pr_url: str = "",
     logs_url: str = "",
+    captured_at: str | None = None,
 ) -> dict[str, Any]:
     """Compose the submission artifact PR'd to the league repo.
 
     This is the SINGLE canonical submission shape consumed by LeagueStore.add_submission
     and build_leaderboard_doc. `pr_url`/`logs_url` are known only once the PR exists;
     they default to the repo URL and are backfilled by the merge/publish step.
+
+    UC1 provenance binding: the record carries a `provenance` token binding
+    {harness, bot_sha256, fingerprint_sha256, captured_at} so a post-capture edit to the
+    published manifest, a swapped bot, or a swapped harness is detectable at submit + merge
+    time (see verify_submission_provenance). Signed with ATV_PROVENANCE_KEY when set (HMAC);
+    otherwise an unkeyed tamper-evident digest (self-attested). `captured_at` is injectable
+    for deterministic tests; it defaults to now (UTC).
     """
     validate_bot_shape(bot_path)
     leak = _fingerprint_has_leak(fingerprint)
     if leak:
         raise AtvError(ErrorCode.FINGERPRINT_LEAK, cause=leak)
     data = Path(bot_path).read_bytes()
+    bot_sha256 = hashlib.sha256(data).hexdigest()
+    when = captured_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    harness = str(fingerprint.get("harness", "unknown"))
+    provenance = capture_provenance(
+        harness=harness, bot_sha256=bot_sha256, fingerprint=fingerprint,
+        captured_at=when, key=os.environ.get("ATV_PROVENANCE_KEY"),
+    )
     return {
         "identity": identity,
         "game": game,
-        "bot_sha256": hashlib.sha256(data).hexdigest(),
+        "bot_sha256": bot_sha256,
         "bot_filename": Path(bot_path).name,
         "pr_url": pr_url or _REPO_URL,
         "logs_url": logs_url or _REPO_URL,
         "fingerprint": fingerprint,
+        "provenance": provenance,
     }
+
+
+def verify_submission_provenance(record: dict[str, Any],
+                                 *, bot_path: str | None = None,
+                                 key: str | None | object = _KEY_FROM_ENV) -> VerifyResult:
+    """Re-derive the bound facets from a submission record and confirm the embedded
+    provenance token still matches.
+
+    This is the merge-time / submit-time gate: it catches a manifest edited after capture,
+    a swapped bot, or a swapped harness. When `bot_path` is given, the bot hash is
+    recomputed from the ACTUAL artifact bytes on disk — so a swapped `main.py` whose record
+    hash was left untouched is still caught (do NOT trust `record["bot_sha256"]` as the
+    source of truth at a trust boundary). When `bot_path` is omitted, it falls back to the
+    record's self-reported hash (adequate for a pre-PR self-check, not a trust gate).
+
+    `key` OMITTED defaults to ATV_PROVENANCE_KEY so a token signed by a trusted sandbox is
+    verified with the same key. An EXPLICIT `key=None` forces a KEYLESS verify (simulate the
+    Phase-1 board) even when the env var is set. A record missing provenance fails closed.
+    """
+    resolved_key = os.environ.get("ATV_PROVENANCE_KEY") if key is _KEY_FROM_ENV else key
+    if bot_path is not None:
+        bot_sha256 = hashlib.sha256(Path(bot_path).read_bytes()).hexdigest()
+    else:
+        bot_sha256 = str(record.get("bot_sha256", ""))
+    # A committed record is untrusted and hand-editable: a non-dict fingerprint must fail
+    # closed here, never crash the merge-time gate with an AttributeError (an untrusted
+    # record could otherwise DoS the verifier). verify_provenance still fails on the
+    # unknown harness / hash mismatch, so a malformed fingerprint never verifies.
+    fp = record.get("fingerprint")
+    if not isinstance(fp, dict):
+        return VerifyResult(
+            ok=False, signed=False,
+            reasons=["submission fingerprint is missing or not an object"])
+    return verify_provenance(
+        provenance=record.get("provenance"),
+        harness=str(fp.get("harness", "unknown")),
+        bot_sha256=bot_sha256,
+        fingerprint=fp,
+        key=resolved_key,
+    )
 
 
 def submission_status_trail(is_first_time: bool) -> list[str]:

@@ -7,12 +7,14 @@ outcome instead of a raise or a silent drop. No bare `except: pass`.
 from __future__ import annotations
 
 import json
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 # Reason enum surfaced into manifest["unknown"][*]["reason"].
 REASON_NOT_READABLE = "not_readable"
+REASON_ABSENT = "absent"
 REASON_MALFORMED = "malformed"
 REASON_EMPTY = "empty"
 REASON_PERMISSION = "permission_denied"
@@ -20,7 +22,7 @@ REASON_SYMLINK_ESCAPE = "symlink_escape"
 REASON_NAME_UNSAFE = "name_failed_safety_scan"
 
 VALID_REASONS = frozenset({
-    REASON_NOT_READABLE, REASON_MALFORMED, REASON_EMPTY,
+    REASON_NOT_READABLE, REASON_ABSENT, REASON_MALFORMED, REASON_EMPTY,
     REASON_PERMISSION, REASON_SYMLINK_ESCAPE, REASON_NAME_UNSAFE,
 })
 
@@ -55,11 +57,18 @@ def read_json(path: Path, root: Path) -> ReadOutcome:
     if not _within_root(path, root):
         return ReadOutcome(reason=REASON_SYMLINK_ESCAPE)
     try:
-        if not path.exists():
+        # A dangling symlink (present as a link, target missing) is NOT genuinely absent —
+        # the config file exists, it's just unreadable — so fail closed, don't skip it.
+        if path.is_symlink() and not path.exists():
             return ReadOutcome(reason=REASON_NOT_READABLE)
+        if not path.exists():
+            return ReadOutcome(reason=REASON_ABSENT)
         raw = path.read_text(encoding="utf-8")
     except PermissionError:
         return ReadOutcome(reason=REASON_PERMISSION)
+    except UnicodeDecodeError:
+        # non-UTF8 bytes are a malformed config, not a crash (M2 regression).
+        return ReadOutcome(reason=REASON_MALFORMED)
     except OSError:
         return ReadOutcome(reason=REASON_NOT_READABLE)
     if not raw.strip():
@@ -67,6 +76,36 @@ def read_json(path: Path, root: Path) -> ReadOutcome:
     try:
         return ReadOutcome(value=json.loads(raw))
     except (json.JSONDecodeError, ValueError):
+        return ReadOutcome(reason=REASON_MALFORMED)
+
+
+def read_toml(path: Path, root: Path) -> ReadOutcome:
+    """Read + parse a TOML config file, confined to `root`.
+
+    Mirrors `read_json`: same confinement, same reason enums, same text→parse flow.
+    We read text (like read_json) then `tomllib.loads`, NOT `tomllib.load` on a binary
+    handle — so a non-UTF8 file becomes REASON_MALFORMED here too, never a crash.
+    """
+    if not _within_root(path, root):
+        return ReadOutcome(reason=REASON_SYMLINK_ESCAPE)
+    try:
+        # A dangling symlink is present-but-unreadable, not genuinely absent → fail closed.
+        if path.is_symlink() and not path.exists():
+            return ReadOutcome(reason=REASON_NOT_READABLE)
+        if not path.exists():
+            return ReadOutcome(reason=REASON_ABSENT)
+        raw = path.read_text(encoding="utf-8")
+    except PermissionError:
+        return ReadOutcome(reason=REASON_PERMISSION)
+    except UnicodeDecodeError:
+        return ReadOutcome(reason=REASON_MALFORMED)
+    except OSError:
+        return ReadOutcome(reason=REASON_NOT_READABLE)
+    if not raw.strip():
+        return ReadOutcome(reason=REASON_EMPTY)
+    try:
+        return ReadOutcome(value=tomllib.loads(raw))
+    except tomllib.TOMLDecodeError:
         return ReadOutcome(reason=REASON_MALFORMED)
 
 

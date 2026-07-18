@@ -1,0 +1,161 @@
+{
+  "harness": "codex",
+  "model": "gpt-5.5",
+  "gstack": true,
+  "skills": [
+    "brainstorming",
+    "dispatching-parallel-agents",
+    "executing-plans",
+    "finishing-a-development-branch",
+    "gstack",
+    "kimi-webbridge",
+    "receiving-code-review",
+    "requesting-code-review",
+    "subagent-driven-development",
+    "systematic-debugging",
+    "test-driven-development",
+    "using-git-worktrees",
+    "using-superpowers",
+    "verification-before-completion",
+    "writing-plans",
+    "writing-skills"
+  ],
+  "mcps": [],
+  "plugins": [],
+  "custom_agents_count": 0,
+  "unknown": [
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "symlink_escape"
+    },
+    {
+      "field": "skills",
+      "reason": "name_failed_safety_scan"
+    }
+  ],
+  "probe_version": "1.0.0"
+}

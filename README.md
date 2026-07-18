@@ -92,6 +92,13 @@ A per-harness probe reads on-disk config and emits **one normalized, leak-safe**
 - **Consent surface** — `atv-bench fingerprint --dry-run` shows the exact *Will publish*
   list + scrubbed count before anything leaves your machine.
 
+v1 ships **live** fingerprint readers for **`claude-code`** (`~/.claude`),
+**`copilot-cli`** (`~/.copilot`), and **`codex`** (`~/.codex`). `atv-bench harnesses`
+lists them and auto-detects yours; `atv-bench fingerprint --harness <key>` targets one
+explicitly. Adding a harness is a reader + a required canary leak-test
+(see [CONTRIBUTING.md](CONTRIBUTING.md#add-a-harness-adapter) → *Which existing reader
+should I copy?*).
+
 ## Quick start (zero to board)
 
 **Install — no clone, no npm.** One command puts the `atv-bench` CLI on your PATH,
@@ -206,7 +213,7 @@ Use `--no-open` to skip launching the browser.
 4. **See exactly what your harness fingerprint would publish** (nothing leaves your
    machine):
    ```bash
-   atv-bench harnesses          # which harnesses are live vs. planned (auto-detects yours)
+   atv-bench harnesses          # claude-code, copilot-cli, codex are all live (auto-detects yours)
    atv-bench fingerprint --dry-run   # add --harness <key> to target a specific one
    ```
 5. **Validate + build your submission:**

@@ -13,7 +13,7 @@ from typing import Any
 
 from atv_bench.fingerprint import reader
 from atv_bench.fingerprint.probe import FINGERPRINT_SCHEMA_KEYS
-from atv_bench.fingerprint.scan import is_safe_name, is_secret
+from atv_bench.fingerprint.scan import _has_secret_pattern, is_safe_name, is_secret
 from atv_bench.submit import validate_bot_shape
 from atv_bench.errors import AtvError
 
@@ -150,11 +150,13 @@ def validate_harness_fingerprint(manifest: dict[str, Any]) -> dict[str, Any]:
         elif not is_safe_name(tool["name"]):
             errors.append("leak risk: tools entry failed safety scan")
     # cli_version carries version/path strings — must not be secret-shaped.
+    # Use pattern-only check (no entropy gate) for version banners like "2.1.195 (Claude Code)"
+    # which have high entropy but are not secrets.
     cli = manifest.get("cli_version")
     if isinstance(cli, dict):
         for key in ("version", "path"):
             val = cli.get(key)
-            if isinstance(val, str) and val not in ("unknown", "redacted") and is_secret(val):
+            if isinstance(val, str) and val not in ("unknown", "redacted") and _has_secret_pattern(val):
                 errors.append(f"leak risk: cli_version.{key} looks secret-like")
     model = manifest.get("model")
     if isinstance(model, str) and model != "unknown" and is_secret(model):

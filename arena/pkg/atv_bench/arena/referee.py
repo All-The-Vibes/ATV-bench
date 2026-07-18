@@ -216,7 +216,7 @@ def _frame(state: GameState) -> dict[str, Any]:
 def run_match(engine: TronEngine, source_a: MoveSource, source_b: MoveSource, *,
               player_a: str, player_b: str, match_id: str,
               game: str = "lightcycles", seed: int = 0,
-              record: bool = False) -> dict[str, Any]:
+              record: bool = False, observer: Any = None) -> dict[str, Any]:
     """Run a full refereed match and return the trusted, schema-shaped result.
 
     Both players are asked for a move each turn from the trusted engine's observation.
@@ -228,12 +228,19 @@ def run_match(engine: TronEngine, source_a: MoveSource, source_b: MoveSource, *,
     With `record=True` the result gains a `frames` list (one entry per tick, initial
     state first) and a `board` dict — enough to animate/replay the match deterministically.
     Recording never changes the adjudicated outcome.
+
+    `observer`, if given, is a callable invoked with each `GameState` — the initial
+    state and after every tick (including the terminal one). It is a read-only feed hook
+    for a live renderer; it never influences adjudication and its exceptions are the
+    caller's responsibility. Omitting both preserves the exact prior behavior.
     """
     frames: list[dict[str, Any]] = []
 
     def _emit(st: GameState) -> None:
         if record:
             frames.append(_frame(st))
+        if observer is not None:
+            observer(st)
 
     def _finalize(result: dict[str, Any]) -> dict[str, Any]:
         if record:

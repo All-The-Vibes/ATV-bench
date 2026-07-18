@@ -59,6 +59,277 @@ def test_cli_has_expected_commands():
         assert cmd in result.output
 
 
+# --- T5: detect-guard (M10) + model in consent (M13) + codex missing-config msg (M9) ---
+
+def test_fingerprint_consent_includes_model(tmp_path):
+    """M13: the --dry-run consent view must show the model that would be published."""
+    home = _fixture_home(tmp_path)
+    result = runner.invoke(app, ["fingerprint", "--dry-run", "--home", str(home)])
+    assert result.exit_code == 0, result.output
+    assert "claude-opus-4-8" in result.output
+    # and it's labelled, not just floating
+    assert "model" in result.output.lower()
+
+
+def test_detect_guard_requires_explicit_harness_when_multiple(tmp_path, monkeypatch):
+    """M10: >1 live harness config present + no --harness → error listing detected
+    harnesses and requiring an explicit --harness (no silent first-live pick)."""
+    base = tmp_path / "home"
+    (base / ".claude" / "skills" / "gstack").mkdir(parents=True)
+    (base / ".claude" / "settings.json").write_text(json.dumps({"model": "claude-opus-4-8"}))
+    (base / ".codex" / "skills" / "gstack").mkdir(parents=True)
+    (base / ".codex" / "config.toml").write_text('model = "gpt-5.5"\n')
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: base))
+    result = runner.invoke(app, ["fingerprint"])  # no --harness, no --home
+    assert result.exit_code != 0, result.output
+    out = result.output.lower()
+    assert "--harness" in out
+    assert "claude-code" in out and "codex" in out
+
+
+def test_detect_guard_single_harness_ok(tmp_path, monkeypatch):
+    """Only one live config present → auto-detect proceeds without the guard."""
+    base = tmp_path / "home"
+    (base / ".codex" / "skills" / "gstack").mkdir(parents=True)
+    (base / ".codex" / "config.toml").write_text('model = "gpt-5.5"\n')
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: base))
+    result = runner.invoke(app, ["fingerprint"])
+    assert result.exit_code == 0, result.output
+    assert "gpt-5.5" in result.output
+
+
+def test_stale_empty_sibling_root_not_counted_as_detected(tmp_path, monkeypatch):
+    """Santa PR#9 round 9 (reviewer B): a stale EMPTY sibling config root (dir present,
+    no primary config file — e.g. a leftover ~/.codex/ with no config.toml) must NOT
+    register as a detected harness. Detection is based on the primary config FILE, not the
+    bare dir, matching the reader taxonomy (absent primary → skip). With one valid harness
+    plus an empty sibling, auto-detect must proceed (not false-ambiguous)."""
+    base = tmp_path / "home"
+    (base / ".claude" / "skills").mkdir(parents=True)
+    (base / ".claude" / "settings.json").write_text(json.dumps({"model": "claude-opus-4-8"}))
+    (base / ".codex").mkdir()  # stale empty codex root — no config.toml
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: base))
+    result = runner.invoke(app, ["fingerprint"])
+    assert result.exit_code == 0, result.output  # not false-ambiguous
+    assert "multiple" not in result.output.lower()
+
+
+def test_harnesses_stale_empty_sibling_not_detected(tmp_path, monkeypatch):
+    """Same on the `harnesses` surfaces (text + JSON): a stale empty ~/.codex/ must not be
+    marked detected, and must not trigger the ambiguity banner."""
+    base = tmp_path / "home"
+    (base / ".claude" / "skills").mkdir(parents=True)
+    (base / ".claude" / "settings.json").write_text(json.dumps({"model": "claude-opus-4-8"}))
+    (base / ".codex").mkdir()  # stale empty
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: base))
+    text = runner.invoke(app, ["harnesses"])
+    assert text.exit_code == 0, text.output
+    assert "multiple harnesses detected" not in text.output.lower()
+    # claude-code (the one with a real primary config) is the detected one.
+    assert "claude-code  [live]  — claude code  ← detected on this machine" in text.output.lower()
+    jz = runner.invoke(app, ["harnesses", "--json"])
+    payload = json.loads(jz.output)
+    detected = {h["key"] for h in payload if h.get("detected")}
+    assert detected == {"claude-code"}, payload
+
+
+
+def test_codex_missing_config_actionable_message(tmp_path):
+    """M9: an empty ~/.codex (no config.toml) probed explicitly → actionable message,
+    never a green empty manifest passing silently."""
+    home = tmp_path / ".codex"
+    home.mkdir()
+    result = runner.invoke(app, ["fingerprint", "--harness", "codex", "--home", str(home)])
+    # empty codex home should not present as a confident published fingerprint
+    out = result.output.lower()
+    assert "config.toml" in out
+    # actionable: names the fix / where to look
+    assert result.exit_code != 0 or "no " in out or "not found" in out
+
+
+def test_probe_empty_primary_config_fails_closed(tmp_path):
+    """Santa PR#9 (reviewer B): _warn_if_config_absent promises to fail on absent OR
+    empty configs, but only checked .exists(). An empty settings.json (file present,
+    zero bytes) must NOT publish a confident empty fingerprint — fail closed like a
+    missing file does."""
+    home = tmp_path / ".claude"
+    home.mkdir()
+    (home / "settings.json").write_text("   \n")  # present but empty
+    result = runner.invoke(app, ["fingerprint", "--harness", "claude-code", "--home", str(home)])
+    assert result.exit_code != 0, result.output
+    assert "settings.json" in result.output.lower()
+
+
+def test_harnesses_multi_detect_consistent_with_probe_guard(tmp_path, monkeypatch):
+    """Santa PR#9 (reviewer B): the `harnesses` command must not claim a single
+    'Default (auto-detected): <one>' on a machine where >1 live harness config is
+    present, because the probing commands REFUSE to auto-pick there (M10 guard). The
+    two surfaces must tell the same story: on multi-harness machines, auto-detect is
+    ambiguous and an explicit --harness is required."""
+    base = tmp_path / "home"
+    (base / ".claude" / "skills" / "gstack").mkdir(parents=True)
+    (base / ".claude" / "settings.json").write_text(json.dumps({"model": "claude-opus-4-8"}))
+    (base / ".codex" / "skills" / "gstack").mkdir(parents=True)
+    (base / ".codex" / "config.toml").write_text('model = "gpt-5.5"\n')
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: base))
+    result = runner.invoke(app, ["harnesses"])
+    assert result.exit_code == 0, result.output
+    low = result.output.lower()
+    # Must NOT present a single confident default when detection is ambiguous.
+    assert "default (auto-detected): claude-code." not in low
+    assert "default (auto-detected): codex." not in low
+    # Must instead signal ambiguity + point at --harness.
+    assert "--harness" in low
+    assert "multiple" in low or "ambiguous" in low
+
+
+def test_harnesses_multi_detect_suppresses_detected_marker_text(tmp_path, monkeypatch):
+    """Santa PR#9 round 2 (reviewer B): when auto-detect is ambiguous (>1 live config),
+    the text listing must not stamp a single harness with '← detected on this machine',
+    which contradicts the M10 'won't guess' story."""
+    base = tmp_path / "home"
+    (base / ".claude" / "skills" / "gstack").mkdir(parents=True)
+    (base / ".claude" / "settings.json").write_text(json.dumps({"model": "claude-opus-4-8"}))
+    (base / ".codex" / "skills" / "gstack").mkdir(parents=True)
+    (base / ".codex" / "config.toml").write_text('model = "gpt-5.5"\n')
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: base))
+    result = runner.invoke(app, ["harnesses"])
+    assert result.exit_code == 0, result.output
+    assert "detected on this machine" not in result.output.lower()
+
+
+def test_harnesses_json_multi_detect_no_single_detected(tmp_path, monkeypatch):
+    """Same ambiguity, JSON surface: no single harness may be marked detected:true when
+    auto-detect is ambiguous."""
+    base = tmp_path / "home"
+    (base / ".claude" / "skills" / "gstack").mkdir(parents=True)
+    (base / ".claude" / "settings.json").write_text(json.dumps({"model": "claude-opus-4-8"}))
+    (base / ".codex" / "skills" / "gstack").mkdir(parents=True)
+    (base / ".codex" / "config.toml").write_text('model = "gpt-5.5"\n')
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: base))
+    result = runner.invoke(app, ["harnesses", "--json"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert not any(h.get("detected") for h in payload), (
+        "ambiguous auto-detect must not mark any single harness detected:true"
+    )
+
+
+def test_probe_permission_denied_primary_config_fails_closed(tmp_path, monkeypatch):
+    """Santa PR#9 round 2 (reviewer B): a primary config that can't be read
+    (permission_denied) must fail closed too — not just empty/malformed — so an
+    unreadable config never publishes a confident empty fingerprint."""
+    home = tmp_path / ".claude"
+    (home / "skills").mkdir(parents=True)
+    (home / "settings.json").write_text(json.dumps({"model": "claude-opus-4-8"}))
+    from atv_bench.fingerprint import reader as _reader
+    real_read_json = _reader.read_json
+
+    def deny_settings(path, root):
+        if path.name == "settings.json":
+            return _reader.ReadOutcome(reason=_reader.REASON_PERMISSION)
+        return real_read_json(path, root)
+
+    monkeypatch.setattr("atv_bench.fingerprint.probe.reader.read_json", deny_settings)
+    result = runner.invoke(app, ["fingerprint", "--harness", "claude-code", "--home", str(home)])
+    assert result.exit_code != 0, result.output
+    assert "settings.json" in result.output.lower()
+
+
+def test_codex_existing_unreadable_config_fails_closed(tmp_path):
+    """Santa PR#9 round 3 (reviewer B): an existing-but-unreadable config.toml (a dir
+    where a file is expected) must fail closed, not exit 0 with an empty manifest. The
+    file exists (so the .exists() branch passes) but is unreadable, so the guard must
+    catch it via the probe's unknown[model] not_readable marker."""
+    home = tmp_path / ".codex"
+    home.mkdir()
+    (home / "config.toml").mkdir()  # exists, unreadable as a file
+    result = runner.invoke(app, ["fingerprint", "--harness", "codex", "--home", str(home)])
+    assert result.exit_code != 0, result.output
+    assert "config.toml" in result.output.lower()
+
+
+def test_nonstring_model_type_fails_closed(tmp_path):
+    """Santa PR#9 round 5 (reviewer B): a wrong-TYPE model (config.toml `model = 123`)
+    must fail closed at the CLI, not exit 0 publishing a confident empty manifest."""
+    home = tmp_path / ".codex"
+    home.mkdir()
+    (home / "config.toml").write_text("model = 123\n")
+    result = runner.invoke(app, ["fingerprint", "--harness", "codex", "--home", str(home)])
+    assert result.exit_code != 0, result.output
+    assert "config.toml" in result.output.lower()
+
+
+def test_dangling_symlink_primary_config_reports_unreadable_not_missing(tmp_path):
+    """Santa PR#9 round 8 (reviewer B): a dangling primary-config symlink fails closed
+    (correct) but must report it as empty/malformed/unreadable — NOT 'no config.toml
+    found' (missing) — since the file IS present as a symlink."""
+    home = tmp_path / ".codex"
+    home.mkdir()
+    (home / "config.toml").symlink_to(home / "missing-target.toml")  # dangling, within root
+    result = runner.invoke(app, ["fingerprint", "--harness", "codex", "--home", str(home)])
+    assert result.exit_code != 0, result.output
+    low = result.output.lower()
+    assert "config.toml" in low
+    assert "unreadable" in low
+    assert "no config.toml found" not in low
+
+
+def test_home_without_harness_resolves_from_root_not_real_home(tmp_path, monkeypatch):
+    """Santa PR#9 round 4 (reviewer B): passing --home <codex-root> WITHOUT --harness
+    must fingerprint codex from that root — not mis-resolve the harness via
+    detect_harness() against the REAL $HOME. Previously a codex root passed via --home
+    was probed as claude-code (because the machine's $HOME had ~/.claude), producing
+    'no settings.json found in <codex-root>' instead of a codex fingerprint."""
+    # Real $HOME has claude-code so detect_harness() would say 'claude-code'.
+    fake_real_home = tmp_path / "realhome"
+    (fake_real_home / ".claude").mkdir(parents=True)
+    (fake_real_home / ".claude" / "settings.json").write_text(json.dumps({"model": "x"}))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_real_home))
+    # The --home points at a codex root.
+    codex_root = tmp_path / "elsewhere" / ".codex"
+    codex_root.mkdir(parents=True)
+    (codex_root / "config.toml").write_text('model = "gpt-5.5"\n')
+    result = runner.invoke(app, ["fingerprint", "--json", "--home", str(codex_root)])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["harness"] == "codex", payload
+    assert payload["model"] == "gpt-5.5", payload
+
+
+
+
+
+# --- T7: validate-harness failure copy names harness + prose + fix (M11) ---
+
+def test_validate_harness_success_names_harness(tmp_path):
+    home = tmp_path / ".claude"
+    (home / "skills" / "gstack").mkdir(parents=True)
+    (home / "settings.json").write_text(json.dumps({"model": "claude-opus-4-8"}))
+    result = runner.invoke(app, ["validate-harness", "--harness", "claude-code", "--home", str(home)])
+    assert result.exit_code == 0, result.output
+    assert "claude-code" in result.output.lower()
+
+
+def test_validate_harness_failure_copy_is_actionable(tmp_path, monkeypatch):
+    """M11: when validate-harness fails, the output names WHICH harness was validated
+    and gives a fix hint — not just bare reason codes a contributor can't act on."""
+    import atv_bench.validate as v
+    home = tmp_path / ".claude"
+    (home / "skills" / "gstack").mkdir(parents=True)
+    (home / "settings.json").write_text(json.dumps({"model": "claude-opus-4-8"}))
+    monkeypatch.setattr(
+        v, "validate_harness_fingerprint",
+        lambda m: {"ok": False, "errors": ["leak risk: skills entry failed safety scan"]},
+    )
+    result = runner.invoke(app, ["validate-harness", "--harness", "claude-code", "--home", str(home)])
+    assert result.exit_code == 1
+    out = result.output.lower()
+    assert "claude-code" in out            # names the harness validated
+    assert "leak risk" in out              # the prose reason
+    assert "contributing" in out or "fix" in out  # a fix hint / where to look
+
+
 def test_submit_dry_run_emits_submission_json(tmp_path):
     """R3 (both reviewers): CONTRIBUTING promises submit --dry-run emits the submission
     JSON, but it only printed preflight text. --dry-run must write a store-ingestable

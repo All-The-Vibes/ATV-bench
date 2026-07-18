@@ -157,7 +157,7 @@ same-repo branches.
 ### Add a harness adapter
 
 The CLI is harness-agnostic; v1 ships **live** fingerprint readers for `claude-code`
-(`~/.claude`) and `copilot-cli` (`~/.copilot`), with `codex` registered as **planned**
+(`~/.claude`), `copilot-cli` (`~/.copilot`), and `codex` (`~/.codex`)
 (`atv-bench harnesses` lists them). To make another harness live:
 
 1. **Register it** in `src/atv_bench/harnesses.py` (or flip an existing planned entry's
@@ -177,6 +177,22 @@ The CLI is harness-agnostic; v1 ships **live** fingerprint readers for `claude-c
    zero canaries reach the manifest or log. This test is **required** — a harness
    reader without one will not be merged. The credibility of the whole league rests on
    it.
+
+#### Which existing reader should I copy?
+
+The three live readers diverge on config format and plugin layout — pick the closest
+starting point:
+
+| If the harness's config is… | Copy | Why |
+|---|---|---|
+| **flat TOML** (one `config.toml`, no plugin tree) | `probe_codex` | TOML via `reader.read_toml`; model is a single top-level key; MCPs are `[mcp_servers.*]` table keys; no nested plugin walk. |
+| **JSON with a nested plugin tree** (skills/agents live *inside* installed plugins) | `probe_claude_code` | Manifest-driven walk: parse the plugin manifest, iterate `installPath`, read `installPath/{skills,agents}` confined under the config root. Enabled/disabled comes from a truthy filter. |
+| **JSON with a flat `installed-plugins/<mkt>/<plugin>/` tree** + explicit disabled lists | `probe_copilot_cli` | Directory walk over the marketplace tree; disabled skills/MCPs are subtracted from explicit denylists in `settings.json`. |
+
+All three share the same discipline: allowlist-emit field by field, every name through
+`scan.is_safe_name`, all reads confined to the config root, and **only top-level / named
+keys are read** — never a provider/credential-bearing subtable (see `probe_codex`, which
+reads *only* `config.toml["model"]` and never `[model_providers.*]` / `http_headers`).
 
 ### Add a game
 

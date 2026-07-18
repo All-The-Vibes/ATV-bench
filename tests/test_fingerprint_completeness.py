@@ -43,22 +43,44 @@ def _surface_accounted(m: dict, surface: str, unknown_fields: set[str]) -> bool:
 
 
 def _full_claude_fixture(root: Path) -> None:
-    """A ~/.claude with every surface populated, incl. nested plugin skills + tools."""
+    """A ~/.claude with every surface populated, incl. nested plugin skills + tools.
+    
+    NOTE: Main's reader is MANIFEST-DRIVEN — nested skills/agents are walked via
+    plugins/installed_plugins.json installPath, NOT a naive dir glob. This fixture
+    uses the real installed_plugins.json layout that main's reader expects.
+    MCPs come from ~/.claude.json (root's PARENT), not ~/.claude/.mcp.json.
+    """
+    # settings.json with enabledPlugins (the truthy-filter disable mechanism) and permissions
     _write(root / "settings.json", json.dumps({
         "model": "claude-opus-4-8",
+        "enabledPlugins": {
+            "compound-engineering@compound-marketplace": True,
+        },
         "permissions": {
             "allow": ["Bash", "Read", "Edit"],
             "deny": ["WebFetch"],
         },
     }))
-    _write(root / ".mcp.json", json.dumps({
+    # MCP servers in ~/.claude.json (root's PARENT), not in .mcp.json (main's real layout)
+    _write(root.parent / ".claude.json", json.dumps({
         "mcpServers": {"github": {"command": "x"}, "grafana": {"url": "y"}}
     }))
+    # Top-level skills
     (root / "skills" / "tdd").mkdir(parents=True)
     (root / "skills" / "office-hours").mkdir(parents=True)
-    # nested skills under a plugin
-    (root / "plugins" / "compound-engineering" / "skills" / "ce-plan").mkdir(parents=True)
-    (root / "plugins" / "compound-engineering" / "skills" / "ce-debug").mkdir(parents=True)
+    # Nested skills via installed_plugins.json (main's manifest-driven layout)
+    ce_root = root / "plugins" / "cache" / "compound-marketplace" / "compound-engineering" / "1.0.0"
+    (ce_root / "skills" / "ce-plan").mkdir(parents=True)
+    (ce_root / "skills" / "ce-debug").mkdir(parents=True)
+    _write(root / "plugins" / "installed_plugins.json", json.dumps({
+        "version": 2,
+        "plugins": {
+            "compound-engineering@compound-marketplace": [
+                {"installPath": str(ce_root)}
+            ],
+        },
+    }))
+    # Top-level agents
     (root / "agents").mkdir(parents=True)
     _write(root / "agents" / "reviewer.md", "x")
     _write(root / "agents" / "planner.md", "y")
@@ -87,11 +109,15 @@ def test_claude_completeness_every_surface_present_or_accounted(tmp_path):
 def test_claude_nested_skills_are_captured(tmp_path):
     _full_claude_fixture(tmp_path)
     m = probe.probe_claude_code(tmp_path).manifest
+    # Nested plugin skills are captured in nested_skills (v2 surface)
     assert "ce-plan" in m["nested_skills"]
     assert "ce-debug" in m["nested_skills"]
-    # top-level skills stay in skills, not nested
+    # Top-level skills stay in skills
     assert "tdd" in m["skills"]
-    assert "ce-plan" not in m["skills"]
+    # NOTE: Main's behavior MERGES nested skills into the top-level skills list
+    # (for backward compat with test_claude_probe_canary_no_leaks which asserts
+    # nested skill "ce-brainstorm" is in skills). So nested skills appear in BOTH.
+    assert "ce-plan" in m["skills"]
 
 
 def test_claude_tools_captured_with_source(tmp_path):

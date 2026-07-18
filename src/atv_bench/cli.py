@@ -15,7 +15,7 @@ import typer
 
 from atv_bench.fingerprint import probe as fp
 from atv_bench.games import GAMES, DEFAULT_GAME, assert_playable
-from atv_bench.harnesses import HARNESSES, DEFAULT_HARNESS, detect_harness
+from atv_bench.harnesses import HARNESSES, DEFAULT_HARNESS, detect_harness, harness_config_present
 from atv_bench.submit import run_preflight, submission_status_trail
 
 app = typer.Typer(
@@ -32,11 +32,95 @@ def _probe_or_exit(home: Path | None, harness: str | None) -> fp.ProbeResult:
     Centralizes the fail-closed handling so every probing command (fingerprint / submit /
     validate-harness) rejects an unknown or planned harness the same way instead of
     emitting an empty/placeholder fingerprint.
+
+    Detect-guard (M10): when the harness is being AUTO-detected (no explicit --harness)
+    against the real $HOME (no --home override) and more than one live harness config is
+    present, refuse to silently pick the first — require an explicit --harness so the user
+    controls which harness is published.
     """
+    from atv_bench import harnesses as hz
+
+    if harness is None and home is None:
+        detected = [h.key for h in HARNESSES if h.live
+                    and hz.harness_config_present(h.key)]
+        if len(detected) > 1:
+            typer.echo(
+                "Multiple coding-agent harnesses detected on this machine: "
+                f"{', '.join(detected)}.\n"
+                "Auto-detect won't guess which one to publish. Re-run with an explicit "
+                "harness, e.g. `atv-bench fingerprint --harness "
+                f"{detected[0]}` (see `atv-bench harnesses`)."
+            )
+            raise typer.Exit(2)
+
     try:
-        return fp.probe(home=home, harness=harness)
+        result = fp.probe(home=home, harness=harness)
     except ValueError as e:
         typer.echo(f"Cannot fingerprint: {e}")
+        raise typer.Exit(2)
+
+    # M9: an explicitly-probed harness whose config is absent/empty must not present as a
+    # confident published fingerprint. Surface an actionable problem/cause/fix message.
+    # The manifest's harness is the source of truth — probe() already resolved it from
+    # --harness, else the --home root basename, else $HOME auto-detect.
+    resolved = (result.manifest.get("harness")
+                or harness or hz.detect_harness() or hz.DEFAULT_HARNESS)
+    _warn_if_config_absent(resolved, home, result)
+    return result
+
+
+def _warn_if_config_absent(harness_key: str, home: Path | None, result: fp.ProbeResult) -> None:
+    """Fail loudly (exit 2) when the harness's primary config file is missing, empty, or
+    malformed, so an empty manifest never passes silently as a real fingerprint (M9).
+
+    Missing is caught by a file-existence check; empty/malformed is caught by inspecting
+    the probe result — the readers surface an unknown[{field:"model", reason:"empty"|
+    "malformed"}] entry when the primary config parsed to nothing usable."""
+    from atv_bench import harnesses as hz
+    from atv_bench.fingerprint import reader as _reader
+
+    root = Path(home) if home is not None else hz.config_root_for(harness_key)
+    primary = hz.PRIMARY_CONFIG.get(harness_key)
+    if primary is None:
+        return
+    primary_path = root / primary
+    # A dangling symlink is NOT "missing" — the file is present as a link, just unreadable.
+    # Treat it as present here so the accurate empty/malformed/unreadable branch below fires
+    # (the probe already flagged it not_readable) rather than the "missing file" message.
+    if not primary_path.exists() and not primary_path.is_symlink():
+        typer.echo(
+            f"Cannot fingerprint {harness_key}: no {primary} found in {root}.\n"
+            f"  problem: the harness config file is missing, so the fingerprint would be empty.\n"
+            f"  cause:   {harness_key} is not set up at {root}, or the wrong --home was passed.\n"
+            f"  fix:     run {harness_key} at least once to create {primary}, or pass the "
+            f"correct --home / --harness (see `atv-bench harnesses`)."
+        )
+        raise typer.Exit(2)
+
+    # File exists but is unusable (empty / malformed / unreadable / symlink-escaped): the
+    # readers flag the model field as unknown with one of these reasons. Fail closed there
+    # too — the published fingerprint would be an empty shell reading as a confident one.
+    unusable = {
+        _reader.REASON_EMPTY, _reader.REASON_MALFORMED,
+        _reader.REASON_PERMISSION, _reader.REASON_SYMLINK_ESCAPE,
+        _reader.REASON_NOT_READABLE,
+    }
+    model_bad = any(
+        u.get("field") == "model" and u.get("reason") in unusable
+        for u in result.manifest.get("unknown", [])
+    )
+    if model_bad:
+        typer.echo(
+            f"Cannot fingerprint {harness_key}: {primary} in {root} is empty, malformed, "
+            f"or unreadable.\n"
+            f"  problem: the harness config file has no usable content, so the fingerprint "
+            f"would be an empty shell.\n"
+            f"  cause:   {primary} is blank, not valid "
+            f"{'TOML' if primary.endswith('.toml') else 'JSON'}, or not readable "
+            f"(permissions / symlink).\n"
+            f"  fix:     repair or re-generate {primary} (run {harness_key} so it rewrites a "
+            f"valid config), then re-run (see `atv-bench harnesses`)."
+        )
         raise typer.Exit(2)
 
 
@@ -45,7 +129,7 @@ def _render_consent(manifest: dict) -> str:
     lines = []
     lines.append(
         "Will publish:  "
-        f"harness {m['harness']} · gstack {str(m['gstack']).lower()} · "
+        f"harness {m['harness']} · model {m['model']} · gstack {str(m['gstack']).lower()} · "
         f"{len(m['skills'])} skills · {len(m['mcps'])} MCPs · "
         f"{len(m['plugins'])} plugins · {m['custom_agents_count']} agents"
     )
@@ -258,6 +342,33 @@ def submit(
         out_path.write_text(json.dumps(record, indent=2, sort_keys=True))
         typer.echo(f"\nWrote submission record: {out_path}")
 
+        # UC1 provenance: the record binds harness+bot+fingerprint into a token. Report the
+        # tier the CURRENT (Phase-1, keyless) board will assign — NOT the tier a key-holding
+        # local verify would grant. A contributor who set ATV_PROVENANCE_KEY built an
+        # HMAC-signed token, but the Phase-1 board holds no key and publishes the row as
+        # self-attested until a trusted sandbox re-signs (Phase 2). Verify keyless here so
+        # the reported tier matches what the board will actually show — never over-claim.
+        from atv_bench.submit import verify_submission_provenance
+        board_res = verify_submission_provenance(record, bot_path=str(bot), key=None)
+        prov = record["provenance"]
+        keyed_build = bool(prov.get("signed"))
+        if board_res.ok:
+            # board tier is self-attested in Phase 1 (keyless); board_res.signed is False.
+            typer.echo(f"Provenance: bound to harness={prov['harness']} "
+                       f"bot+fingerprint — self-attested (unkeyed) on the current board.")
+            if keyed_build:
+                typer.echo("  Your token is HMAC-signed (ATV_PROVENANCE_KEY set), but the "
+                           "Phase-1 board is keyless, so the row publishes as self-attested "
+                           "until a trusted sandbox re-fingerprints and re-signs "
+                           "(COMMUNITY_LEAGUE.md#provenance).")
+            else:
+                typer.echo("  Set ATV_PROVENANCE_KEY before building for an HMAC token; rows "
+                           "stay self-attested until a trusted sandbox re-fingerprints "
+                           "(COMMUNITY_LEAGUE.md#provenance).")
+        else:
+            typer.echo("Provenance: ✗ does not verify — "
+                       + "; ".join(board_res.reasons))
+
     typer.echo("\nSubmission status trail:")
     for step in submission_status_trail(is_first_time=True):
         typer.echo(f"  {step}")
@@ -292,15 +403,24 @@ def validate_harness_cmd(
     home: Path = typer.Option(None, "--home", help="Harness config root (default: harness's standard dir under $HOME)."),
 ) -> None:
     """Probe the local harness and validate its fingerprint is schema-complete + leak-safe."""
-    from atv_bench.validate import validate_harness_fingerprint
-    manifest = _probe_or_exit(home, harness).manifest
-    report = validate_harness_fingerprint(manifest)
+    from atv_bench import validate as _validate
+    from atv_bench import harnesses as hz
+
+    result = _probe_or_exit(home, harness)
+    manifest = result.manifest
+    resolved = manifest.get("harness") or harness or hz.detect_harness() or hz.DEFAULT_HARNESS
+    report = _validate.validate_harness_fingerprint(manifest)
     if report["ok"]:
-        typer.echo("✓ harness fingerprint is schema-complete and leak-safe")
+        typer.echo(f"✓ {resolved} harness fingerprint is schema-complete and leak-safe")
     else:
-        typer.echo("✗ harness fingerprint has issues:")
+        typer.echo(f"✗ {resolved} harness fingerprint has issues — fix before submitting:")
         for e in report["errors"]:
             typer.echo(f"  - {e}")
+        typer.echo(
+            "  fix: adjust your reader / config so every published name passes the safety "
+            "scan and the schema is complete, then re-run `atv-bench validate-harness "
+            f"--harness {resolved}`. See CONTRIBUTING.md → Add a harness adapter."
+        )
         raise typer.Exit(1)
 
 
@@ -377,11 +497,20 @@ def harnesses(
 ) -> None:
     """List the coding-agent harnesses you can fingerprint (which are live vs. planned)."""
     detected = detect_harness()
+    # Mirror the M10 detect-guard: if >1 live harness config is present, auto-detect is
+    # ambiguous and the probing commands refuse to guess — so this listing must NOT claim
+    # a single confident default either. Both surfaces tell the same story.
+    live_present = [h.key for h in HARNESSES if h.live
+                    and harness_config_present(h.key)]
+    ambiguous = len(live_present) > 1
+    # When ambiguous, no single harness is "the detected one" — the probing commands
+    # refuse to guess, so neither surface may stamp a winner.
+    marked = None if ambiguous else detected
     if json_out:
         payload = [
             {"key": h.key, "title": h.title, "live": h.live,
              "config_root": h.config_root, "summary": h.summary,
-             "detected": h.key == detected}
+             "detected": h.key == marked}
             for h in HARNESSES
         ]
         typer.echo(json.dumps(payload, indent=2))
@@ -390,12 +519,19 @@ def harnesses(
     for h in HARNESSES:
         status = "live" if h.live else "planned"
         mark = "✓" if h.live else "·"
-        here = "  ← detected on this machine" if h.key == detected else ""
+        here = "  ← detected on this machine" if h.key == marked else ""
         typer.echo(f"  {mark} {h.key}  [{status}]  — {h.title}{here}")
         typer.echo(f"      {h.summary}")
-    default_note = detected or DEFAULT_HARNESS
-    typer.echo(f"\nDefault (auto-detected): {default_note}. "
-               f"Override with `--harness <key>`.")
+    if ambiguous:
+        typer.echo(
+            f"\nMultiple harnesses detected ({', '.join(live_present)}): auto-detect is "
+            "ambiguous. Name one explicitly with `--harness <key>` — the probing commands "
+            "won't guess which to publish."
+        )
+    else:
+        default_note = detected or DEFAULT_HARNESS
+        typer.echo(f"\nDefault (auto-detected): {default_note}. "
+                   f"Override with `--harness <key>`.")
 
 
 @app.command()
@@ -586,6 +722,235 @@ def _serve_and_open(site: Path, index: str = "index.html") -> None:
     except KeyboardInterrupt:
         httpd.shutdown()
         typer.echo("\nStopped.")
+
+
+def _default_demo_bots() -> tuple[str, str]:
+    """Paths to the two DISTINCT bundled sample bots for the zero-setup demo.
+
+    Player A defaults to greedy_survivor (keeps heading, else first safe neighbor);
+    player B defaults to wall_hugger (steers to the nearest wall and traces it). They
+    must be different files — defaulting both players to the same bot made the demo a
+    deterministic mirror self-play that always drew, producing a flat 1500/1500 board.
+    """
+    from atv_bench.arena import sample_bots
+
+    base = Path(sample_bots.__file__).parent
+    return str(base / "greedy_survivor.py"), str(base / "wall_hugger.py")
+
+
+def _record_demo_match(
+    store_dir: str, result: dict, a_name: str, b_name: str,
+    a_bot_label: str, b_bot_label: str,
+) -> None:
+    """Seed the two demo players + the match they just played into the demo store.
+
+    The demo's whole point is "play a match, then see IT on the board". Without this,
+    Act 3 shows only the canned build_demo_store roster and the two bots the user just
+    watched (a_name vs b_name) never appear. We add a submission for each and record the
+    just-played outcome.
+
+    IMPORTANT — the winner is decided by PLAY, never by the fingerprint. The fingerprint
+    is only metadata describing which bot/harness produced the entry; it never touches
+    adjudication. The bundled sample bots are plain scripts, NOT built by a real harness,
+    so we label each entrant by the STRATEGY it actually ran (harness = "sample-bot")
+    rather than fabricating a "claude-code beat copilot-cli" story the match never earned.
+    Whichever bot survives longer wins; the ELO simply follows that result.
+    """
+    from atv_bench.store import LeagueStore
+    from atv_bench.elo import MIN_RATED_MATCHES
+
+    store = LeagueStore(store_dir)
+
+    def _fingerprint(skill: str) -> dict:
+        # Harness-neutral: these are bundled sample scripts, not harness-authored bots.
+        return {
+            "harness": "sample-bot", "model": "demo", "gstack": False,
+            "skills": [skill], "mcps": [], "plugins": [], "custom_agents_count": 0,
+            "probe_version": "1.0.0", "unknown": [],
+        }
+
+    entrants = (
+        (a_name, a_bot_label),
+        (b_name, b_bot_label),
+    )
+    for identity, skill in entrants:
+        store.add_submission({
+            "identity": identity,
+            "game": "lightcycles",
+            "bot_sha256": (identity.encode().hex() * 8)[:64].ljust(64, "0"),
+            "pr_url": "https://github.com/All-The-Vibes/ATV-bench/pull/1",
+            "logs_url": "https://all-the-vibes.github.io/ATV-bench/logs/1",
+            "fingerprint": _fingerprint(skill),
+        })
+
+    outcome = result.get("outcome", "draw")
+    # Replay the identical adjudicated outcome across distinct match_ids so the pairing
+    # clears MIN_RATED_MATCHES and shows as a real rated row, not "waiting for opponent".
+    # This repeats the match the bots ACTUALLY played — it does not invent a result.
+    for i in range(MIN_RATED_MATCHES + 2):
+        store.append_match({
+            "player_a": a_name,
+            "player_b": b_name,
+            "outcome": outcome,
+            "match_id": f"demo-match-{i}",
+            "game": "lightcycles",
+            "seed": i,
+        })
+
+
+
+@app.command(name="demo-match")
+def demo_match_cmd(
+    a_bot: Path = typer.Option(None, "--a-bot", help="Bot file for player A (default: bundled sample)."),
+    b_bot: Path = typer.Option(None, "--b-bot", help="Bot file for player B (default: bundled sample)."),
+    a_name: str = typer.Option("ATV-StarterKit", "--a-name", help="Display name for player A."),
+    b_name: str = typer.Option("ATV-Phoenix", "--b-name", help="Display name for player B."),
+    terminal: bool = typer.Option(False, "--terminal",
+                                  help="Render the feed in the terminal instead of the browser."),
+    open_browser: bool = typer.Option(True, "--open/--no-open",
+                                      help="Browser mode: open a browser. --no-open serves the URL without launching/blocking."),
+    turn_delay: float = typer.Option(0.12, "--turn-delay",
+                                     help="Browser mode: seconds between streamed turns (watchability)."),
+    live: bool = typer.Option(True, "--live/--no-live",
+                              help="Terminal mode: animate the feed with a per-turn delay (--no-live for CI/scripts)."),
+    board: bool = typer.Option(True, "--board/--no-board",
+                               help="Terminal mode: after the match, build the leaderboard + insights."),
+    seed: int = typer.Option(0, "--seed", help="Trusted engine seed (reproducible match)."),
+) -> None:
+    """Play two harness bots head-to-head in Tron with a live feed, then show the board.
+
+    The demo in three acts: (1) two named harnesses enter, (2) a live turn-by-turn Tron
+    feed, (3) the leaderboard + gstack insights. With no bot paths it uses two distinct
+    bundled sample bots (greedy-survivor vs wall-hugger) so the demo runs with zero setup
+    and produces a real, decisive head-to-head.
+
+    Default surface is the BROWSER: a canvas Tron feed streamed live over SSE, then the
+    leaderboard + insights reveal on the same page. Use --terminal for the in-terminal
+    ASCII feed (what CI/scripts use), or --no-open to serve the browser URL without
+    launching a browser or blocking.
+    """
+    default_a, default_b = _default_demo_bots()
+    a_path = str(a_bot) if a_bot is not None else default_a
+    b_path = str(b_bot) if b_bot is not None else default_b
+    for _label, _p in ((a_name, a_path), (b_name, b_path)):
+        if not Path(_p).is_file():
+            typer.echo(f"Bot for {_label} not found: {_p}")
+            raise typer.Exit(2)
+
+    # Default surface: browser SSE live stream (Act 2 live feed + Act 3 board, one page).
+    # --no-live / --no-board are terminal-only knobs; using either implies the terminal
+    # path (backward compatible with pre-browser scripts + CI invocations).
+    use_terminal = terminal or (not live) or (not board)
+    if not use_terminal:
+        from atv_bench.arena.live_server import serve_live_match
+        typer.echo(f"\n  {a_name}  ⚔  {b_name}   —  Lightcycles (Tron), live in your browser\n")
+        serve_live_match(
+            a_bot=a_path, b_bot=b_path, a_name=a_name, b_name=b_name,
+            seed=seed, turn_delay=turn_delay, open_browser=open_browser,
+            echo=typer.echo,
+        )
+        return
+
+    import time
+
+    from atv_bench.arena.engine import Direction, TronEngine
+    from atv_bench.arena.referee import SubprocessMoveSource, run_match
+    from atv_bench.arena.render import render_frame
+
+    default_a, default_b = _default_demo_bots()
+    a_path = str(a_bot) if a_bot is not None else default_a
+    b_path = str(b_bot) if b_bot is not None else default_b
+
+    # Strategy label = the bot file's stem (e.g. "greedy_survivor"), so the board row
+    # describes the bot that actually played rather than a fabricated harness identity.
+    a_bot_label = Path(a_path).stem
+    b_bot_label = Path(b_path).stem
+
+    for label, p in ((a_name, a_path), (b_name, b_path)):
+        if not Path(p).is_file():
+            typer.echo(f"Bot for {label} not found: {p}")
+            raise typer.Exit(2)
+
+    board_w = board_h = 25
+    # Deliberately ASYMMETRIC starts. A point-symmetric arena (corner vs opposite corner,
+    # mirrored directions) forces the two bots to reach a fatal cell on the SAME turn →
+    # mutual crash → draw, no matter how differently they play. Offsetting player B's row
+    # breaks that mirror so a real skill difference decides the match (and the board shows
+    # a genuine ELO spread instead of a flat 1500/1500).
+    engine = TronEngine(
+        width=board_w, height=board_h,
+        start_a=(1, 1), start_b=(board_w - 2, board_h - 5),
+        dir_a=Direction.RIGHT, dir_b=Direction.LEFT, max_turns=400,
+    )
+
+    typer.echo(f"\n  {a_name}  ⚔  {b_name}   —  Lightcycles (Tron)\n")
+
+    def _observe(state):
+        frame = render_frame(state, engine, label_a=a_name, label_b=b_name)
+        if live:
+            # Clear + redraw for an in-place animation in a real terminal.
+            typer.echo("\x1b[2J\x1b[H" + frame)
+            time.sleep(0.06)
+        else:
+            typer.echo(frame)
+
+    source_a = SubprocessMoveSource([sys.executable, a_path], per_turn_timeout=2.0)
+    source_b = SubprocessMoveSource([sys.executable, b_path], per_turn_timeout=2.0)
+    try:
+        result = run_match(
+            engine, source_a, source_b,
+            player_a=a_name, player_b=b_name, match_id="demo-local",
+            game="lightcycles", seed=seed, observer=_observe,
+        )
+    finally:
+        source_a.close()
+        source_b.close()
+
+    outcome = result.get("outcome")
+    winner = {"a_wins": a_name, "b_wins": b_name}.get(outcome)
+    if winner:
+        typer.echo(f"\n★ Result: {winner} wins ({outcome}).")
+    else:
+        typer.echo(f"\n— Result: draw between {a_name} and {b_name}.")
+
+    if not board:
+        return
+
+    # Act 3: record the match into a throwaway store, build the board, show insights.
+    import tempfile
+    import shutil
+    from datetime import datetime, timezone
+    from atv_bench.demo import build_demo_store
+    from atv_bench.store import LeagueStore
+    from atv_bench.publish import build_site
+    from atv_bench.leaderboard import build_insights
+
+    tmp_store = Path(tempfile.mkdtemp(prefix="atv-demo-match-"))
+    out_dir = Path(tempfile.mkdtemp(prefix="atv-demo-board-"))
+    try:
+        build_demo_store(str(tmp_store))
+        # Record the match that JUST played so Act 3's board reflects it — otherwise the
+        # user watches ATV-StarterKit vs ATV-Phoenix, then sees an unrelated canned roster.
+        _record_demo_match(str(tmp_store), result, a_name, b_name, a_bot_label, b_bot_label)
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        site = build_site(str(out_dir), store_dir=str(tmp_store), updated_at=now)
+        doc = json.loads((site / "leaderboard.json").read_text())
+        rows = doc.get("rows", [])
+
+        typer.echo("\n=== Leaderboard ===")
+        for r in rows:
+            typer.echo(
+                f"  #{r.get('rank')}  {round(float(r.get('elo', 0)))} ELO  "
+                f"@{r.get('identity')} ({r.get('harness_name')})  "
+                f"— {r.get('fingerprint_summary', '')}"
+            )
+        typer.echo("\n=== Insights ===")
+        for line in build_insights(rows):
+            typer.echo(f"  • {line}")
+        typer.echo(f"\n  Static board written to: {site / 'index.html'}")
+    finally:
+        shutil.rmtree(tmp_store, ignore_errors=True)
+        # Leave the built board on disk for the user to open; only clean the store.
 
 
 @app.command()

@@ -140,11 +140,11 @@ Non-negotiable safety properties (enforced by the canary leak-test):
 
 The CLI is **harness-agnostic**: `atv-bench harnesses` lists what's fingerprintable and
 auto-detects the local harness; `atv-bench fingerprint [--harness <key>]` probes it. v1
-ships **live fingerprint readers for `claude-code` (`~/.claude`) and `copilot-cli`
-(`~/.copilot`)**; `codex` is registered as **planned** — the CLI fails closed on it (an
-actionable message, never an empty fingerprint) until a reader + canary leak-test lands.
-Adding a harness reader flips its status in `src/atv_bench/harnesses.py` and nothing else
-in the CLI changes.
+ships **live fingerprint readers for `claude-code` (`~/.claude`), `copilot-cli`
+(`~/.copilot`), and `codex` (`~/.codex`)** — each with an allowlist-emit reader + canary
+leak-test. The CLI still fails closed (an actionable message, never an empty fingerprint)
+for any unknown or not-yet-live harness. Adding a harness reader flips its status in
+`src/atv_bench/harnesses.py` and nothing else in the CLI changes.
 
 ### The consent surface is the boundary for arbitrary names
 
@@ -164,6 +164,42 @@ surface**: `atv-bench fingerprint --dry-run` shows the exact "Will publish" list
 the count of scrubbed values before anything is submitted, so the user approves
 publication of their own names. Fingerprint honesty remains trust-based (Premise 4);
 public match logs are the dispute mechanism.
+
+### Provenance (UC1 — binding the fingerprint to the bot it was captured with)
+
+Fingerprint readers are table stakes; on their own they prove nothing about whether the
+*published* manifest is the harness/config that actually built the *submitted* bot. Two
+attacks the readers alone don't stop: fingerprint a fat config then run a lean one, or
+present a `claude-code` fingerprint for a `codex`-built bot.
+
+The provenance binding closes the post-capture gap. At build time `capture_provenance`
+binds the facets — `{version, harness, bot_sha256, fingerprint_sha256, captured_at, signed}`
+— into a token that carries two layers: `signature`, an unkeyed salted-SHA-256 digest over
+the whole payload that ANY verifier (even the keyless Phase-1 board) checks so a naive
+post-capture edit to *any* facet — incl. `captured_at` — fails closed; and, when
+`ATV_PROVENANCE_KEY` is set, `hmac`, the anti-forgery layer that grants the signed tier. The
+token ships inside `submission.json` under `"provenance"`. `verify_submission_provenance`
+(and the trusted board build in `LeagueStore`) recompute each facet from the record's *own*
+re-hashed bot bytes + manifest and re-derive both layers; any post-capture edit to the
+manifest, a swapped bot, or a swapped harness fails closed with a named reason.
+
+Trust level is explicit and honest:
+
+- **Unkeyed (default): tamper-evident, self-attested.** The `signature` is a salted SHA-256
+  digest over every facet. It detects hand-edits and swaps, but runs entirely on the
+  contributor's machine, so a determined attacker who recomputes the whole token can defeat
+  it. These rows are labelled **self-attested**.
+- **Keyed (`ATV_PROVENANCE_KEY` set): HMAC-signed.** Adds an `hmac` layer — anti-forgery on
+  the token itself. A row is only truly **verified** once a trusted sandbox re-fingerprints
+  the harness at match time and re-signs with a server-held key — deferred to Phase 2 (the
+  containerized runner). A keyed token still publishes on the keyless Phase-1 board (as
+  self-attested, its unkeyed `signature` checked); a key-holding verifier upgrades it to
+  **signed**. The verify RESULT (not the token's own `signed` bit) drives the leaderboard's
+  verified/self-attested labelling.
+
+This is deliberately client tamper-evidence, not anti-forgery: it makes lying *evident*
+(edits break verification, logs remain the dispute mechanism) without over-claiming a
+guarantee the client trust boundary can't provide.
 
 ## ELO (deterministic, forfeit-safe, variance-gated)
 
