@@ -1,0 +1,151 @@
+{
+  "name": "PvpTournament",
+  "tournament_id": "PvpTournament.LightCycles.260717154828",
+  "config": {
+    "tournament": {
+      "rounds": 1
+    },
+    "game": {
+      "name": "LightCycles",
+      "sims_per_round": 10,
+      "args": {}
+    },
+    "players": [
+      {
+        "agent": "claude-code",
+        "name": "claude-code-A",
+        "config": {
+          "model": "claude-opus-4-8",
+          "bot_file": "main.py",
+          "harness": "claude-code"
+        },
+        "commit_label": ""
+      },
+      {
+        "agent": "claude-code",
+        "name": "claude-code-B",
+        "config": {
+          "model": "claude-opus-4-8",
+          "bot_file": "main.py",
+          "harness": "claude-code"
+        },
+        "commit_label": ""
+      }
+    ],
+    "prompts": {
+      "edit": "Improve `main.py` so your Tron light-cycle bot wins more games. It must implement `get_move(obs) -> str` returning one of 'N','S','E','W'. Avoid walls, your own trail, and opponents' trails; try to survive longest and claim the most territory. Edit only the bot; keep the function signature."
+    },
+    "_meta": {
+      "game_version": "lightcycles@1",
+      "prompt_version": "edit@1",
+      "model": "claude-opus-4-8"
+    }
+  },
+  "created_timestamp": 1784321308,
+  "aws": {},
+  "round_stats": {
+    "0": {
+      "round_num": 0,
+      "winner": "Tie",
+      "details": [],
+      "scores": {
+        "claude-code-B": 3,
+        "claude-code-A": 3,
+        "Tie": 4
+      },
+      "player_stats": {
+        "claude-code-A": {
+          "name": "claude-code-A",
+          "invalid_reason": "",
+          "score": 3,
+          "valid_submit": true
+        },
+        "claude-code-B": {
+          "name": "claude-code-B",
+          "invalid_reason": "",
+          "score": 3,
+          "valid_submit": true
+        }
+      }
+    },
+    "1": {
+      "round_num": 1,
+      "winner": "claude-code-A",
+      "details": [],
+      "scores": {
+        "claude-code-A": 6,
+        "claude-code-B": 4
+      },
+      "player_stats": {
+        "claude-code-B": {
+          "name": "claude-code-B",
+          "invalid_reason": "",
+          "score": 4,
+          "valid_submit": true
+        },
+        "claude-code-A": {
+          "name": "claude-code-A",
+          "invalid_reason": "",
+          "score": 6,
+          "valid_submit": true
+        }
+      }
+    }
+  },
+  "game": {
+    "name": "LightCycles",
+    "config": {
+      "name": "LightCycles",
+      "sims_per_round": 10,
+      "args": {}
+    },
+    "game_id": "PvpTournament.LightCycles.260717154828",
+    "created_timestamp": 1784321308
+  },
+  "agents": [
+    {
+      "name": "claude-code-B",
+      "player_unique_id": "c786c23f-0ae8-4973-b3f8-97e2a7e7616e",
+      "created_timestamp": 1784321312,
+      "config": {
+        "agent": "claude-code",
+        "name": "claude-code-B",
+        "config": {
+          "model": "claude-opus-4-8",
+          "bot_file": "main.py",
+          "harness": "claude-code"
+        },
+        "commit_label": ""
+      },
+      "initial_commit_hash": "32e4218844805340371e9fe11902a49e5a1e40a6",
+      "branch_name": "PvpTournament.LightCycles.260717154828.claude-code-B",
+      "round_tags": {
+        "0": "c786c23f-0ae8-4973-b3f8-97e2a7e7616e-round-0",
+        "1": "c786c23f-0ae8-4973-b3f8-97e2a7e7616e-round-1"
+      },
+      "agent_stats": {}
+    },
+    {
+      "name": "claude-code-A",
+      "player_unique_id": "a84eaa92-f61e-4fa2-a7b5-f9a44dfa08ed",
+      "created_timestamp": 1784321310,
+      "config": {
+        "agent": "claude-code",
+        "name": "claude-code-A",
+        "config": {
+          "model": "claude-opus-4-8",
+          "bot_file": "main.py",
+          "harness": "claude-code"
+        },
+        "commit_label": ""
+      },
+      "initial_commit_hash": "32e4218844805340371e9fe11902a49e5a1e40a6",
+      "branch_name": "PvpTournament.LightCycles.260717154828.claude-code-A",
+      "round_tags": {
+        "0": "a84eaa92-f61e-4fa2-a7b5-f9a44dfa08ed-round-0",
+        "1": "a84eaa92-f61e-4fa2-a7b5-f9a44dfa08ed-round-1"
+      },
+      "agent_stats": {}
+    }
+  ]
+}

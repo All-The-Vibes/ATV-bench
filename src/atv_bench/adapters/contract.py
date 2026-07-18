@@ -95,6 +95,46 @@ def git_diff(repo_path: str) -> str:
     return out.stdout
 
 
+def parse_copilot_model(jsonl: str) -> str:
+    """Parse the REAL model Copilot invoked from its `--output-format json` (JSONL).
+
+    Model-tag integrity (Eng Decision #5): the tag must reflect what the harness
+    actually ran, never the input `--model` string. gap #15 asked whether Copilot
+    exposes a machine-readable model at all — it does: `assistant.message` events
+    carry `data.model`, and `session.usage_checkpoint` carries
+    `data.modelCacheState[].modelId`. We read those, in that priority order.
+
+    Returns the parsed model id, or "unknown" if none is machine-readable — NEVER
+    an echoed input like "auto".
+    """
+    message_model: str | None = None
+    checkpoint_model: str | None = None
+    for line in jsonl.splitlines():
+        line = line.strip()
+        if not line or not line.startswith("{"):
+            continue
+        try:
+            evt = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(evt, dict):
+            continue
+        data = evt.get("data")
+        if not isinstance(data, dict):
+            continue
+        if evt.get("type") == "assistant.message":
+            m = data.get("model")
+            if isinstance(m, str) and m and m != "auto":
+                message_model = m  # last assistant.message wins (final turn)
+        elif evt.get("type") == "session.usage_checkpoint":
+            state = data.get("modelCacheState")
+            if isinstance(state, list) and state and isinstance(state[0], dict):
+                mid = state[0].get("modelId")
+                if isinstance(mid, str) and mid and mid != "auto":
+                    checkpoint_model = mid
+    return message_model or checkpoint_model or "unknown"
+
+
 class HarnessAdapter:
     """Base adapter. Subclasses implement `_invoke` to drive their CLI headless."""
 
@@ -205,7 +245,8 @@ class CopilotCliAdapter(HarnessAdapter):
             req.goal,
             "--allow-all-tools",
             "--no-ask-user",
-            "-s",
+            "--output-format",
+            "json",
         ]
         if req.model and req.model != "auto":
             cmd += ["--model", req.model]
@@ -228,12 +269,16 @@ class CopilotCliAdapter(HarnessAdapter):
             )
         elapsed = time.time() - start
         combined = (proc.stdout or "") + (proc.stderr or "")
+        # Model-tag integrity: parse the REAL model from Copilot's JSONL, never echo
+        # req.model. Unparseable -> "unknown" (Eng Decision #5, gap #15).
+        model_used = parse_copilot_model(proc.stdout or "")
         if "Access denied by policy" in combined:
             return AdapterResult(
                 status=AdapterStatus.POLICY_DENIED,
                 diff="",
                 log=combined[-2000:],
                 usage=Usage(seconds=elapsed),
+                model=model_used,
             )
         diff = git_diff(req.repo_path)
         if proc.returncode != 0 and not diff.strip():
@@ -242,14 +287,15 @@ class CopilotCliAdapter(HarnessAdapter):
                 diff="",
                 log=combined[-2000:],
                 usage=Usage(seconds=elapsed),
+                model=model_used,
             )
         status = AdapterStatus.OK if diff.strip() else AdapterStatus.NO_EDIT
         return AdapterResult(
             status=status,
             diff=diff,
-            log=proc.stdout[-2000:],
+            log=(proc.stdout or "")[-2000:],
             usage=Usage(seconds=elapsed, turns=1),
-            model=req.model,
+            model=model_used,
         )
 
 

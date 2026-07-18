@@ -90,6 +90,7 @@ LEADERBOARD_SCHEMA: dict[str, Any] = {
                         "additionalProperties": False,
                         "properties": {
                             "skills": {"type": "array", "items": {"type": "string"}},
+                            "nested_skills": {"type": "array", "items": {"type": "string"}},
                             "mcps": {"type": "array", "items": {"type": "string"}},
                             "plugins": {"type": "array", "items": {"type": "string"}},
                             "unknown": {
@@ -136,8 +137,13 @@ def _summary_from_details(fp: dict[str, Any], details: dict[str, Any]) -> str:
     bits = []
     if fp.get("gstack"):
         bits.append("gstack")
-    n_sk, n_mcp, n_pl = len(details["skills"]), len(details["mcps"]), len(details["plugins"])
-    bits.append(f"{n_sk} skills")
+    n_sk = len(details["skills"])
+    n_nested = len(details.get("nested_skills", []))
+    n_mcp, n_pl = len(details["mcps"]), len(details["plugins"])
+    # A repo-harness's substance can be entirely in nested (plugin-provided) skills, so
+    # count them toward the visible skill total rather than showing a misleading "0 skills".
+    total_skills = n_sk + n_nested
+    bits.append(f"{total_skills} skills")
     if n_mcp:
         bits.append(f"{n_mcp} MCP")
     if n_pl:
@@ -176,7 +182,7 @@ def _sanitized_details(fp: dict[str, Any]) -> dict[str, Any]:
         _sanitized_unknown_entry(e) for e in (fp.get("unknown", []) or [])
     ]
     clean: dict[str, list[str]] = {}
-    for field in ("skills", "mcps", "plugins"):
+    for field in ("skills", "nested_skills", "mcps", "plugins"):
         raw = fp.get(field, [])
         kept: list[str] = []
         if isinstance(raw, list):

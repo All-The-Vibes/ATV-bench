@@ -120,6 +120,12 @@
                   "type": "string"
                 }
               },
+              "nested_skills": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
               "mcps": {
                 "type": "array",
                 "items": {

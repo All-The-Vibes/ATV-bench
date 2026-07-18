@@ -13,7 +13,7 @@ from typing import Any
 
 from atv_bench.fingerprint import reader
 from atv_bench.fingerprint.probe import FINGERPRINT_SCHEMA_KEYS
-from atv_bench.fingerprint.scan import is_safe_name, is_secret
+from atv_bench.fingerprint.scan import _has_secret_pattern, is_safe_name, is_secret
 from atv_bench.submit import validate_bot_shape
 from atv_bench.errors import AtvError
 
@@ -139,10 +139,25 @@ def validate_harness_fingerprint(manifest: dict[str, Any]) -> dict[str, Any]:
     for k in sorted(extra):
         errors.append(f"unexpected key not in fixed schema: {k}")
     # 2. leak-safety: every emitted name must pass the scanner
-    for field in ("skills", "mcps", "plugins"):
+    for field in ("skills", "nested_skills", "mcps", "plugins"):
         for name in manifest.get(field, []) or []:
             if not is_safe_name(name):
                 errors.append(f"leak risk: {field} entry failed safety scan")
+    # tools is a list of {name, source, enabled}; scan the emitted names.
+    for tool in manifest.get("tools", []) or []:
+        if not isinstance(tool, dict) or "name" not in tool:
+            errors.append("tools entry missing name")
+        elif not is_safe_name(tool["name"]):
+            errors.append("leak risk: tools entry failed safety scan")
+    # cli_version carries version/path strings — must not be secret-shaped.
+    # Use pattern-only check (no entropy gate) for version banners like "2.1.195 (Claude Code)"
+    # which have high entropy but are not secrets.
+    cli = manifest.get("cli_version")
+    if isinstance(cli, dict):
+        for key in ("version", "path"):
+            val = cli.get(key)
+            if isinstance(val, str) and val not in ("unknown", "redacted") and _has_secret_pattern(val):
+                errors.append(f"leak risk: cli_version.{key} looks secret-like")
     model = manifest.get("model")
     if isinstance(model, str) and model != "unknown" and is_secret(model):
         errors.append("leak risk: model value looks secret-like")

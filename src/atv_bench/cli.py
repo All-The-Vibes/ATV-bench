@@ -166,9 +166,82 @@ def _render_consent(manifest: dict) -> str:
     return "\n".join(lines)
 
 
+def _render_full_assessment(manifest: dict, harness_key: str | None = None) -> str:
+    """A COMPLETE, untruncated read-back of what the fingerprint found in the harness.
+
+    Unlike the one-line consent view (which truncates lists for a quick glance), this
+    prints the model plus every skill / MCP / plugin name and the agent count — the full
+    inventory of what makes this harness what it is.
+    """
+    m = manifest
+    hb = "═" * 64
+
+    def _block(label: str, items: list[str]) -> list[str]:
+        out = [f"\n  {label} ({len(items)}):"]
+        if not items:
+            out.append("    (none)")
+        else:
+            for name in items:
+                out.append(f"    • {name}")
+        return out
+
+    cli = m.get("cli_version") or {}
+    cli_line = "unknown"
+    if isinstance(cli, dict) and cli.get("version", "unknown") != "unknown":
+        sha = cli.get("sha256", "unknown")
+        sha_disp = sha[:12] if isinstance(sha, str) and sha != "unknown" else "unknown"
+        cli_line = f"{cli.get('version')}  (sha256:{sha_disp})"
+
+    tools = m.get("tools", [])
+    tool_lines = [f"{t['name']} [{t['source']}{'' if t['enabled'] else ' · off'}]"
+                  for t in tools]
+
+    lines = [
+        hb,
+        f"  HARNESS ASSESSMENT — {harness_key or m['harness']}",
+        hb,
+        f"  Harness type : {m['harness']}",
+        f"  Model        : {m['model']}",
+        f"  CLI runtime  : {cli_line}",
+        f"  gstack       : {str(m['gstack']).lower()}",
+        f"  Custom agents: {m['custom_agents_count']}",
+        f"  Totals       : {len(m['skills'])} skills · {len(m.get('nested_skills', []))} "
+        f"nested · {len(tools)} tools · {len(m['mcps'])} MCP servers · "
+        f"{len(m['plugins'])} plugins",
+    ]
+    lines += _block("Skills", m["skills"])
+    lines += _block("Nested skills (plugin-provided)", m.get("nested_skills", []))
+    lines += _block("Tools", tool_lines)
+    lines += _block("MCP servers", m["mcps"])
+    lines += _block("Plugins", m["plugins"])
+    # Surface anything the scanner withheld or couldn't read, honestly.
+    scrubbed = [u for u in m["unknown"] if u["reason"] == "name_failed_safety_scan"]
+    other = [u for u in m["unknown"] if u["reason"] != "name_failed_safety_scan"]
+    lines.append("")
+    if scrubbed:
+        fields = ", ".join(sorted({u["field"] for u in scrubbed}))
+        lines.append(f"  Scrubbed     : {len(scrubbed)} secret-like value(s) withheld "
+                     f"(fields: {fields})")
+    else:
+        lines.append("  Scrubbed     : 0 (scanner ran, nothing looked secret-like)")
+    if other:
+        parts = "; ".join(f"{u['field']}: {u['reason']}" for u in other)
+        lines.append(f"  Unread       : {parts}")
+    else:
+        lines.append("  Unread       : (all surfaces read cleanly)")
+    # Runtime honesty: names of config dirs are not the whole harness.
+    runtime_unknown = m.get("unknown_runtime", [])
+    if runtime_unknown:
+        parts = "; ".join(f"{u['field']}: {u['reason']}" for u in runtime_unknown)
+        lines.append(f"  Runtime gaps : {parts}")
+    lines.append(hb)
+    return "\n".join(lines)
+
+
 @app.command()
 def fingerprint(
     dry_run: bool = typer.Option(False, "--dry-run", help="Show the consent view (default human)."),
+    full: bool = typer.Option(False, "--full", help="Full read-back: model + EVERY skill/MCP/plugin/agent (untruncated)."),
     json_out: bool = typer.Option(False, "--json", help="Emit the raw manifest as JSON."),
     harness: str = typer.Option(None, "--harness", help="Harness to probe (default: auto-detect; see `atv-bench harnesses`)."),
     home: Path = typer.Option(None, "--home", help="Harness config root (default: harness's standard dir under $HOME)."),
@@ -177,6 +250,9 @@ def fingerprint(
     result = _probe_or_exit(home, harness)
     if json_out:
         typer.echo(json.dumps(result.manifest, indent=2))
+        return
+    if full:
+        typer.echo(_render_full_assessment(result.manifest, harness))
         return
     # default + --dry-run both show the consent view (dry-run is the documented verb)
     typer.echo(_render_consent(result.manifest))
@@ -481,6 +557,88 @@ def games(
 
 
 @app.command()
+def bots(
+    json_out: bool = typer.Option(False, "--json", help="Emit the bots list as JSON."),
+) -> None:
+    """List the local opponents you can play the visualization against (`atv-bench play`)."""
+    from atv_bench.bots import BOTS, DEFAULT_OPPONENT
+
+    if json_out:
+        payload = [{"key": b.key, "title": b.title, "summary": b.summary} for b in BOTS]
+        typer.echo(json.dumps(payload, indent=2))
+        return
+    typer.echo("Local opponents for `atv-bench play --opponent <key>`:\n")
+    for b in BOTS:
+        typer.echo(f"  • {b.key}  — {b.title}")
+        typer.echo(f"      {b.summary}")
+    typer.echo(f"\nDefault opponent: {DEFAULT_OPPONENT}. "
+               f"Play your own bot with `--player-bot path/to/main.py`.")
+
+
+@app.command()
+def play(
+    game: str = typer.Option(DEFAULT_GAME, "--game", help="Arena to play (see `atv-bench games`)."),
+    player: str = typer.Option(None, "--player", help="Named bot to play as (see `atv-bench bots`)."),
+    player_bot: Path = typer.Option(None, "--player-bot", help="Path to YOUR harness-built bot file (main.py) to play as."),
+    opponent: str = typer.Option(None, "--opponent", help="Named opponent bot (default: greedy anchor)."),
+    opponent_bot: Path = typer.Option(None, "--opponent-bot", help="Path to a harness-built bot file to play AS the opponent (harness-vs-harness)."),
+    seed: int = typer.Option(0, "--seed", help="Match label/id (matches are already fully deterministic; seed only labels the replay)."),
+    out: Path = typer.Option(None, "--out", help="Where to write the replay (default: ./_replay)."),
+    open_browser: bool = typer.Option(True, "--open/--no-open", help="Open the animated replay in a browser."),
+) -> None:
+    """Run a REAL refereed match locally and watch it — your bot vs the opponent series.
+
+    This is the honest, un-mocked visualization: the same trusted engine + referee the
+    sandboxed arena uses adjudicates the match from real gameplay. Pick a named bot with
+    `--player` or your own harness-built bot with `--player-bot main.py`, choose an
+    `--opponent` from `atv-bench bots`, and it prints an ASCII board + writes an animated
+    HTML replay you can scrub through.
+
+        atv-bench play --player bare --opponent greedy
+        atv-bench play --player-bot main.py --opponent wall_hugger
+        atv-bench play --player-bot mine.py --opponent-bot theirs.py   # harness vs harness
+    """
+    from atv_bench.bots import DEFAULT_OPPONENT
+    from atv_bench.play import Contestant, build_replay_html, render_ascii, run_local_match
+
+    if player_bot is not None and player is not None:
+        typer.echo("Pick one of --player <bot> or --player-bot <file>, not both.")
+        raise typer.Exit(2)
+    if opponent_bot is not None and opponent is not None:
+        typer.echo("Pick one of --opponent <bot> or --opponent-bot <file>, not both.")
+        raise typer.Exit(2)
+    if player_bot is not None:
+        if not player_bot.is_file():
+            typer.echo(f"No bot file at {player_bot}.")
+            raise typer.Exit(2)
+        me = Contestant(bot_path=str(player_bot), label=player_bot.stem)
+    else:
+        me = Contestant(key=player or "bare")
+    if opponent_bot is not None:
+        if not opponent_bot.is_file():
+            typer.echo(f"No bot file at {opponent_bot}.")
+            raise typer.Exit(2)
+        opp = Contestant(bot_path=str(opponent_bot), label=opponent_bot.stem)
+    else:
+        opp = Contestant(key=opponent or DEFAULT_OPPONENT)
+
+    try:
+        result = run_local_match(game=game, player=me, opponent=opp, seed=seed)
+    except ValueError as e:
+        typer.echo(f"Cannot play: {e}")
+        raise typer.Exit(2)
+
+    typer.echo(render_ascii(result))
+    out_dir = out or Path("_replay")
+    replay = build_replay_html(result, out_dir, game=game, seed=seed)
+    typer.echo(f"\n✓ Wrote animated replay: {replay}")
+    if open_browser:
+        _serve_and_open(replay.parent, index=replay.name)
+    else:
+        typer.echo(f"  Open it: open {replay}  (or serve: python -m http.server --directory {replay.parent})")
+
+
+@app.command()
 def board(
     store: Path = typer.Option(None, "--store", help="League store dir (default: ./league)."),
     out: Path = typer.Option(None, "--out", help="Where to write the static board (default: ./_board)."),
@@ -541,7 +699,7 @@ def board(
         typer.echo(f"  Open it with: python -m http.server --directory {site}")
 
 
-def _serve_and_open(site: Path) -> None:
+def _serve_and_open(site: Path, index: str = "index.html") -> None:
     """Serve `site` on a local port and open a browser at it (fetch needs http, not file://)."""
     import functools
     import http.server
@@ -551,7 +709,7 @@ def _serve_and_open(site: Path) -> None:
     handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(site))
     httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     port = httpd.server_address[1]
-    url = f"http://127.0.0.1:{port}/index.html"
+    url = f"http://127.0.0.1:{port}/{index}"
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     typer.echo(f"  Serving at {url} (Ctrl-C to stop)")
@@ -853,11 +1011,165 @@ def doctor(
         + ("installed" if docker else "not installed — needed only to run matches locally")
     )
 
+    # `run` prerequisites (DX-4): reuse the shared preflight checks so doctor and run
+    # report the SAME readiness. Docker daemon + CodeClash + each harness CLI on PATH.
+    from atv_bench import preflight as pf
+    dchk = pf.check_docker()
+    lines.append(f"  {'✓' if dchk.ok else '·'} Docker daemon (for `run`): {dchk.detail}")
+    cchk = pf.check_codeclash()
+    lines.append(f"  {'✓' if cchk.ok else '·'} CodeClash arena dep (for `run`): {cchk.detail}"
+                 + ("" if cchk.ok else f" — {cchk.fix}"))
+    for binary in ("claude", "copilot"):
+        bc = pf.check_cli_on_path(binary)
+        lines.append(f"  {'✓' if bc.ok else '·'} Harness CLI `{binary}` (for `run`): {bc.detail}")
+
     typer.echo("atv-bench doctor — environment readiness:\n")
     for ln in lines:
         typer.echo(ln)
     typer.echo("\nNext: `atv-bench fingerprint --dry-run` to preview your harness, "
-               "then `atv-bench games` to pick an arena.")
+               "then `atv-bench run --demo` for a real recorded match, then a live `run`.")
+
+
+def _emit_run_error(err, json_out: bool) -> None:
+    """Print a RunError as JSON envelope or a human problem+fix, then exit with its code."""
+    from atv_bench.run_envelope import error_envelope
+
+    if json_out:
+        typer.echo(json.dumps(error_envelope(err), indent=2))
+    else:
+        typer.echo(f"✗ {err.message}")
+        if err.fix:
+            typer.echo(f"  fix: {err.fix}")
+        typer.echo(f"  (exit {err.exit_code}, code={err.code})")
+    raise typer.Exit(err.exit_code)
+
+
+@app.command()
+def run(
+    game: str = typer.Option("lightcycles", "--game", help="Arena game (see --list-games)."),
+    a: str = typer.Option(None, "--a", "--player-a", help="Harness A (see --list-harnesses)."),
+    b: str = typer.Option(None, "--b", "--player-b", help="Harness B (see --list-harnesses)."),
+    model: str = typer.Option(None, "--model", help="Model BOTH harnesses run for parity."),
+    rounds: int = typer.Option(3, "--rounds", help="Number of edit+compete rounds."),
+    demo: bool = typer.Option(False, "--demo", help="Replay a canned REAL match — zero Docker/auth/network."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the stable machine-readable envelope."),
+    list_games: bool = typer.Option(False, "--list-games", help="List valid --game values and exit."),
+    list_harnesses: bool = typer.Option(False, "--list-harnesses", help="List valid --a/--b harness values and exit."),
+    out: Path = typer.Option(None, "--out", help="Output dir for match logs + replay."),
+    a_home: Path = typer.Option(None, "--a-home", help="Config root for harness A (e.g. a cloned repo) to fingerprint."),
+    b_home: Path = typer.Option(None, "--b-home", help="Config root for harness B to fingerprint."),
+) -> None:
+    """Run a REAL harness-vs-harness match: each harness CLI builds its own bot headless,
+    the two bots compete in a CodeClash arena (Docker), and a schema-v2 record is written.
+
+    Start with `--demo` (no prerequisites) to see a real recorded match, then `atv-bench
+    doctor`, then a live `run`. Phase 1 results are labeled unverified/local-debug and do
+    NOT publish a ranked number (that needs the Phase 2 gateway).
+
+    Exit codes: 0 ok · 2 usage · 3 missing-cli · 4 unauth · 5 docker · 6 policy ·
+    7 timeout · 8 model-unparseable · 9 codeclash-dep.
+    """
+    from atv_bench.config import GAME_SPECS
+    from atv_bench.runner import _HARNESS_BINARY
+
+    if list_games:
+        for g in sorted(GAME_SPECS):
+            typer.echo(g)
+        return
+    if list_harnesses:
+        for h in sorted(_HARNESS_BINARY):
+            typer.echo(h)
+        return
+
+    if demo:
+        _run_demo(json_out=json_out, out=out)
+        return
+
+    from atv_bench.run_envelope import RunError, ok_envelope
+    from atv_bench.runner import RunConfig
+
+    if not a or not b or not model:
+        err = RunError("usage", "run needs --a <harness> --b <harness> --model <M> "
+                       "(or use --demo for a no-setup real recording).",
+                       fix="example: atv-bench run --game lightcycles --a copilot-cli "
+                           "--b claude-code --model claude-opus-4.8")
+        _emit_run_error(err, json_out)
+
+    cfg = RunConfig(game=game, a=a, b=b, model=model, rounds=rounds)
+    try:
+        cfg.validate()
+    except RunError as err:
+        _emit_run_error(err, json_out)
+
+    out_dir = out or Path("./_run")
+    try:
+        env = _run_live(cfg, out_dir, a_home, b_home, json_out)
+    except RunError as err:
+        _emit_run_error(err, json_out)
+        return
+    if json_out:
+        typer.echo(json.dumps(env, indent=2))
+
+
+def _run_demo(*, json_out: bool, out: Path | None) -> None:
+    from atv_bench.demo_run import demo_envelope, demo_match_result
+    from atv_bench.play import build_replay_html
+
+    out_dir = out or Path("./_demo_replay")
+    match = demo_match_result()
+    try:
+        replay = build_replay_html(match, out_dir, game=match.get("game"))
+        replay_path = str(replay)
+    except Exception:
+        replay_path = ""
+    env = demo_envelope(replay_path=replay_path)
+    if json_out:
+        typer.echo(json.dumps(env, indent=2))
+        return
+    d = env["data"]
+    typer.echo("▶ atv-bench run --demo — a canned but REAL recorded match")
+    typer.echo(f"  game    : {d['game']}")
+    for p in d["players"]:
+        typer.echo(f"  player  : {p['harness']} · model {p['model']} "
+                   f"(source={p['model_source']}, verified={p['verified']})")
+    typer.echo(f"  winner  : {d['outcome'].get('winner')}  "
+               f"(turns={d['outcome'].get('turns')})")
+    if replay_path:
+        typer.echo(f"  replay  : {replay_path}")
+    typer.echo(f"\n{d['next']}")
+
+
+def _run_live(cfg, out_dir, a_home, b_home, json_out):  # pragma: no cover - Docker + live CLIs
+    from atv_bench.run_envelope import ok_envelope
+    from atv_bench.runner import (
+        build_match_record, fingerprint_harness_repo, preflight_or_raise, run_live_match,
+    )
+
+    preflight_or_raise(cfg)
+    typer.echo(f"▶ building bots: {cfg.a} vs {cfg.b} on {cfg.model} ({cfg.rounds} rounds)…")
+    homes = {cfg.a: a_home, cfg.b: b_home}
+    raw = run_live_match(cfg, output_dir=Path(out_dir), homes=homes)
+
+    # Fingerprint each harness (leak-safe) for the record identity.
+    fps: dict[str, str] = {}
+    for h, home in homes.items():
+        try:
+            sha, _manifest = fingerprint_harness_repo(h, home)
+            fps[h] = sha
+        except Exception:
+            fps[h] = "0" * 64
+
+    outcome, models = _summarize_tournament(raw, cfg)
+    rec = build_match_record(
+        cfg, outcome=outcome, player_models=models, player_fingerprints=fps,
+        replay_path=str(Path(out_dir)), verified=False,
+    )
+    return ok_envelope(rec.to_dict())
+
+
+def _summarize_tournament(raw, cfg):  # pragma: no cover - shape depends on live run
+    from atv_bench.runner import summarize_tournament
+    return summarize_tournament(raw, cfg)
 
 
 if __name__ == "__main__":

@@ -389,3 +389,15 @@ def test_validate_pr_paths_name_status_allows_plumbing_pr(tmp_path):
     result = runner.invoke(app, ["validate-pr-paths", "--author", "maintainer",
                                  "--name-status", "--paths-file", str(pf)])
     assert result.exit_code == 0
+
+
+def test_fingerprint_full_untruncated(tmp_path):
+    """--full prints the model and the COMPLETE skill/mcp/plugin inventory (no '…')."""
+    home = _fixture_home(tmp_path)
+    res = runner.invoke(app, ["fingerprint", "--full", "--home", str(home)])
+    assert res.exit_code == 0, res.output
+    assert "HARNESS ASSESSMENT" in res.output
+    assert "Model" in res.output
+    assert "gstack" in res.output           # a real skill in the fixture
+    assert "office-hours" in res.output     # every skill listed, not truncated
+    assert "…" not in res.output

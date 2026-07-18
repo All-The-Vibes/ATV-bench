@@ -202,10 +202,21 @@ def _forfeit_record(*, player_a: str, player_b: str, match_id: str,
     }
 
 
+def _frame(state: GameState) -> dict[str, Any]:
+    """Serialize one tick's geometry for visualization/replay (pure, deterministic)."""
+    return {
+        "turn": state.turn,
+        "a": {"pos": list(state.pos_a),
+              "trail": [list(c) for c in sorted(state.trail_a)]},
+        "b": {"pos": list(state.pos_b),
+              "trail": [list(c) for c in sorted(state.trail_b)]},
+    }
+
+
 def run_match(engine: TronEngine, source_a: MoveSource, source_b: MoveSource, *,
               player_a: str, player_b: str, match_id: str,
               game: str = "lightcycles", seed: int = 0,
-              observer: Any = None) -> dict[str, Any]:
+              record: bool = False, observer: Any = None) -> dict[str, Any]:
     """Run a full refereed match and return the trusted, schema-shaped result.
 
     Both players are asked for a move each turn from the trusted engine's observation.
@@ -214,14 +225,29 @@ def run_match(engine: TronEngine, source_a: MoveSource, source_b: MoveSource, *,
     is a draw (mutual no-move). Otherwise the engine adjudicates the collision outcome
     and the referee translates it to an a/b-relative result record.
 
+    With `record=True` the result gains a `frames` list (one entry per tick, initial
+    state first) and a `board` dict — enough to animate/replay the match deterministically.
+    Recording never changes the adjudicated outcome.
+
     `observer`, if given, is a callable invoked with each `GameState` — the initial
     state and after every tick (including the terminal one). It is a read-only feed hook
     for a live renderer; it never influences adjudication and its exceptions are the
-    caller's responsibility. Omitting it preserves the exact prior behavior.
+    caller's responsibility. Omitting both preserves the exact prior behavior.
     """
-    def _emit(s: GameState) -> None:
+    frames: list[dict[str, Any]] = []
+
+    def _emit(st: GameState) -> None:
+        if record:
+            frames.append(_frame(st))
         if observer is not None:
-            observer(s)
+            observer(st)
+
+    def _finalize(result: dict[str, Any]) -> dict[str, Any]:
+        if record:
+            result = dict(result)
+            result["frames"] = frames
+            result["board"] = {"width": engine.width, "height": engine.height}
+        return result
 
     state = engine.initial_state()
     _emit(state)
@@ -236,22 +262,22 @@ def run_match(engine: TronEngine, source_a: MoveSource, source_b: MoveSource, *,
         if a_forfeit or b_forfeit:
             if a_forfeit and b_forfeit:
                 # Mutual no-move: a genuine draw (neither could act).
-                return {
+                return _finalize({
                     "status": "ok", "player_a": player_a, "player_b": player_b,
                     "outcome": Outcome.DRAW.value, "match_id": match_id,
                     "game": game, "seed": seed,
-                }
+                })
             who = "a" if a_forfeit else "b"
-            return _forfeit_record(player_a=player_a, player_b=player_b,
+            return _finalize(_forfeit_record(player_a=player_a, player_b=player_b,
                                    match_id=match_id, who=who,
-                                   reason=ForfeitReason.CRASH, game=game, seed=seed)
+                                   reason=ForfeitReason.CRASH, game=game, seed=seed))
 
         state = engine.tick(state, move_a, move_b)
         _emit(state)
 
     # Engine reached a terminal collision/turn-cap verdict.
     outcome = state.outcome or Outcome.DRAW
-    return {
+    return _finalize({
         "status": "ok",
         "player_a": player_a,
         "player_b": player_b,
@@ -259,4 +285,4 @@ def run_match(engine: TronEngine, source_a: MoveSource, source_b: MoveSource, *,
         "match_id": match_id,
         "game": game,
         "seed": seed,
-    }
+    })

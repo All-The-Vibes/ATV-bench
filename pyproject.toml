@@ -10,6 +10,15 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "playwright>=1.40", "pyyaml>=6.0"]
+# CodeClash is a research repo NOT published to PyPI. It is vendored under
+# vendor/CodeClash at a pinned commit (see src/atv_bench/codeclash_env.CODECLASH_PIN)
+# and installed editable:
+#   uv pip install -e vendor/CodeClash --no-deps
+#   uv pip install 'mini-swe-agent>=2.4,<3' 'litellm<1.80' python-dotenv ghapi \
+#       flask jinja2 markupsafe scipy unidiff trueskill cdifflib typer zstandard
+# `run` (host-subprocess harness-vs-harness) requires this extra + Docker; the
+# fingerprint / submit / board / play surfaces do not.
+run = ["codeclash"]
 
 [project.scripts]
 atv-bench = "atv_bench.cli:app"

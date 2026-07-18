@@ -116,8 +116,36 @@ git+https://github.com/All-The-Vibes/ATV-bench`. Upgrade later with
 Verify your machine is ready:
 
 ```bash
-atv-bench doctor          # python / harness config / gh / docker readiness, with fixes
+atv-bench doctor          # python / harness config / gh / docker / CodeClash readiness, with fixes
 ```
+
+### Real harness-vs-harness match (the spine)
+
+The core loop: **fingerprint** each harness → the **real harness CLI** (`claude`,
+`copilot`) builds its own `main.py` headless → the two bots **compete in a CodeClash
+arena** (Docker) → **ELO + replay**. Nothing hand-written, no faked model string.
+
+Start with the zero-setup real recording — no Docker, no auth, no network:
+
+```bash
+atv-bench run --demo                 # replays a canned but REAL recorded match
+atv-bench run --demo --json          # same, as a stable machine-readable envelope
+```
+
+Then run a live match (needs Docker + a real harness CLI authenticated — see `doctor`):
+
+```bash
+atv-bench run --game lightcycles --a copilot-cli --b claude-code --model claude-opus-4.8
+atv-bench run --game battlesnake  --a claude-code --b claude-code --model claude-opus-4.8 --json
+atv-bench run --list-games --list-harnesses     # discover valid values
+```
+
+Both harnesses run on the **same model** for parity, so the result isolates the
+*harness*, not the model. Phase-1 results are labeled **unverified / local-debug** and
+do **not** publish a ranked number — that needs the Phase-2 gateway (a real match is
+non-deterministic; only the recorded replay is reproducible). Exit codes are stable and
+distinct per failure mode (`0` ok · `3` missing-cli · `5` docker · `9` codeclash-dep …)
+so an agent or CI can branch on them.
 
 ### See the rankings first
 
@@ -133,6 +161,40 @@ The live community board is at
 ranks. To render the *real* board locally from a checkout's store: `atv-bench board
 --store league`.
 
+### Watch a real match locally (no submission, no mocks)
+
+Before you touch a PR, *see the game played*. `atv-bench play` runs a *real* refereed
+match on your machine — the same trusted engine + referee the sandboxed arena uses, so
+the outcome is adjudicated from actual gameplay, not faked — and opens an animated
+replay you can scrub through.
+
+```bash
+atv-bench bots            # the opponent series you can play against
+atv-bench play --player bare --opponent greedy       # watch two reference bots fight
+atv-bench play --player greedy --opponent wall_hugger
+```
+
+The opponent series (`atv-bench bots`):
+
+| bot | what it is |
+|-----|------------|
+| `greedy` | The trusted arena **anchor** — the yardstick every submission plays. |
+| `wall_hugger` | A more aggressive space-filling strategy. |
+| `bare` | The **no-harness baseline**: go straight, only turn to avoid crashing. Stands in for a raw model with no skills/MCP/agents. If your bot can't beat `bare`, your harness added nothing. |
+
+**Watch YOUR harness-built bot play** — point `--player-bot` at the `main.py` your
+harness produced and pick any opponent:
+
+```bash
+atv-bench play --player-bot ./main.py --opponent greedy
+atv-bench play --player-bot ./main.py --opponent bare --game lightcycles
+```
+
+Each run prints an ASCII board with the trusted outcome and writes a self-contained
+`_replay/replay.html` (frames embedded inline — no server, no network). Matches are
+fully deterministic (same bots → same game every time); `--seed` only labels the replay.
+Use `--no-open` to skip launching the browser.
+
 ### Run the benchmark on your harness (step by step)
 
 1. **Pick a game.** See what's playable:
@@ -144,19 +206,23 @@ ranks. To render the *real* board locally from a checkout's store: `atv-bench bo
    single-file bot named `main.py` that plays the arena (emits one move per turn). That
    bot *is* your harness's entry — the whole thesis is that your harness, not a raw
    model, wrote it.
-3. **See exactly what your harness fingerprint would publish** (nothing leaves your
+3. **Watch it play before you submit** (catch a broken bot in seconds):
+   ```bash
+   atv-bench play --player-bot ./main.py --opponent greedy
+   ```
+4. **See exactly what your harness fingerprint would publish** (nothing leaves your
    machine):
    ```bash
    atv-bench harnesses          # claude-code, copilot-cli, codex are all live (auto-detects yours)
    atv-bench fingerprint --dry-run   # add --harness <key> to target a specific one
    ```
-4. **Validate + build your submission:**
+5. **Validate + build your submission:**
    ```bash
    atv-bench validate-game ./main.py
    atv-bench submit ./main.py --game lightcycles \
      --identity <your-github-login> --dry-run --out submission.json
    ```
-5. **Open the PR** (live automation behind the preflight):
+6. **Open the PR** (live automation behind the preflight):
    ```bash
    atv-bench submit ./main.py --game lightcycles --live --identity <your-github-login>
    ```

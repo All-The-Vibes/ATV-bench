@@ -182,6 +182,21 @@ def is_secret(value: str) -> bool:
     return False
 
 
+def _has_secret_pattern(value: str) -> bool:
+    """True if `value` matches a hard secret PATTERN (token shapes / creds-in-URL / PEM).
+
+    Pattern-only — NO entropy or name-slug gate. Use for free-form strings that are not
+    names (e.g. a CLI version banner "2.1.195 (Claude Code)") where the entropy gate
+    would false-positive, but a real leaked token must still be caught.
+    """
+    if not isinstance(value, str):
+        return True
+    for pat in _SECRET_PATTERNS:
+        if pat.search(value):
+            return True
+    return False
+
+
 def is_safe_name(value: str) -> bool:
     """True if `value` is safe to emit as a skill/MCP/plugin/model NAME.
 
