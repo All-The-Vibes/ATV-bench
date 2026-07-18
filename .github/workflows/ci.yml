@@ -66,11 +66,17 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=1 origin "$BASE_SHA" || true
-          # name-status (not name-only): surfaces rename/copy/delete so the gate can reject
-          # them, and both sides of a rename so it can't drag another entrant's bot in.
-          git diff --name-status "$BASE_SHA"..."$HEAD_SHA" > changes.txt \
-            || git diff --name-status "$BASE_SHA" "$HEAD_SHA" > changes.txt
+          # checkout used fetch-depth:0 (full history), so the merge base is present.
+          # Do NOT re-fetch --depth=1 here: grafting a shallow boundary onto BASE_SHA
+          # breaks `merge-base`, which makes the three-dot diff below fail with
+          # "no merge base" on an ordinary PR (see PR #15). Ensure the base commit is
+          # present without shallowing, then diff.
+          git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null \
+            || git fetch --no-tags origin "$BASE_SHA"
+          # Three-dot: files the PR changed since it diverged from base (not every path
+          # where the branches differ). name-status surfaces rename/copy/delete so the
+          # gate can reject them and see both sides of a rename.
+          git diff --name-status "$BASE_SHA"..."$HEAD_SHA" > changes.txt
           echo "PR name-status:"; cat changes.txt
           python -m atv_bench.cli validate-pr-paths --author "$AUTHOR" \
             --name-status --paths-file changes.txt
