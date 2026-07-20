@@ -84,15 +84,20 @@ def summarize_calibration_rows(
             for row in attempts
         )
         both_valid = sum(bool(row["calibration_pass"]) for row in attempts)
+        evaluator_valid = sum(
+            bool(row["evaluator_calibration_pass"]) for row in attempts
+        )
         count = len(attempts)
         phoenix_rate = phoenix_valid / count if count else 0.0
         hve_rate = hve_valid / count if count else 0.0
         both_rate = both_valid / count if count else 0.0
+        evaluator_rate = evaluator_valid / count if count else 0.0
         passed = bool(
             count >= required_attempts
             and phoenix_rate >= minimum_pass_rate
             and hve_rate >= minimum_pass_rate
             and both_rate >= minimum_pass_rate
+            and evaluator_rate >= minimum_pass_rate
         )
         budgets.append(
             {
@@ -101,9 +106,11 @@ def summarize_calibration_rows(
                 "phoenix_valid": phoenix_valid,
                 "hve_valid": hve_valid,
                 "both_valid": both_valid,
+                "evaluator_valid": evaluator_valid,
                 "phoenix_valid_rate": round(phoenix_rate, 6),
                 "hve_valid_rate": round(hve_rate, 6),
                 "both_valid_rate": round(both_rate, 6),
+                "evaluator_valid_rate": round(evaluator_rate, 6),
                 "passed": passed,
                 "directories": [row["directory"] for row in attempts],
             }
@@ -169,14 +176,15 @@ def render_markdown(output: dict[str, Any]) -> str:
         "",
         output["decision_reason"] + ".",
         "",
-        "| AI credits | Attempts | Phoenix valid | hve valid | Both valid | Pass |",
-        "|---:|---:|---:|---:|---:|---:|",
+        "| AI credits | Attempts | Phoenix valid | hve valid | Both valid | Evaluator valid | Pass |",
+        "|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in output["budgets"]:
         lines.append(
             f"| {row['max_ai_credits']} | {row['attempts']} | "
             f"{row['phoenix_valid']} | {row['hve_valid']} | "
-            f"{row['both_valid']} | {'yes' if row['passed'] else 'no'} |"
+            f"{row['both_valid']} | {row['evaluator_valid']} | "
+            f"{'yes' if row['passed'] else 'no'} |"
         )
     lines.extend(
         [

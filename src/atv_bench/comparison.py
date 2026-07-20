@@ -128,11 +128,24 @@ def verify_checksums(root: str | Path) -> tuple[bool, list[str]]:
     return not errors, errors
 
 
-def engine_for_seed(seed: int) -> TronEngine:
+def engine_for_seed(
+    seed: int,
+    *,
+    board_profile: str = "standard",
+    max_turns: int | None = None,
+) -> TronEngine:
     """Create one deterministic asymmetric board for a paired game seed."""
     rng = random.Random(seed)
-    width = 21 + 2 * (seed % 5)
-    height = 17 + 2 * ((seed // 5) % 5)
+    if board_profile == "standard":
+        width = 21 + 2 * (seed % 5)
+        height = 17 + 2 * ((seed // 5) % 5)
+    elif board_profile == "compact":
+        width = 11 + 2 * (seed % 3)
+        height = 9 + 2 * ((seed // 3) % 3)
+    else:
+        raise ValueError("board_profile must be standard or compact")
+    if max_turns is not None and max_turns <= 0:
+        raise ValueError("max_turns must be positive")
     y_a = rng.randrange(1, height - 1)
     y_b = rng.randrange(1, height - 1)
     if y_b == y_a:
@@ -144,7 +157,7 @@ def engine_for_seed(seed: int) -> TronEngine:
         start_b=(width - 2, y_b),
         dir_a=Direction.RIGHT,
         dir_b=Direction.LEFT,
-        max_turns=width * height,
+        max_turns=max_turns or width * height,
     )
 
 
@@ -169,6 +182,9 @@ def run_game(
     seed: int,
     swapped: bool = False,
     per_turn_timeout: float = 3.0,
+    match_timeout: float | None = 60.0,
+    board_profile: str = "standard",
+    max_turns: int | None = None,
 ) -> dict[str, Any]:
     """Run one game and map side-relative outcomes to stable harness identities."""
     import sys
@@ -183,7 +199,11 @@ def run_game(
     )
     try:
         result = run_match(
-            engine_for_seed(seed),
+            engine_for_seed(
+                seed,
+                board_profile=board_profile,
+                max_turns=max_turns,
+            ),
             source_a,
             source_b,
             player_a="right" if swapped else "left",
@@ -191,6 +211,7 @@ def run_game(
             match_id=f"comparison-{seed}-{'swap' if swapped else 'normal'}",
             game="lightcycles",
             seed=seed,
+            match_timeout_seconds=match_timeout,
         )
     finally:
         source_a.close()
@@ -201,6 +222,7 @@ def run_game(
         "winner": _winner_for_result(result, swapped=swapped),
         "outcome": result.get("outcome", "draw"),
         "forfeit_reason": result.get("forfeit_reason"),
+        "termination_reason": result.get("termination_reason"),
     }
 
 
@@ -251,6 +273,9 @@ def play_series(
     *,
     seeds: Iterable[int],
     per_turn_timeout: float = 3.0,
+    match_timeout: float | None = 60.0,
+    board_profile: str = "standard",
+    max_turns: int | None = None,
 ) -> dict[str, Any]:
     """Run two side-swapped games per seed; games remain nested observations."""
     games: list[dict[str, Any]] = []
@@ -263,6 +288,9 @@ def play_series(
                 seed=seed,
                 swapped=False,
                 per_turn_timeout=per_turn_timeout,
+                match_timeout=match_timeout,
+                board_profile=board_profile,
+                max_turns=max_turns,
             )
         )
         games.append(
@@ -272,6 +300,9 @@ def play_series(
                 seed=seed,
                 swapped=True,
                 per_turn_timeout=per_turn_timeout,
+                match_timeout=match_timeout,
+                board_profile=board_profile,
+                max_turns=max_turns,
             )
         )
     return {"summary": summarize_games(games), "games": games}

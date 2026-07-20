@@ -367,6 +367,7 @@ def _command(
     model: str,
     credits: int,
     agent: str,
+    goal: str,
     plugin: Path | None = None,
 ) -> list[str]:
     argv = [node, loader]
@@ -376,7 +377,7 @@ def _command(
         "-C",
         "{repo}",
         "-p",
-        GOAL,
+        goal,
         "--agent",
         agent,
         "--allow-all-tools",
@@ -676,6 +677,28 @@ def _argument_parser() -> argparse.ArgumentParser:
         default=3.0,
         help="Held-out Lightcycles move deadline in seconds for both candidates.",
     )
+    parser.add_argument(
+        "--match-timeout",
+        type=float,
+        default=60.0,
+        help="Hard wall-clock deadline in seconds for each Lightcycles game.",
+    )
+    parser.add_argument(
+        "--board-profile",
+        choices=("standard", "compact"),
+        default="standard",
+    )
+    parser.add_argument("--max-game-turns", type=int)
+    parser.add_argument(
+        "--calibration-game-seed",
+        action="append",
+        type=int,
+        default=[],
+        help=(
+            "Public seed used only during calibration to validate bounded evaluator "
+            "runtime; repeat to add a side-swapped calibration pair."
+        ),
+    )
     parser.add_argument("--timeout", type=int, default=900)
     parser.add_argument("--max-ai-credits", type=int, default=30)
     parser.add_argument(
@@ -701,6 +724,12 @@ def main() -> None:
         raise SystemExit("--held-out-seed values must be unique non-negative integers")
     if args.per_turn_timeout <= 0:
         raise SystemExit("--per-turn-timeout must be positive")
+    if args.match_timeout <= 0:
+        raise SystemExit("--match-timeout must be positive")
+    if args.max_game_turns is not None and args.max_game_turns <= 0:
+        raise SystemExit("--max-game-turns must be positive")
+    if any(seed < 0 for seed in args.calibration_game_seed):
+        raise SystemExit("--calibration-game-seed values must be non-negative")
     if args.timeout <= 0:
         raise SystemExit("--timeout must be positive")
 
@@ -752,6 +781,15 @@ def main() -> None:
 
         node, loader = _copilot_argv()
         token = _github_token()
+        goal = (
+            GOAL
+            + "\n\nThe frozen evaluator contract uses board profile "
+            f"`{args.board_profile}`, at most "
+            f"`{args.max_game_turns or 'board-area'}` turns, "
+            f"{args.per_turn_timeout:.3f} seconds per move, and "
+            f"{args.match_timeout:.3f} seconds per match. Reaching the turn cap "
+            "is a draw. Keep per-turn computation comfortably below the deadline.\n"
+        )
         environments = {
             "phoenix": _common_env(
                 copilot_home=phoenix["copilot_home"],
@@ -771,6 +809,7 @@ def main() -> None:
                 model=args.model,
                 credits=args.max_ai_credits,
                 agent="phoenix",
+                goal=goal,
             ),
             "hve": _command(
                 node=node,
@@ -778,6 +817,7 @@ def main() -> None:
                 model=args.model,
                 credits=args.max_ai_credits,
                 agent="hve-core:rpi-agent",
+                goal=goal,
                 plugin=hve["plugin"],
             ),
         }
@@ -795,7 +835,7 @@ def main() -> None:
             }
             executions = {name: future.result() for name, future in futures.items()}
 
-        write_exact_text(out / "prompt.txt", GOAL)
+        write_exact_text(out / "prompt.txt", goal)
         builds: dict[str, Any] = {}
         for name, execution in executions.items():
             runtime = parse_copilot_jsonl(execution.stdout)
@@ -876,18 +916,47 @@ def main() -> None:
             )
             for name in ("phoenix", "hve")
         }
-        calibration_pass = all(build_comparability.values())
-        trial_comparable = args.phase == "evaluation" and calibration_pass
+        build_calibration_pass = all(build_comparability.values())
+        evaluator_calibration_pass = True
+        evaluator_runtime_valid = True
+        calibration_pass = build_calibration_pass
+        trial_comparable = args.phase == "evaluation" and build_calibration_pass
         if args.phase == "calibration":
-            series = {
-                name: _empty_series("not_run_calibration_phase")
-                for name in (
-                    "phoenix_vs_hve",
-                    "phoenix_vs_baseline",
-                    "hve_vs_baseline",
-                    "baseline_control",
+            if build_calibration_pass and args.calibration_game_seed:
+                calibration_series = play_series(
+                    phoenix_bot,
+                    hve_bot,
+                    seeds=tuple(args.calibration_game_seed),
+                    per_turn_timeout=args.per_turn_timeout,
+                    match_timeout=args.match_timeout,
+                    board_profile=args.board_profile,
+                    max_turns=args.max_game_turns,
                 )
-            }
+                evaluator_calibration_pass = all(
+                    game.get("termination_reason") is None
+                    and game.get("outcome") not in {"forfeit_a", "forfeit_b"}
+                    for game in calibration_series["games"]
+                )
+                evaluator_runtime_valid = evaluator_calibration_pass
+                series = {
+                    "phoenix_vs_hve": calibration_series,
+                    "phoenix_vs_baseline": _empty_series(
+                        "not_run_calibration_phase"
+                    ),
+                    "hve_vs_baseline": _empty_series("not_run_calibration_phase"),
+                    "baseline_control": _empty_series("not_run_calibration_phase"),
+                }
+            else:
+                series = {
+                    name: _empty_series("not_run_calibration_phase")
+                    for name in (
+                        "phoenix_vs_hve",
+                        "phoenix_vs_baseline",
+                        "hve_vs_baseline",
+                        "baseline_control",
+                    )
+                }
+            calibration_pass = build_calibration_pass and evaluator_calibration_pass
         else:
             series = {
                 "phoenix_vs_hve": (
@@ -896,6 +965,9 @@ def main() -> None:
                         hve_bot,
                         seeds=held_out,
                         per_turn_timeout=args.per_turn_timeout,
+                        match_timeout=args.match_timeout,
+                        board_profile=args.board_profile,
+                        max_turns=args.max_game_turns,
                     )
                     if trial_comparable
                     else _empty_series("not_run_noncomparable_trial")
@@ -906,6 +978,9 @@ def main() -> None:
                         baseline,
                         seeds=held_out,
                         per_turn_timeout=args.per_turn_timeout,
+                        match_timeout=args.match_timeout,
+                        board_profile=args.board_profile,
+                        max_turns=args.max_game_turns,
                     )
                     if build_comparability["phoenix"]
                     else _empty_series("not_run_noncomparable_phoenix_build")
@@ -916,6 +991,9 @@ def main() -> None:
                         baseline,
                         seeds=held_out,
                         per_turn_timeout=args.per_turn_timeout,
+                        match_timeout=args.match_timeout,
+                        board_profile=args.board_profile,
+                        max_turns=args.max_game_turns,
                     )
                     if build_comparability["hve"]
                     else _empty_series("not_run_noncomparable_hve_build")
@@ -925,8 +1003,17 @@ def main() -> None:
                     baseline,
                     seeds=held_out,
                     per_turn_timeout=args.per_turn_timeout,
+                    match_timeout=args.match_timeout,
+                    board_profile=args.board_profile,
+                    max_turns=args.max_game_turns,
                 ),
             }
+            evaluator_runtime_valid = all(
+                game.get("termination_reason") is None
+                for series_result in series.values()
+                for game in series_result["games"]
+            )
+            trial_comparable = trial_comparable and evaluator_runtime_valid
 
         artifact_validity = {
             "phoenix": bool(builds["phoenix"]["valid_artifact"]),
@@ -944,6 +1031,8 @@ def main() -> None:
             classification = "calibration-pass"
         elif args.phase == "calibration":
             classification = "calibration-fail"
+        elif not evaluator_runtime_valid:
+            classification = "evaluator-runtime-invalid"
         elif not all(attestation_validity.values()):
             classification = "model-attestation-failed"
         elif not all(execution_validity.values()):
@@ -991,11 +1080,15 @@ def main() -> None:
                 "node": _run_text(node, "--version"),
                 "python": platform.python_version(),
                 "platform": platform.platform(),
-                "prompt_sha256": hashlib.sha256(GOAL.encode("utf-8")).hexdigest(),
+                "prompt_sha256": hashlib.sha256(goal.encode("utf-8")).hexdigest(),
                 "held_out_seeds": len(held_out),
                 "held_out_seed_values": list(held_out),
                 "seed_start": None if args.held_out_seed else args.seed_start,
                 "per_turn_timeout_seconds": args.per_turn_timeout,
+                "match_timeout_seconds": args.match_timeout,
+                "board_profile": args.board_profile,
+                "max_game_turns": args.max_game_turns,
+                "calibration_game_seed_values": list(args.calibration_game_seed),
                 "harness_timeout_seconds": args.timeout,
                 "max_ai_credits": args.max_ai_credits,
                 "side_swapped": True,
@@ -1051,6 +1144,9 @@ def main() -> None:
                 "build_comparability": build_comparability,
                 "comparable": trial_comparable,
                 "calibration_pass": calibration_pass,
+                "build_calibration_pass": build_calibration_pass,
+                "evaluator_calibration_pass": evaluator_calibration_pass,
+                "evaluator_runtime_valid": evaluator_runtime_valid,
                 "eligible_for_scoring": trial_comparable,
                 "classification": classification,
                 "quality_winner_claimed": False,

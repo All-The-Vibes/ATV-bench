@@ -96,3 +96,12 @@ Artifact-validity rates and paired discordant outcomes are published separately.
 Conditional quality, reliability, completed-game results, forfeits, exact sign tests,
 and all exclusions remain visible regardless of the primary decision.
 
+## Cell closure
+
+V4 was stopped before producing a scored result. The first game demonstrated that
+the evaluator had no whole-match wall-clock limit; large standard boards could run
+for impractical durations even when both bots respected the per-turn deadline.
+
+The cell is closed as an **evaluator-runtime calibration failure**. No v4 result is
+scored. V5 adds a hard per-match deadline, compact board profile, explicit turn cap,
+and a non-scored public calibration game before evaluation.

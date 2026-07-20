@@ -26,6 +26,7 @@ import enum
 import json
 import subprocess
 import threading
+import time
 from typing import Any, Protocol
 
 from atv_bench.arena.engine import Direction, GameState, Outcome, TronEngine
@@ -237,7 +238,8 @@ def _source_forfeit_reason(source: MoveSource) -> ForfeitReason:
 def run_match(engine: TronEngine, source_a: MoveSource, source_b: MoveSource, *,
               player_a: str, player_b: str, match_id: str,
               game: str = "lightcycles", seed: int = 0,
-              record: bool = False, observer: Any = None) -> dict[str, Any]:
+              record: bool = False, observer: Any = None,
+              match_timeout_seconds: float | None = None) -> dict[str, Any]:
     """Run a full refereed match and return the trusted, schema-shaped result.
 
     Both players are asked for a move each turn from the trusted engine's observation.
@@ -255,6 +257,13 @@ def run_match(engine: TronEngine, source_a: MoveSource, source_b: MoveSource, *,
     for a live renderer; it never influences adjudication and its exceptions are the
     caller's responsibility. Omitting both preserves the exact prior behavior.
     """
+    if match_timeout_seconds is not None and match_timeout_seconds <= 0:
+        raise ValueError("match_timeout_seconds must be positive")
+    deadline = (
+        time.monotonic() + match_timeout_seconds
+        if match_timeout_seconds is not None
+        else None
+    )
     frames: list[dict[str, Any]] = []
 
     def _emit(st: GameState) -> None:
@@ -273,10 +282,24 @@ def run_match(engine: TronEngine, source_a: MoveSource, source_b: MoveSource, *,
     state = engine.initial_state()
     _emit(state)
     while not state.terminal:
+        if deadline is not None and time.monotonic() >= deadline:
+            return _finalize({
+                "status": "ok", "player_a": player_a, "player_b": player_b,
+                "outcome": Outcome.DRAW.value, "match_id": match_id,
+                "game": game, "seed": seed,
+                "termination_reason": "MATCH_TIMEOUT",
+            })
         obs_a = _observation(state, engine, me="a")
         obs_b = _observation(state, engine, me="b")
         move_a = source_a.next_move(obs_a)
         move_b = source_b.next_move(obs_b)
+        if deadline is not None and time.monotonic() >= deadline:
+            return _finalize({
+                "status": "ok", "player_a": player_a, "player_b": player_b,
+                "outcome": Outcome.DRAW.value, "match_id": match_id,
+                "game": game, "seed": seed,
+                "termination_reason": "MATCH_TIMEOUT",
+            })
 
         a_forfeit = move_a is None
         b_forfeit = move_b is None

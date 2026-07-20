@@ -53,6 +53,9 @@ def _trial_document(
             "copilot_cli": "GitHub Copilot CLI fixed",
             "held_out_seeds": 5,
             "per_turn_timeout_seconds": 3.0,
+            "match_timeout_seconds": 60.0,
+            "board_profile": "compact",
+            "max_game_turns": 40,
             "harness_timeout_seconds": 900,
             "max_ai_credits": max_ai_credits,
             "prompt_sha256": "prompt-fixed",
@@ -100,6 +103,8 @@ def _trial_document(
             },
             "quality_winner_claimed": False,
             "calibration_pass": phoenix_valid and hve_valid,
+            "evaluator_calibration_pass": phoenix_valid and hve_valid,
+            "evaluator_runtime_valid": True,
             "eligible_for_scoring": (
                 phase == "evaluation" and phoenix_valid and hve_valid
             ),
@@ -249,6 +254,34 @@ def test_calibration_fails_when_no_budget_produces_paired_artifacts(tmp_path):
 
     assert output["decision"] == "failed"
     assert output["selected_max_ai_credits"] is None
+
+
+def test_calibration_fails_when_public_evaluator_runtime_does_not_pass(tmp_path):
+    for index in range(2):
+        trial = _write_trial(
+            tmp_path,
+            f"calibration-runtime-{index}",
+            phase="calibration",
+            max_ai_credits=60,
+            phoenix_valid=True,
+            hve_valid=True,
+            phoenix_wins=0,
+            hve_wins=0,
+        )
+        comparison = trial / "comparison.json"
+        document = json.loads(comparison.read_text(encoding="utf-8"))
+        document["trial_outcome"]["evaluator_calibration_pass"] = False
+        document["trial_outcome"]["calibration_pass"] = False
+        write_exact_bytes(
+            comparison,
+            (json.dumps(document, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+        )
+        write_checksums(trial)
+
+    output = calibration.summarize_calibration_root(tmp_path)
+
+    assert output["decision"] == "failed"
+    assert output["budgets"][0]["evaluator_valid"] == 0
 
 
 def test_calibration_summarizer_supports_direct_script_execution():
@@ -533,6 +566,35 @@ def test_futility_stop_when_conditional_quality_minimum_is_unreachable(tmp_path)
     assert output["futility_stop"] is True
 
 
+def test_evaluator_runtime_failure_is_never_scored_as_quality_or_end_to_end(tmp_path):
+    trial = _write_trial(
+        tmp_path,
+        "trial-evaluator-timeout",
+        phoenix_valid=True,
+        hve_valid=True,
+        phoenix_wins=2,
+        hve_wins=0,
+    )
+    comparison = trial / "comparison.json"
+    document = json.loads(comparison.read_text(encoding="utf-8"))
+    document["trial_outcome"]["evaluator_runtime_valid"] = False
+    document["trial_outcome"]["eligible_for_scoring"] = False
+    write_exact_bytes(
+        comparison,
+        (json.dumps(document, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+    )
+    write_checksums(trial)
+
+    output = summarizer.summarize_root(
+        tmp_path,
+        primary_estimand="end-to-end",
+    )
+
+    assert output["trial_counts"]["both_valid"] == 0
+    assert output["trial_counts"]["end_to_end"] == 0
+    assert output["decision"] == "inconclusive"
+
+
 def test_unequal_tool_shim_is_excluded(tmp_path):
     _write_trial(tmp_path, "trial-reference")
     _write_trial(tmp_path, "trial-unequal-shim", shim_equal=False)
@@ -602,10 +664,17 @@ def test_comparison_accepts_a_unique_explicit_balanced_seed_set():
             "10000",
             "--held-out-seed",
             "10006",
+            "--board-profile",
+            "compact",
+            "--max-game-turns",
+            "40",
         ]
     )
     assert parsed.held_out_seed == [10000, 10006]
     assert parsed.phase == "evaluation"
+    assert parsed.match_timeout == 60.0
+    assert parsed.board_profile == "compact"
+    assert parsed.max_game_turns == 40
 
     calibration = parser.parse_args(
         [
@@ -617,9 +686,12 @@ def test_comparison_accepts_a_unique_explicit_balanced_seed_set():
             "explicit-model-id",
             "--phase",
             "calibration",
+            "--calibration-game-seed",
+            "10",
         ]
     )
     assert calibration.phase == "calibration"
+    assert calibration.calibration_game_seed == [10]
 
 
 @pytest.mark.parametrize(

@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 import subprocess
 
+import pytest
+
 from atv_bench.comparison import (
     engine_for_seed,
     git_commit,
     git_tree,
     materialize_pointer_tree,
     parse_copilot_jsonl,
+    run_game,
     scan_harness_assets,
     summarize_games,
     tracked_tree_listing_sha256,
@@ -28,6 +31,25 @@ def test_engine_for_seed_is_deterministic_and_asymmetric():
     assert 0 < first.start_b[0] < first.width - 1
 
 
+def test_compact_engine_profile_and_explicit_turn_cap_are_deterministic():
+    engine = engine_for_seed(123, board_profile="compact", max_turns=40)
+    assert 11 <= engine.width <= 15
+    assert 9 <= engine.height <= 13
+    assert engine.max_turns == 40
+    assert engine == engine_for_seed(
+        123,
+        board_profile="compact",
+        max_turns=40,
+    )
+
+
+def test_engine_profile_and_turn_cap_fail_closed():
+    with pytest.raises(ValueError, match="board_profile"):
+        engine_for_seed(1, board_profile="unknown")
+    with pytest.raises(ValueError, match="max_turns"):
+        engine_for_seed(1, max_turns=0)
+
+
 def test_summarize_games_counts_side_swapped_results():
     summary = summarize_games(
         [
@@ -43,6 +65,27 @@ def test_summarize_games_counts_side_swapped_results():
     assert summary["draws"] == 1
     assert summary["harness_a_decisive_win_rate"] == 0.6667
     assert summary["harness_a_decisive_win_rate_ci95"] == wilson_interval(2, 3)
+
+
+def test_run_game_propagates_hard_match_timeout(tmp_path):
+    bot = tmp_path / "bot.py"
+    bot.write_text(
+        "import sys\nfor _ in sys.stdin:\n print('right', flush=True)\n",
+        encoding="utf-8",
+    )
+
+    result = run_game(
+        bot,
+        bot,
+        seed=123,
+        per_turn_timeout=1.0,
+        match_timeout=0.001,
+        board_profile="compact",
+        max_turns=40,
+    )
+
+    assert result["outcome"] == "draw"
+    assert result["termination_reason"] == "MATCH_TIMEOUT"
 
 
 def test_materialize_pointer_tree_resolves_file_and_directory_pointers(tmp_path):

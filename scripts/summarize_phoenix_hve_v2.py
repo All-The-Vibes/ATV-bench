@@ -155,6 +155,9 @@ def _invalid_trial(directory: Path, reason: str) -> dict[str, Any]:
         "copilot_cli": None,
         "held_out_seed_count": None,
         "per_turn_timeout_seconds": None,
+        "match_timeout_seconds": None,
+        "board_profile": None,
+        "max_game_turns": None,
         "harness_timeout_seconds": None,
         "max_ai_credits": None,
         "reported_models": {"phoenix": None, "hve": None},
@@ -172,6 +175,8 @@ def _invalid_trial(directory: Path, reason: str) -> dict[str, Any]:
         "artifact_validity": {"phoenix": False, "hve": False},
         "execution_validity": {"phoenix": False, "hve": False},
         "calibration_pass": False,
+        "evaluator_calibration_pass": False,
+        "evaluator_runtime_valid": False,
         "eligible_for_scoring": False,
         "build_status": {"phoenix": None, "hve": None},
         "bot_sha256": {"phoenix": None, "hve": None},
@@ -355,9 +360,15 @@ def load_trial(directory: str | Path) -> dict[str, Any]:
         "hve": bool(builds["hve"].get("execution_valid")),
     }
     end_to_end_score_difference: float | None = None
+    eligible_for_scoring = bool(trial_outcome.get("eligible_for_scoring"))
+    evaluator_runtime_valid = bool(trial_outcome.get("evaluator_runtime_valid"))
     if all(model_matches_request.values()) and all(execution_validity.values()):
         if phoenix_valid and hve_valid:
-            end_to_end_score_difference = score_difference
+            end_to_end_score_difference = (
+                score_difference
+                if eligible_for_scoring and evaluator_runtime_valid
+                else None
+            )
         elif phoenix_valid:
             end_to_end_score_difference = 1.0
         elif hve_valid:
@@ -388,6 +399,9 @@ def load_trial(directory: str | Path) -> dict[str, Any]:
         "copilot_cli": methodology.get("copilot_cli"),
         "held_out_seed_count": methodology.get("held_out_seeds"),
         "per_turn_timeout_seconds": methodology.get("per_turn_timeout_seconds"),
+        "match_timeout_seconds": methodology.get("match_timeout_seconds"),
+        "board_profile": methodology.get("board_profile"),
+        "max_game_turns": methodology.get("max_game_turns"),
         "harness_timeout_seconds": methodology.get("harness_timeout_seconds"),
         "max_ai_credits": methodology.get("max_ai_credits"),
         "reported_models": reported_models,
@@ -416,7 +430,11 @@ def load_trial(directory: str | Path) -> dict[str, Any]:
         },
         "execution_validity": execution_validity,
         "calibration_pass": bool(trial_outcome.get("calibration_pass")),
-        "eligible_for_scoring": bool(trial_outcome.get("eligible_for_scoring")),
+        "evaluator_calibration_pass": bool(
+            trial_outcome.get("evaluator_calibration_pass")
+        ),
+        "evaluator_runtime_valid": evaluator_runtime_valid,
+        "eligible_for_scoring": eligible_for_scoring,
         "build_status": {
             "phoenix": builds["phoenix"].get("status"),
             "hve": builds["hve"].get("status"),
@@ -484,6 +502,9 @@ def exclusion_reasons(
         ("copilot_cli", "Copilot CLI"),
         ("held_out_seed_count", "held-out seed count"),
         ("per_turn_timeout_seconds", "per-turn timeout"),
+        ("match_timeout_seconds", "match timeout"),
+        ("board_profile", "board profile"),
+        ("max_game_turns", "maximum game turns"),
         ("harness_timeout_seconds", "harness timeout"),
     ):
         if row[field] != reference[field] or row[field] is None:
@@ -715,6 +736,9 @@ def summarize_rows(
         "copilot_cli": reference["copilot_cli"],
         "held_out_seed_count": reference["held_out_seed_count"],
         "per_turn_timeout_seconds": reference["per_turn_timeout_seconds"],
+        "match_timeout_seconds": reference["match_timeout_seconds"],
+        "board_profile": reference["board_profile"],
+        "max_game_turns": reference["max_game_turns"],
         "harness_timeout_seconds": reference["harness_timeout_seconds"],
         "max_ai_credits": reference["max_ai_credits"],
         "prompt_sha256": reference["prompt_sha256"],

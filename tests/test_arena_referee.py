@@ -14,7 +14,10 @@ from __future__ import annotations
 
 import sys
 import textwrap
+import time
 from pathlib import Path
+
+import pytest
 
 from atv_bench.arena.engine import Direction, Outcome, TronEngine
 from atv_bench.arena.referee import (
@@ -42,6 +45,19 @@ class ScriptedSource:
 
     def close(self):
         self.closed = True
+
+
+class SlowSource:
+    def __init__(self, move, delay):
+        self.move = move
+        self.delay = delay
+
+    def next_move(self, observation):
+        time.sleep(self.delay)
+        return self.move
+
+    def close(self):
+        pass
 
 
 def small_engine(**kw):
@@ -107,6 +123,32 @@ def test_draw_is_reported():
     b = ScriptedSource([Direction.LEFT])  # both target (4,2) -> draw
     res = run_match(eng, a, b, **IDS)
     assert res["outcome"] == "draw"
+
+
+def test_match_wall_timeout_is_a_bounded_explicit_draw():
+    eng = small_engine(max_turns=500)
+    result = run_match(
+        eng,
+        SlowSource(Direction.RIGHT, 0.02),
+        SlowSource(Direction.LEFT, 0.02),
+        match_timeout_seconds=0.01,
+        **IDS,
+    )
+
+    assert result["outcome"] == "draw"
+    assert result["termination_reason"] == "MATCH_TIMEOUT"
+
+
+def test_match_wall_timeout_must_be_positive():
+    eng = small_engine()
+    with pytest.raises(ValueError, match="match_timeout_seconds"):
+        run_match(
+            eng,
+            ScriptedSource([Direction.RIGHT]),
+            ScriptedSource([Direction.LEFT]),
+            match_timeout_seconds=0,
+            **IDS,
+        )
 
 
 def test_trusted_greedy_bot_never_suicides_when_a_move_exists():
