@@ -103,3 +103,10 @@ The report also publishes:
 - artifact and execution reliability separately;
 - all exclusions and replacement reasons.
 
+## Pre-result attempt ledger
+
+At `2026-07-20T20:20:17.9032121Z`, before inspecting a result from `primary-1`,
+unrelated local pytest sweeps were discovered running concurrently with that attempt.
+The sweeps were stopped, but `primary-1` was prospectively marked
+`excluded_infrastructure_contamination`. Its artifacts remain preserved, and
+`reserve-1` replaces it. This decision cannot be reversed based on its outcome.
