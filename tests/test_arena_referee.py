@@ -168,6 +168,7 @@ def test_subprocess_bot_printing_fake_result_is_invalid_move_and_forfeits(tmp_pa
     try:
         mv = src.next_move({"width": 9, "height": 5})
         assert mv is None  # fabricated result is NOT a valid move
+        assert src.last_forfeit_reason is ForfeitReason.CRASH
     finally:
         src.close()
 
@@ -182,6 +183,7 @@ def test_subprocess_bot_that_hangs_times_out_to_none(tmp_path):
     try:
         mv = src.next_move({"width": 9, "height": 5})
         assert mv is None
+        assert src.last_forfeit_reason is ForfeitReason.TIMEOUT
     finally:
         src.close()
 
@@ -205,3 +207,24 @@ def test_end_to_end_malicious_bot_loses_via_run_match(tmp_path):
     assert res["outcome"] == "forfeit_b"  # submitter (player_b) forfeited
     assert res["player_a"] == "byok-anchor"
     assert res["player_b"] == "alice"
+
+
+def test_end_to_end_hanging_bot_is_labeled_timeout_not_crash(tmp_path):
+    bot = _write_bot(tmp_path, """
+        import sys, time
+        for line in sys.stdin:
+            time.sleep(30)
+    """)
+    eng = small_engine()
+    anchor = TrustedGreedyBot(player="a")
+    hanging = SubprocessMoveSource(
+        [sys.executable, str(bot)],
+        per_turn_timeout=0.1,
+    )
+    try:
+        res = run_match(eng, anchor, hanging, **IDS)
+    finally:
+        hanging.close()
+
+    assert res["outcome"] == "forfeit_b"
+    assert res["forfeit_reason"] == ForfeitReason.TIMEOUT.value

@@ -395,24 +395,51 @@ def scan_harness_assets(root: str | Path) -> dict[str, Any]:
 
 
 def parse_copilot_jsonl(payload: bytes | str) -> dict[str, Any]:
-    """Extract a bounded publishable summary, excluding opaque reasoning fields."""
-    text = payload.decode("utf-8", errors="replace") if isinstance(payload, bytes) else payload
-    model = "unknown"
+    """Extract a bounded summary plus a fail-closed model-evidence receipt.
+
+    Every model-bearing event is retained as a normalized identifier. Malformed
+    lines are counted rather than silently ignored so callers can reject partial
+    or mixed receipts instead of trusting whichever model happened to appear last.
+    """
+    utf8_decode_errors = 0
+    if isinstance(payload, bytes):
+        try:
+            text = payload.decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            utf8_decode_errors = 1
+            text = payload.decode("utf-8", errors="replace")
+    else:
+        text = payload
     final = ""
     result: dict[str, Any] = {}
     skill_sources: Counter[str] = Counter()
     mcp_servers: list[dict[str, Any]] = []
+    observed_models: list[str] = []
+    model_event_types: Counter[str] = Counter()
+    parse_error_count = 0
+    non_object_event_count = 0
+    terminal_result_count = 0
+    nonempty_line_count = 0
     for line in text.splitlines():
+        if not line.strip():
+            continue
+        nonempty_line_count += 1
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
+            parse_error_count += 1
             continue
         if not isinstance(event, dict):
+            non_object_event_count += 1
             continue
-        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        raw_data = event.get("data")
+        data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
+        event_type = str(event.get("type", "unknown"))
+        event_model = data.get("model")
+        if isinstance(event_model, str) and event_model.strip():
+            observed_models.append(event_model.strip())
+            model_event_types[event_type] += 1
         if event.get("type") == "assistant.message":
-            if isinstance(data.get("model"), str):
-                model = data["model"]
             if isinstance(data.get("content"), str):
                 final = data["content"][-16_384:]
         elif event.get("type") == "session.skills_loaded":
@@ -430,17 +457,81 @@ def parse_copilot_jsonl(payload: bytes | str) -> dict[str, Any]:
                 if isinstance(item, dict)
             ]
         elif event.get("type") == "result":
+            terminal_result_count += 1
             result = {
                 "exit_code": event.get("exitCode"),
                 "session_id": event.get("sessionId"),
                 "usage": event.get("usage", {}),
             }
+    unique_models = sorted(set(observed_models))
+    terminal_success = (
+        terminal_result_count == 1
+        and result.get("exit_code") == 0
+        and isinstance(result.get("session_id"), str)
+        and bool(result["session_id"])
+    )
     return {
-        "model": model,
+        "model": unique_models[0] if len(unique_models) == 1 else None,
+        "observed_models": unique_models,
+        "model_event_count": len(observed_models),
+        "model_event_types": dict(sorted(model_event_types.items())),
+        "parse_error_count": parse_error_count,
+        "utf8_decode_errors": utf8_decode_errors,
+        "non_object_event_count": non_object_event_count,
+        "nonempty_line_count": nonempty_line_count,
+        "terminal_result_count": terminal_result_count,
+        "terminal_result_seen": terminal_result_count > 0,
+        "terminal_success": terminal_success,
         "final_message": final,
         "result": result,
         "enabled_skill_sources": dict(skill_sources),
         "mcp_servers": mcp_servers,
+    }
+
+
+def attest_copilot_model_receipt(
+    runtime: dict[str, Any],
+    *,
+    requested_model: str,
+) -> dict[str, Any]:
+    """Evaluate a parsed Copilot JSONL receipt without trusting a collapsed model."""
+    observed = runtime.get("observed_models", [])
+    parse_errors = int(runtime.get("parse_error_count", 0))
+    utf8_errors = int(runtime.get("utf8_decode_errors", 0))
+    non_object_events = int(runtime.get("non_object_event_count", 0))
+    terminal_result_count = int(runtime.get("terminal_result_count", 0))
+    terminal_success = bool(runtime.get("terminal_success"))
+    reasons: list[str] = []
+    if parse_errors:
+        reasons.append("malformed-jsonl")
+    if utf8_errors:
+        reasons.append("invalid-utf8")
+    if non_object_events:
+        reasons.append("non-object-jsonl-event")
+    if not isinstance(observed, list) or not observed:
+        reasons.append("model-evidence-missing")
+    elif len(observed) != 1:
+        reasons.append("mixed-model-evidence")
+    elif observed[0] != requested_model:
+        reasons.append("requested-reported-model-mismatch")
+    if terminal_result_count != 1:
+        reasons.append("terminal-result-count-invalid")
+    if not terminal_success:
+        reasons.append("terminal-result-unsuccessful")
+    return {
+        "status": "pass" if not reasons else "fail",
+        "requested_model": requested_model,
+        "selection_source": "not_attested_by_jsonl_receipt",
+        "observed_models": observed if isinstance(observed, list) else [],
+        "model_event_count": int(runtime.get("model_event_count", 0)),
+        "model_event_types": runtime.get("model_event_types", {}),
+        "parse_error_count": parse_errors,
+        "utf8_decode_errors": utf8_errors,
+        "non_object_event_count": non_object_events,
+        "terminal_result_count": terminal_result_count,
+        "terminal_success": terminal_success,
+        "provider_signed": False,
+        "reasons": reasons,
     }
 
 

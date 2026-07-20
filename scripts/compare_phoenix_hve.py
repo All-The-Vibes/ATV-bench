@@ -27,6 +27,7 @@ from typing import Any
 
 from atv_bench.adapters.contract import build_child_environment, capture_repo_diff, git_base
 from atv_bench.comparison import (
+    attest_copilot_model_receipt,
     git_commit,
     git_tree,
     materialize_pointer_tree,
@@ -524,9 +525,9 @@ def _run_validation(
     }
 
 
-def _empty_series() -> dict[str, Any]:
+def _empty_series(reason: str = "not_run_invalid_or_noncomparable_trial") -> dict[str, Any]:
     return {
-        "status": "not_run_invalid_artifact",
+        "status": reason,
         "summary": summarize_games([]),
         "games": [],
     }
@@ -535,6 +536,23 @@ def _empty_series() -> dict[str, Any]:
 def _render_readme(document: dict[str, Any]) -> str:
     summary = document["series"]["phoenix_vs_hve"]["summary"]
     classification = document["trial_outcome"]["classification"]
+    requested_model = document["methodology"]["requested_model"]
+    phoenix_attestation = document["builds"]["phoenix"]["model_attestation"]
+    hve_attestation = document["builds"]["hve"]["model_attestation"]
+    if document["trial_outcome"]["comparable"]:
+        model_statement = (
+            f"Both Copilot JSONL receipts consistently reported `{requested_model}` "
+            "and contained one successful terminal result. This remains CLI-self-"
+            "reported rather than provider-signed evidence."
+        )
+    else:
+        model_statement = (
+            f"Requested model: `{requested_model}`. Phoenix observed "
+            f"`{phoenix_attestation['observed_models']}` with attestation "
+            f"`{phoenix_attestation['status']}`; hve-core observed "
+            f"`{hve_attestation['observed_models']}` with attestation "
+            f"`{hve_attestation['status']}`. This trial is noncomparable."
+        )
     return f"""# NON-RANKABLE local case study: ATV-Phoenix vs hve-core
 
 Run: `{document["run_id"]}`
@@ -543,10 +561,12 @@ Run: `{document["run_id"]}`
 not establish a global harness winner.** It is one local, self-attested, fresh paired
 harness trial on a synthetic Lightcycles task.
 
-Both harnesses used the same Copilot CLI, model `{document["methodology"]["model"]}`,
-goal, seed repository, budget, and compatibility-shim policy. Every held-out seed was
-played twice with sides swapped, but those {summary["games"]} games are nested
-descriptive measurements—not {summary["games"]} independent harness trials.
+{model_statement}
+
+Both harnesses were assigned the same Copilot CLI, goal, seed repository, budget, and
+compatibility-shim policy. Every held-out seed was played twice with sides swapped,
+but those {summary["games"]} games are nested descriptive measurements—not
+{summary["games"]} independent harness trials.
 
 Artifact classification: **{classification}**.
 
@@ -564,14 +584,79 @@ make even a task-contract-specific decision.
 """
 
 
-def main() -> None:
+def _candidate_is_valid(
+    *,
+    bot_path: Path,
+    validation: dict[str, Any],
+) -> bool:
+    """Validate the candidate artifact independently from execution provenance."""
+    return bool(
+        bot_path.is_file()
+        and validation["compile_ok"]
+        and validation["smoke_ok"]
+    )
+
+
+def _model_identifier(value: str) -> str:
+    normalized = value.strip()
+    if (
+        not normalized
+        or normalized != value
+        or any(character.isspace() for character in normalized)
+        or normalized.casefold() in {"unknown", "default", "auto"}
+    ):
+        raise argparse.ArgumentTypeError(
+            "model must be an explicit nonblank identifier; auto/default/unknown "
+            "and whitespace are not allowed"
+        )
+    return normalized
+
+
+def _model_attestation(
+    runtime: dict[str, Any],
+    *,
+    requested_model: str,
+) -> dict[str, Any]:
+    receipt = attest_copilot_model_receipt(
+        runtime,
+        requested_model=requested_model,
+    )
+    receipt["selection_source"] = "explicit_cli"
+    return receipt
+
+
+def _argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--phoenix-repo", required=True)
     parser.add_argument("--hve-repo", required=True)
     parser.add_argument("--out")
-    parser.add_argument("--model", default="gpt-5.4")
+    parser.add_argument(
+        "--model",
+        required=True,
+        type=_model_identifier,
+        help=(
+            "Exact Copilot CLI model identifier for this preregistered case-study "
+            "cell. No implicit model default is allowed."
+        ),
+    )
     parser.add_argument("--held-out-seeds", type=int, default=4)
     parser.add_argument("--seed-start", type=int, default=100)
+    parser.add_argument(
+        "--held-out-seed",
+        action="append",
+        type=int,
+        default=[],
+        help=(
+            "Explicit held-out seed; repeat for a preregistered balanced seed set. "
+            "When supplied, --held-out-seeds and --seed-start are ignored."
+        ),
+    )
+    parser.add_argument(
+        "--per-turn-timeout",
+        type=float,
+        default=3.0,
+        help="Held-out Lightcycles move deadline in seconds for both candidates.",
+    )
     parser.add_argument("--timeout", type=int, default=900)
     parser.add_argument("--max-ai-credits", type=int, default=30)
     parser.add_argument(
@@ -583,9 +668,20 @@ def main() -> None:
             "to both selected agents and record before/after hashes."
         ),
     )
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> None:
+    args = _argument_parser().parse_args()
     if args.held_out_seeds <= 0:
         raise SystemExit("--held-out-seeds must be positive")
+    if args.held_out_seed and (
+        any(seed < 0 for seed in args.held_out_seed)
+        or len(set(args.held_out_seed)) != len(args.held_out_seed)
+    ):
+        raise SystemExit("--held-out-seed values must be unique non-negative integers")
+    if args.per_turn_timeout <= 0:
+        raise SystemExit("--per-turn-timeout must be positive")
     if args.timeout <= 0:
         raise SystemExit("--timeout must be positive")
 
@@ -684,6 +780,12 @@ def main() -> None:
         builds: dict[str, Any] = {}
         for name, execution in executions.items():
             runtime = parse_copilot_jsonl(execution.stdout)
+            model_attestation = _model_attestation(
+                runtime,
+                requested_model=args.model,
+            )
+            runtime["model_attestation"] = model_attestation
+            reported_model = runtime["model"]
             raw_stdout_sha256 = write_exact_bytes(
                 out / "raw" / f"{name}.stdout.bin", execution.stdout
             )
@@ -706,16 +808,23 @@ def main() -> None:
             validation = _run_validation(
                 workspaces[name], environments[name], out, name
             )
-            valid_artifact = bool(
-                bot_path.is_file()
-                and validation["compile_ok"]
-                and validation["smoke_ok"]
+            valid_artifact = _candidate_is_valid(
+                bot_path=bot_path,
+                validation=validation,
+            )
+            execution_valid = bool(
+                execution.status == "ok"
+                and execution.exit_code == 0
+                and runtime["terminal_success"]
             )
             builds[name] = {
                 "status": execution.status,
                 "exit_code": execution.exit_code,
                 "duration_seconds": round(execution.duration_seconds, 6),
-                "reported_model": runtime["model"],
+                "requested_model": args.model,
+                "reported_model": reported_model,
+                "model_matches_request": model_attestation["status"] == "pass",
+                "model_attestation": model_attestation,
                 "reported_usage": runtime["result"].get("usage", {}),
                 "enabled_skill_sources": runtime["enabled_skill_sources"],
                 "mcp_servers": runtime["mcp_servers"],
@@ -724,6 +833,7 @@ def main() -> None:
                 "bot_sha256": bot_sha256,
                 "candidate_persisted_even_if_invalid": bot_path.is_file(),
                 "valid_artifact": valid_artifact,
+                "execution_valid": execution_valid,
                 "validation": validation,
                 "diff_sha256": diff_sha256,
                 "raw_stdout_sha256": raw_stdout_sha256,
@@ -731,36 +841,80 @@ def main() -> None:
                 "runtime_summary_sha256": runtime_sha256,
             }
 
-        held_out = range(args.seed_start, args.seed_start + args.held_out_seeds)
+        held_out = (
+            tuple(args.held_out_seed)
+            if args.held_out_seed
+            else tuple(range(args.seed_start, args.seed_start + args.held_out_seeds))
+        )
         phoenix_bot = phoenix_workspace / "main.py"
         hve_bot = hve_workspace / "main.py"
         baseline = seed / "baseline.py"
-        both_valid = builds["phoenix"]["valid_artifact"] and builds["hve"]["valid_artifact"]
+        build_comparability = {
+            name: bool(
+                builds[name]["valid_artifact"]
+                and builds[name]["execution_valid"]
+                and builds[name]["model_attestation"]["status"] == "pass"
+            )
+            for name in ("phoenix", "hve")
+        }
+        trial_comparable = all(build_comparability.values())
         series = {
             "phoenix_vs_hve": (
-                play_series(phoenix_bot, hve_bot, seeds=held_out)
-                if both_valid
-                else _empty_series()
+                play_series(
+                    phoenix_bot,
+                    hve_bot,
+                    seeds=held_out,
+                    per_turn_timeout=args.per_turn_timeout,
+                )
+                if trial_comparable
+                else _empty_series("not_run_noncomparable_trial")
             ),
             "phoenix_vs_baseline": (
-                play_series(phoenix_bot, baseline, seeds=held_out)
-                if builds["phoenix"]["valid_artifact"]
-                else _empty_series()
+                play_series(
+                    phoenix_bot,
+                    baseline,
+                    seeds=held_out,
+                    per_turn_timeout=args.per_turn_timeout,
+                )
+                if build_comparability["phoenix"]
+                else _empty_series("not_run_noncomparable_phoenix_build")
             ),
             "hve_vs_baseline": (
-                play_series(hve_bot, baseline, seeds=held_out)
-                if builds["hve"]["valid_artifact"]
-                else _empty_series()
+                play_series(
+                    hve_bot,
+                    baseline,
+                    seeds=held_out,
+                    per_turn_timeout=args.per_turn_timeout,
+                )
+                if build_comparability["hve"]
+                else _empty_series("not_run_noncomparable_hve_build")
             ),
-            "baseline_control": play_series(baseline, baseline, seeds=held_out),
+            "baseline_control": play_series(
+                baseline,
+                baseline,
+                seeds=held_out,
+                per_turn_timeout=args.per_turn_timeout,
+            ),
         }
 
         artifact_validity = {
             "phoenix": bool(builds["phoenix"]["valid_artifact"]),
             "hve": bool(builds["hve"]["valid_artifact"]),
         }
-        if all(artifact_validity.values()):
-            classification = "both-valid-artifacts"
+        execution_validity = {
+            "phoenix": bool(builds["phoenix"]["execution_valid"]),
+            "hve": bool(builds["hve"]["execution_valid"]),
+        }
+        attestation_validity = {
+            "phoenix": builds["phoenix"]["model_attestation"]["status"] == "pass",
+            "hve": builds["hve"]["model_attestation"]["status"] == "pass",
+        }
+        if not all(attestation_validity.values()):
+            classification = "model-attestation-failed"
+        elif not all(execution_validity.values()):
+            classification = "harness-execution-invalid"
+        elif all(artifact_validity.values()):
+            classification = "comparable-both-valid"
         elif artifact_validity["phoenix"]:
             classification = "phoenix-valid-hve-invalid"
         elif artifact_validity["hve"]:
@@ -790,13 +944,24 @@ def main() -> None:
                 },
                 "game": "lightcycles",
                 "model": args.model,
+                "requested_model": args.model,
+                "model_selection_source": "explicit_cli",
+                "model_identity_policy": (
+                    "complete_jsonl_single_observed_model_exact_match_and_"
+                    "successful_terminal_result"
+                ),
+                "model_identity_attestation": "copilot_cli_jsonl_self_reported",
                 "copilot_cli": _run_text(node, loader, "--version").splitlines()[0],
                 "node": _run_text(node, "--version"),
                 "python": platform.python_version(),
                 "platform": platform.platform(),
                 "prompt_sha256": hashlib.sha256(GOAL.encode("utf-8")).hexdigest(),
-                "held_out_seeds": args.held_out_seeds,
-                "seed_start": args.seed_start,
+                "held_out_seeds": len(held_out),
+                "held_out_seed_values": list(held_out),
+                "seed_start": None if args.held_out_seed else args.seed_start,
+                "per_turn_timeout_seconds": args.per_turn_timeout,
+                "harness_timeout_seconds": args.timeout,
+                "max_ai_credits": args.max_ai_credits,
                 "side_swapped": True,
                 "same_seed_repository": True,
                 "parallel_builds": True,
@@ -844,6 +1009,10 @@ def main() -> None:
             "trial_outcome": {
                 "independent_unit": "fresh_paired_harness_trial",
                 "artifact_validity": artifact_validity,
+                "execution_validity": execution_validity,
+                "model_attestation_validity": attestation_validity,
+                "build_comparability": build_comparability,
+                "comparable": trial_comparable,
                 "classification": classification,
                 "quality_winner_claimed": False,
                 "invalid_artifacts_persisted": True,
@@ -852,6 +1021,7 @@ def main() -> None:
             "limitations": [
                 "One model, one synthetic Lightcycles task contract, and local execution.",
                 "Local self-attested execution, not trusted protocol-v1 OCI evidence.",
+                "Requested model identity is only self-reported by Copilot CLI, not provider-signed.",
                 "Provider credentials entered the harness process.",
                 "Network isolation was requested in the prompt but not technically enforced.",
                 "Games are nested under one fresh paired harness trial.",
@@ -871,11 +1041,14 @@ def main() -> None:
                     "rankable": False,
                     "official": False,
                     "classification": classification,
+                    "comparable": trial_comparable,
                     "nested_result": series["phoenix_vs_hve"]["summary"],
                 },
                 indent=2,
             )
         )
+        if not trial_comparable:
+            raise SystemExit(2)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

@@ -4683,16 +4683,6 @@ class LocalVerificationRunner:
             max_output_bytes=MAX_CAPTURE_BYTES,
             env=self._environment(spec),
         )
-        if spec.junit:
-            try:
-                _safe_remove_verification_temp(
-                    _pytest_basetemp(self.output_root, repository, spec)
-                )
-            except VerificationError as exc:
-                raw = dataclasses.replace(
-                    raw,
-                    error=f"pytest temporary-directory cleanup failed: {exc}",
-                )
         raw = _sanitize_raw_execution(
             raw,
             repo_root=self.repo_root,
@@ -4737,6 +4727,16 @@ class LocalVerificationRunner:
                         junit_path, self.repo_root, label=f"{spec.id} JUnit"
                     ),
                 }
+        if spec.junit:
+            try:
+                _safe_remove_verification_temp(
+                    _pytest_basetemp(self.output_root, repository, spec)
+                )
+            except VerificationError as exc:
+                raw = dataclasses.replace(
+                    raw,
+                    error=f"pytest temporary-directory cleanup failed: {exc}",
+                )
         artifacts: list[dict[str, Any]] = []
         docker_case_error = _docker_case_error(spec.id, junit)
         if docker_case_error:

@@ -506,6 +506,39 @@ def test_junit_hostname_is_removed_before_public_evidence(tmp_path):
     assert "hostname=" not in sanitized
 
 
+def test_junit_is_captured_before_potentially_slow_pytest_cleanup(
+    tmp_path,
+    monkeypatch,
+):
+    repo = _make_repo(tmp_path)
+    order: list[str] = []
+    original_sanitize = verification._sanitize_junit_metadata
+    original_cleanup = verification._safe_remove_verification_temp
+
+    def sanitize(*args, **kwargs):
+        order.append("sanitize")
+        return original_sanitize(*args, **kwargs)
+
+    def cleanup(*args, **kwargs):
+        order.append("cleanup")
+        return original_cleanup(*args, **kwargs)
+
+    monkeypatch.setattr(verification, "_sanitize_junit_metadata", sanitize)
+    monkeypatch.setattr(verification, "_safe_remove_verification_temp", cleanup)
+
+    _run_quick(repo)
+
+    assert order
+    sanitize_indices = [
+        index for index, action in enumerate(order) if action == "sanitize"
+    ]
+    assert sanitize_indices
+    assert all(
+        index + 1 < len(order) and order[index + 1] == "cleanup"
+        for index in sanitize_indices
+    )
+
+
 def test_public_stream_sanitizer_removes_paths_hosts_and_secret_values(
     tmp_path,
     monkeypatch,

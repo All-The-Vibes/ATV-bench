@@ -136,6 +136,7 @@ class SubprocessMoveSource:
     def __init__(self, argv: list[str], *, per_turn_timeout: float = 2.0) -> None:
         self.per_turn_timeout = per_turn_timeout
         self._dead = False
+        self.last_forfeit_reason: ForfeitReason | None = None
         self.proc = subprocess.Popen(
             argv,
             stdin=subprocess.PIPE,
@@ -146,7 +147,9 @@ class SubprocessMoveSource:
         )
 
     def next_move(self, observation: dict[str, Any]) -> Direction | None:
+        self.last_forfeit_reason = None
         if self._dead or self.proc.poll() is not None:
+            self.last_forfeit_reason = ForfeitReason.CRASH
             return None
         line_holder: list[str | None] = [None]
 
@@ -164,12 +167,19 @@ class SubprocessMoveSource:
         if t.is_alive():
             # Hung this turn — kill the process and forfeit. A killed bot can never be
             # asked again (poll() != None), so the whole match forfeits cleanly.
+            self.last_forfeit_reason = ForfeitReason.TIMEOUT
             self._kill()
             return None
         raw = line_holder[0]
         if not raw:  # EOF / empty => no move
+            self.last_forfeit_reason = ForfeitReason.CRASH
             return None
-        return parse_move(raw)
+        move = parse_move(raw)
+        if move is None:
+            # The public result schema has no INVALID_RESPONSE reason. Keep this in
+            # the generic crash/failure bucket rather than falsely calling it a timeout.
+            self.last_forfeit_reason = ForfeitReason.CRASH
+        return move
 
     def _kill(self) -> None:
         self._dead = True
@@ -210,6 +220,18 @@ def _frame(state: GameState) -> dict[str, Any]:
         "b": {"pos": list(state.pos_b),
               "trail": [list(c) for c in sorted(state.trail_b)]},
     }
+
+
+def _source_forfeit_reason(source: MoveSource) -> ForfeitReason:
+    reason = getattr(source, "last_forfeit_reason", None)
+    if isinstance(reason, ForfeitReason):
+        return reason
+    if isinstance(reason, str):
+        try:
+            return ForfeitReason(reason)
+        except ValueError:
+            pass
+    return ForfeitReason.CRASH
 
 
 def run_match(engine: TronEngine, source_a: MoveSource, source_b: MoveSource, *,
@@ -267,9 +289,11 @@ def run_match(engine: TronEngine, source_a: MoveSource, source_b: MoveSource, *,
                     "game": game, "seed": seed,
                 })
             who = "a" if a_forfeit else "b"
+            failed_source = source_a if a_forfeit else source_b
             return _finalize(_forfeit_record(player_a=player_a, player_b=player_b,
                                    match_id=match_id, who=who,
-                                   reason=ForfeitReason.CRASH, game=game, seed=seed))
+                                   reason=_source_forfeit_reason(failed_source),
+                                   game=game, seed=seed))
 
         state = engine.tick(state, move_a, move_b)
         _emit(state)

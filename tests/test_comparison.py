@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-from pathlib import Path
 
 from atv_bench.comparison import (
     engine_for_seed,
@@ -125,9 +124,52 @@ def test_parse_copilot_jsonl_ignores_encrypted_payloads():
         "\n".join(json.dumps(item) for item in lines).encode("utf-8")
     )
     assert parsed["model"] == "gpt-5.4"
+    assert parsed["observed_models"] == ["gpt-5.4"]
+    assert parsed["parse_error_count"] == 0
+    assert parsed["terminal_result_count"] == 1
+    assert parsed["terminal_success"] is True
     assert parsed["final_message"] == "done"
     assert parsed["enabled_skill_sources"] == {"plugin": 1}
     assert "secret" not in json.dumps(parsed)
+
+
+def test_parse_copilot_jsonl_exposes_mixed_missing_and_malformed_model_evidence():
+    mixed = [
+        {"type": "assistant.turn_start", "data": {"model": "wrong-model"}},
+        {"type": "assistant.message", "data": {"model": "requested-model"}},
+        {
+            "type": "result",
+            "exitCode": 0,
+            "sessionId": "session",
+            "usage": {},
+        },
+    ]
+    payload = (
+        "\n".join(json.dumps(item) for item in mixed)
+        + "\nnot-json\n"
+    ).encode("utf-8")
+
+    parsed = parse_copilot_jsonl(payload)
+
+    assert parsed["model"] is None
+    assert parsed["observed_models"] == ["requested-model", "wrong-model"]
+    assert parsed["model_event_count"] == 2
+    assert parsed["parse_error_count"] == 1
+    assert parsed["terminal_success"] is True
+
+    missing = parse_copilot_jsonl(
+        json.dumps(
+            {
+                "type": "result",
+                "exitCode": 0,
+                "sessionId": "session",
+                "usage": {},
+            }
+        )
+    )
+    assert missing["model"] is None
+    assert missing["observed_models"] == []
+    assert missing["model_event_count"] == 0
 
 
 def test_exact_byte_checksums_cover_binary_logs_and_detect_tamper(tmp_path):

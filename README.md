@@ -37,6 +37,12 @@ runner identity, and task-clustered uncertainty before they can be official. See
 [`docs/PRODUCTS_AND_TRACKS.md`](docs/PRODUCTS_AND_TRACKS.md) and the
 [`benchmark blueprint`](docs/HARNESS_BENCHMARKING_BLUEPRINT.md).
 
+The historical ATV-Phoenix versus hve-core Lightcycles case study is documented
+separately. Its current verdict is **inconclusive**: Phoenix showed stronger
+end-to-end reliability, while the finalized evidence and statistical winner gates
+were not met. See
+[`docs/PHOENIX_HVE_CASE_STUDY.md`](docs/PHOENIX_HVE_CASE_STUDY.md).
+
 ## How it works — reviewed data + static Pages
 
 ```
