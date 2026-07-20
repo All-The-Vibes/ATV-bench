@@ -1,7 +1,6 @@
 __pycache__/
 *.pyc
 .venv/
-vendor/CodeClash/
 .pytest_cache/
 *.egg-info/
 /tmp/

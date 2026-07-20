@@ -18,7 +18,22 @@ dev = ["pytest>=8.0", "playwright>=1.40", "pyyaml>=6.0"]
 #       flask jinja2 markupsafe scipy unidiff trueskill cdifflib typer zstandard
 # `run` (host-subprocess harness-vs-harness) requires this extra + Docker; the
 # fingerprint / submit / board / play surfaces do not.
-run = ["codeclash"]
+run = [
+  "codeclash @ git+https://github.com/CodeClash-ai/CodeClash@f0694c64ecf6abfca2bc867bad2de9333fef5be8",
+  "mini-swe-agent>=2.4,<3",
+  "litellm<1.80",
+  "python-dotenv",
+  "ghapi",
+  "flask",
+  "jinja2",
+  "markupsafe",
+  "scipy",
+  "unidiff",
+  "trueskill",
+  "cdifflib",
+  "typer",
+  "zstandard",
+]
 
 [project.scripts]
 atv-bench = "atv_bench.cli:app"
@@ -41,4 +56,6 @@ markers = [
   "spike: end-to-end spike tests that invoke real CLIs (may be slow / need auth)",
   "live: requires live CLI auth and network",
   "integration: gated tests needing Docker/containers/secrets (not run on every push)",
+  "e2e: full harness-vs-harness end-to-end runs (needs vendored CodeClash + Playwright)",
+  "drift: pins against the vendored CodeClash internal API surface at CODECLASH_PIN",
 ]

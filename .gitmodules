@@ -1,0 +1,3 @@
+[submodule "vendor/CodeClash"]
+	path = vendor/CodeClash
+	url = https://github.com/CodeClash-ai/CodeClash.git

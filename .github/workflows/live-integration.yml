@@ -1,0 +1,41 @@
+# Live integration suite — NOT run on every push. Exercises the real vendored
+# CodeClash arena (submodule at CODECLASH_PIN) plus the Playwright-driven live
+# board, so it needs the submodule checked out, the `run` + `dev` extras, and a
+# Chromium install. Gated to manual dispatch / main so the hermetic `ci.yml`
+# stays the fast tripwire.
+
+name: live-integration
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  live-integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Init submodules
+        run: git submodule update --init --recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install (run + dev extras)
+        run: pip install -e '.[run,dev]'
+
+      - name: Install Playwright Chromium
+        run: playwright install --with-deps chromium
+
+      - name: Live integration / e2e / drift suite
+        run: pytest -m 'integration or e2e or drift' -q
