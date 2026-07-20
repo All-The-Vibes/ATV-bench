@@ -783,6 +783,8 @@ _FIXED_COMMANDS: tuple[CommandSpec, ...] = (
         "Iterative CodeClash bridge and original-paper round semantics.",
         (
             "tests/test_codeclash_drift.py",
+            "tests/test_comparison.py",
+            "tests/test_phoenix_hve_case_study.py",
             "tests/test_integration.py",
             "tests/test_iterative_codeclash_bridge.py",
             "tests/test_iterative_paper_alignment.py",
