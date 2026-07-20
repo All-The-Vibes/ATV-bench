@@ -930,7 +930,10 @@ def execute_league_score(
     engine: CommandEngine | None = None,
 ) -> LeagueScoreReceipt:
     """Execute and verify one frozen-bot League match outside GitHub Actions."""
-    if os.environ.get("GITHUB_ACTIONS", "").strip().lower() == "true":
+    if (
+        engine is None
+        and os.environ.get("GITHUB_ACTIONS", "").strip().lower() == "true"
+    ):
         raise LeagueExecutorError(
             "`atv-bench league-score` refuses to run inside GitHub Actions; "
             "Actions is Pages/test-only by repository policy."

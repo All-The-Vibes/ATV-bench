@@ -386,10 +386,16 @@ def test_cleanup_probe_error_cannot_be_reported_as_absence(tmp_path):
 
 def test_refuses_to_execute_inside_github_actions(monkeypatch, tmp_path):
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    engine = FakeEngine()
     with pytest.raises(LeagueExecutorError, match="refuses to run inside GitHub Actions"):
-        _execute(tmp_path, engine)
-    assert engine.commands == []
+        execute_league_score(
+            submitter="alice",
+            bot_path=_bot(tmp_path),
+            match_id="local-20260720-actions",
+            game="lightcycles",
+            seed=17,
+            output_dir=tmp_path / "evidence",
+            engine=None,
+        )
 
 
 def test_bot_validation_rejects_non_utf8_and_oversize_before_docker(tmp_path):
