@@ -110,3 +110,17 @@ unrelated local pytest sweeps were discovered running concurrently with that att
 The sweeps were stopped, but `primary-1` was prospectively marked
 `excluded_infrastructure_contamination`. Its artifacts remain preserved, and
 `reserve-1` replaces it. This decision cannot be reversed based on its outcome.
+
+After `primary-4`, the operator stopped the cell before obtaining a `primary-5`
+result or launching reserves. Three uncontaminated attempts had produced Phoenix
+valid artifacts in two attempts and hve-core valid artifacts in zero; a fourth
+attempt produced neither artifact. The fixed 30-credit budget repeatedly ended
+sessions during destructive file replacement. At that point five comparable trials
+were no longer reachable, and continuing would only repeat an uncalibrated task
+contract.
+
+The v3 cell is therefore closed as a **calibration failure**. Its defensible output is
+a Phoenix-favoring completion-reliability signal, not a conditional bot-quality
+winner. A replacement cell must first pass a non-scored budget/feasibility calibration
+for both harnesses and preregister separate reliability and conditional-quality
+estimands.
