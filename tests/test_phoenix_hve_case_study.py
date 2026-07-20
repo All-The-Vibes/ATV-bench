@@ -45,7 +45,7 @@ def _trial_document(
             "model": "model-fixed",
             "model_selection_source": "explicit_cli",
             "copilot_cli": "GitHub Copilot CLI fixed",
-            "held_out_seeds": games,
+            "held_out_seeds": 5,
             "per_turn_timeout_seconds": 3.0,
             "harness_timeout_seconds": 900,
             "max_ai_credits": 30,
