@@ -1226,6 +1226,99 @@ def rate(
         typer.echo(json.dumps(doc, indent=2))
 
 
+def _load_rating_matches(store: Path) -> list:
+    """Load matches.jsonl from a corpus dir into RatingMatch rows (shared by rate/lift)."""
+    from atv_bench.rating import RatingMatch
+
+    matches_file = store / "matches.jsonl"
+    if not matches_file.exists():
+        typer.echo(f"Cannot rate: no matches.jsonl in {store}")
+        raise typer.Exit(2)
+    out = []
+    for line in matches_file.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            m = json.loads(line)
+        except json.JSONDecodeError as e:
+            typer.echo(f"Cannot rate: malformed matches.jsonl line: {e}")
+            raise typer.Exit(2)
+        row = _rating_row_from_match(m)
+        if row is not None:
+            out.append(RatingMatch(
+                harness_a=row["harness_a"], harness_b=row["harness_b"],
+                model_a=row["model_a"], model_b=row["model_b"],
+                score_a=float(row["score_a"]),
+            ))
+    return out
+
+
+@app.command(name="lift")
+def lift(
+    store: Path = typer.Option(..., "--store", help="Corpus dir containing matches.jsonl."),
+    baseline: list[str] = typer.Option(
+        ..., "--baseline",
+        help="Bare baseline mapping HARNESS=BARE_HARNESS (repeatable). The bare control "
+             "must have matches on the same base model as HARNESS."),
+    out: Path = typer.Option(None, "--out", help="Write lift.json here (default: <store>/lift.json)."),
+    seed: int = typer.Option(0, "--seed", help="Bootstrap seed."),
+    n_boot: int = typer.Option(1000, "--n-boot", help="Bootstrap replicates for the CI."),
+    json_out: bool = typer.Option(False, "--json", help="Also print the lift doc to stdout."),
+) -> None:
+    """Emit harness LIFT over the bare model — the headline product metric (Section 5.5).
+
+    For each --baseline HARNESS=BARE mapping, computes lift = theta(M+HARNESS) - theta(M BARE)
+    on the shared base model M, with a percentile-bootstrap CI. Lifts are comparable across
+    harnesses on DIFFERENT base models because each subtracts its own bare baseline. Refuses
+    (exit 2) when a declared bare baseline was never run on the harness's base model.
+    """
+    from atv_bench.lift import LiftError, compute_lift
+
+    matches = _load_rating_matches(store)
+    if not matches:
+        typer.echo("No rateable matches in corpus (need >=1 scored head-to-head record).")
+        raise typer.Exit(2)
+
+    baselines: dict[str, str] = {}
+    for spec in baseline:
+        if "=" not in spec:
+            typer.echo(f"Bad --baseline {spec!r}: expected HARNESS=BARE_HARNESS")
+            raise typer.Exit(2)
+        h, bare = spec.split("=", 1)
+        baselines[h.strip()] = bare.strip()
+
+    try:
+        results = compute_lift(matches, baselines, seed=seed, n_boot=n_boot)
+    except LiftError as e:
+        typer.echo(f"Cannot compute lift: {e}")
+        raise typer.Exit(2)
+
+    doc = {
+        "seed": seed,
+        "n_boot": n_boot,
+        "lifts": [
+            {
+                "harness": r.harness,
+                "bare_harness": r.bare_harness,
+                "base_model": r.base_model,
+                "lift": r.lift,
+                "ci": {"lo": r.lo, "hi": r.hi},
+            }
+            for r in results.values()
+        ],
+    }
+    out_path = out or (store / "lift.json")
+    out_path.write_text(json.dumps(doc, indent=2))
+    for r in results.values():
+        typer.echo(
+            f"{r.harness} (vs bare {r.bare_harness} on {r.base_model}): "
+            f"lift={r.lift:+.3f}  95% CI=({r.lo:+.3f}, {r.hi:+.3f})")
+    typer.echo(f"Wrote {out_path} — {len(doc['lifts'])} lift(s)")
+    if json_out:
+        typer.echo(json.dumps(doc, indent=2))
+
+
 def _rating_row_from_match(m: dict) -> dict | None:
     """Extract (harness_a, harness_b, model_a, model_b, score_a) from a match record.
 
