@@ -33,12 +33,26 @@ RED = (255, 111, 116)
 GRID = (30, 35, 46)
 
 FDIR = "/usr/share/fonts/truetype/dejavu"
+
+
 def font(name, sz):
     return ImageFont.truetype(f"{FDIR}/{name}", sz)
-F_MONO = lambda s: font("DejaVuSansMono.ttf", s)
-F_MONOB = lambda s: font("DejaVuSansMono-Bold.ttf", s)
-F_SANS = lambda s: font("DejaVuSans.ttf", s)
-F_SANSB = lambda s: font("DejaVuSans-Bold.ttf", s)
+
+
+def F_MONO(size):
+    return font("DejaVuSansMono.ttf", size)
+
+
+def F_MONOB(size):
+    return font("DejaVuSansMono-Bold.ttf", size)
+
+
+def F_SANS(size):
+    return font("DejaVuSans.ttf", size)
+
+
+def F_SANSB(size):
+    return font("DejaVuSans-Bold.ttf", size)
 
 _frame = 0
 
@@ -137,7 +151,7 @@ def flatten(img):
 # SCENE 1 — HOOK (title)  ~3.5s   (intro: gentle, pump ramps in)
 # =========================================================
 hook_lines = ["Everyone benchmarks the", "MODEL."]
-sub = "Nobody benchmarks the harness."
+sub = "Harness claims need controlled trials."
 N = secs(3.5)
 for i in range(N):
     p = i / N
@@ -222,7 +236,7 @@ def draw_term(d, x0, y0, w, h, reveal_chars, cursor_on, title="atv-bench"):
     if cursor_on and last_pos:
         d.rectangle([last_pos[0], last_pos[1]+4, last_pos[0]+14, last_pos[1]+34],
                     fill=ACCENT + (255,))
-total_chars = sum(max(len(l), 1) for l, _ in term_lines)
+total_chars = sum(max(len(line), 1) for line, _ in term_lines)
 N = secs(6.0)
 for i in range(N):
     p = i / N

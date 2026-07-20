@@ -6,8 +6,6 @@ rather than mid-push. --dry-run runs preflight + shows the plan without opening 
 """
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from atv_bench.submit import (

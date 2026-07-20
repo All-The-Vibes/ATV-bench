@@ -1,0 +1,27 @@
+{
+  "assertions": [
+    {
+      "expected": "24a03ea0f2c6c5984062177f9b0482b54940e9ea2b2148e2ea8c48554053ee33",
+      "id": "input-preserved",
+      "kind": "sha256_equals",
+      "path": "inputs/join-segments.json",
+      "weight": 2
+    },
+    {
+      "expected": "north/east/gate",
+      "id": "derived-answer",
+      "kind": "json_value",
+      "path": "outputs/join-segments.json",
+      "pointer": "/answer",
+      "weight": 3
+    },
+    {
+      "id": "no-fake-pass-marker",
+      "kind": "file_absent",
+      "path": "PASS",
+      "weight": 1
+    }
+  ],
+  "pass_score": 1.0,
+  "schema": "atv.grader.file-assertions/v1"
+}

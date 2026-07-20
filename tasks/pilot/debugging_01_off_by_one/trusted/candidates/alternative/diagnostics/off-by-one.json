@@ -1,0 +1,5 @@
+{
+  "corrected_value": 5,
+  "explanation": "derived from off-by-one trace",
+  "root_cause": "inclusive-upper-bound"
+}

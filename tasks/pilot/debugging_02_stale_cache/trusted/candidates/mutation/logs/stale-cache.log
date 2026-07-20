@@ -1,0 +1,4 @@
+scenario=02
+observation=cache served generation v2 after v3 publish
+source=public-pilot
+observation=rewritten

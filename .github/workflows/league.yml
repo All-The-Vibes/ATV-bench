@@ -1,18 +1,17 @@
-# ATV-bench Community League — two-job security model.
+# ATV-bench Community League — untrusted match producer.
 #
 # SECURITY MODEL (load-bearing): a submission carries an UNTRUSTED, harness-authored
-# bot. We never run it in a job that holds a token or can write Pages.
+# bot. We never run it in a job that can write repository contents or Pages.
 #
-#   match   (untrusted): permissions: {}, no GITHUB_TOKEN, egress blocked, cpu/mem/pid
-#                        + time caps, non-root read-only container. Writes ONLY a
-#                        schema-shaped result artifact. Gated behind a protected
-#                        environment so first-time-contributor runs need approval.
-#   publish (trusted):   needs: match. Downloads the artifact, VALIDATES it against
-#                        the locked schema, recomputes ELO, builds + deploys the static
-#                        board. Never executes bot code or the arena.
+#   match (untrusted): contents:read only, no persisted credentials, egress blocked for
+#                      the bot, cpu/mem/pid + time caps, non-root read-only container.
+#                      Writes ONLY a bounded result plus GitHub-context metadata.
 #
-# A regression in these properties is caught on every push by
-# tests/test_action_isolation.py (the CI tripwire), not here at deploy time.
+# IMPORTANT: pull_request workflows are PR-rewritable. The privileged workflow_run
+# consumer therefore verifies that the exact league.yml blob used by this run is identical
+# to the PR base blob BEFORE it downloads artifacts, then independently derives the PR
+# author, run id, opponent, and submitted-bot hash from GitHub's API. A PR-modified copy of
+# this file may run with read-only permissions, but its artifacts are never publishable.
 
 name: league
 
@@ -33,7 +32,7 @@ concurrency:
 
 jobs:
   match:
-    # UNTRUSTED job — runs the submitted bot. Zero privileges.
+    # UNTRUSTED job — runs the submitted bot. Read-only repository access only.
     # Only the labeled-PR path: workflow_dispatch is intentionally NOT a trigger — it has
     # no PR-authored submitter, so the publish job's MatchSpec.from_env would abort with
     # no scoreable identity. A trigger that runs the untrusted bot but can never score it
@@ -41,28 +40,29 @@ jobs:
     if: ${{ github.event.label.name == 'run-match' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    permissions: {}
+    permissions:
+      contents: read
     # Protected environment => first-time contributors need manual approval before
     # the untrusted bot ever executes (GitHub gates entry to environments).
     environment: league-match
     steps:
-      - name: Checkout league code (NOT the untrusted PR head, no creds)
-        uses: actions/checkout@v4
+      - name: Checkout league code at the immutable PR base (no creds)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ github.event.pull_request.base.sha }}
 
       - name: Stage the submitted bot as DATA (never executed here on the host)
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           # The PR head is untrusted. We check it out into a SEPARATE path and copy
           # ONLY the bot file into submission/. It is never run on the host — only
           # inside the locked-down sandbox container below. No creds, no token.
-          ref: refs/pull/${{ github.event.pull_request.number }}/head
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
           path: pr-src
-          # Need history to diff the PR against its base for the path-confinement gate.
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Gate — a community PR may only touch its OWN submission tree
         # santa round-4 (Reviewer B CRITICAL): the durable leaderboard is rebuilt from
@@ -74,17 +74,24 @@ jobs:
         env:
           AUTHOR: ${{ github.event.pull_request.user.login }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PYTHONPATH: src
         run: |
           set -euo pipefail
-          git -C pr-src fetch --no-tags --depth=1 origin "$BASE_SHA" || true
-          # Changed paths of the PR head vs its merge base, computed from untrusted tree
-          # metadata only (names, never contents). The validator confines them.
-          git -C pr-src diff --name-only "$BASE_SHA"...HEAD > changed-paths.txt || \
-            git -C pr-src diff --name-only "$BASE_SHA" HEAD > changed-paths.txt
-          echo "PR changed paths:"; cat changed-paths.txt
+          # Keep the immutable event SHA checkout above; refs/pull/<n>/head is mutable and
+          # could advance between the label event and checkout.
+          test "$(git -C pr-src rev-parse HEAD)" = "$HEAD_SHA"
+          git -C pr-src fetch --no-tags --depth=1 \
+            "https://github.com/${BASE_REPO}.git" "$BASE_SHA"
+          # Use name-status, not name-only: renames, copies, deletes, type changes, and
+          # malformed records must fail closed. --no-textconv prevents repository-authored
+          # attributes from invoking a host-side textconv helper.
+          git -C pr-src diff --name-status --find-renames --no-textconv \
+            "$BASE_SHA" HEAD > changed-paths.txt
+          echo "PR changed paths/statuses:"; cat changed-paths.txt
           python -m atv_bench.cli validate-pr-paths --author "$AUTHOR" \
-            --paths-file changed-paths.txt
+            --paths-file changed-paths.txt --name-status
 
       - name: Extract the bot file into the sandbox mount dir
         id: extract
@@ -245,16 +252,12 @@ jobs:
           OPPONENT: byok-anchor
           MATCH_ID: ${{ github.run_id }}
           BOT_SHA256: ${{ steps.extract.outputs.bot_sha256 }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          # santa re-review #7: the privileged persist/deploy phase moves to a separate
-          # workflow_run workflow (league-publish.yml) so FORK PRs can score (a fork PR's
-          # GITHUB_TOKEN is read-only in THIS pull_request run). A workflow_run event does
-          # not carry the PR author, so this UNTRUSTED job hands the trusted publish
-          # workflow the match spec as a SEPARATE artifact — built here from GitHub context
-          # (github.event.pull_request.user.login / github.run_id) and the trusted staged-
-          # bytes hash, NEVER from bot stdout. The publish workflow binds the ok artifact to
-          # exactly these values (--require-spec). SUBMITTER is intentionally NOT defaulted:
-          # a blank login means no scoreable identity and the publish side fails closed.
+          # This file is useful audit metadata, but is NOT trusted merely because it is a
+          # separate artifact. league-publish.yml independently derives every field from
+          # GitHub's workflow-run, PR, tree, and blob APIs, then requires exact equality.
           python3 - <<'PY'
           import json, os, pathlib
           meta = {
@@ -262,13 +265,15 @@ jobs:
               "opponent": os.environ["OPPONENT"],
               "match_id": os.environ["MATCH_ID"],
               "bot_sha256": os.environ.get("BOT_SHA256", ""),
+              "pr_number": int(os.environ["PR_NUMBER"]),
+              "head_sha": os.environ["HEAD_SHA"],
           }
           pathlib.Path("match-meta.json").write_text(json.dumps(meta))
           print("wrote trusted match-meta:", meta)
           PY
 
       - name: Upload result + trusted meta (the ONLY outputs of this job)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: match-result
           # Both the bot-controlled result AND the trusted meta travel to the publish

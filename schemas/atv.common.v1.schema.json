@@ -1,0 +1,874 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:atv-bench:schema:atv.common:v1",
+  "title": "ATV-Bench protocol common definitions v1",
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$"
+    },
+    "semanticVersion": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$"
+    },
+    "safeUnsignedInteger": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "safePositiveInteger": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "nullableSafeUnsignedInteger": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/safeUnsignedInteger"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sha256": {
+      "type": "object",
+      "required": [
+        "algorithm",
+        "value"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "sha256"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "versionedRef": {
+      "type": "object",
+      "required": [
+        "id",
+        "version",
+        "manifest_digest"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "version": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "manifest_digest": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "absoluteGuestPath": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 4096,
+      "pattern": "^(?!/$)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*\\\\)(?!.*//)(?!.*\\/$)/[A-Za-z0-9._~/-]+$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*\\\\)(?!.*//)(?!.*\\/$)[A-Za-z0-9._~/-]+$"
+    },
+    "environmentName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Z_][A-Z0-9_]*$"
+    },
+    "mediaType": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 255,
+      "pattern": "^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+(?:;[A-Za-z0-9!#$&^_.+=\" -]+)?$"
+    },
+    "budgetLimits": {
+      "type": "object",
+      "required": [
+        "wall_time_ms",
+        "cpu_time_ms",
+        "model_input_tokens",
+        "model_output_tokens",
+        "model_total_tokens",
+        "model_calls",
+        "cost_microusd",
+        "tool_calls",
+        "memory_bytes",
+        "storage_bytes",
+        "pids",
+        "stdout_bytes",
+        "stderr_bytes",
+        "artifact_bytes"
+      ],
+      "properties": {
+        "wall_time_ms": {
+          "$ref": "#/$defs/safeUnsignedInteger"
+        },
+        "cpu_time_ms": {
+          "$ref": "#/$defs/safeUnsignedInteger"
+        },
+        "model_input_tokens": {
+          "$ref": "#/$defs/safeUnsignedInteger"
+        },
+        "model_output_tokens": {
+          "$ref": "#/$defs/safeUnsignedInteger"
+        },
+        "model_total_tokens": {
+          "$ref": "#/$defs/safeUnsignedInteger"
+        },
+        "model_calls": {
+          "$ref": "#/$defs/safeUnsignedInteger"
+        },
+        "cost_microusd": {
+          "$ref": "#/$defs/safeUnsignedInteger"
+        },
+        "tool_calls": {
+          "$ref": "#/$defs/safeUnsignedInteger"
+        },
+        "memory_bytes": {
+          "$ref": "#/$defs/safeUnsignedInteger"
+        },
+        "storage_bytes": {
+          "$ref": "#/$defs/safeUnsignedInteger"
+        },
+        "pids": {
+          "$ref": "#/$defs/safeUnsignedInteger"
+        },
+        "stdout_bytes": {
+          "$ref": "#/$defs/safeUnsignedInteger"
+        },
+        "stderr_bytes": {
+          "$ref": "#/$defs/safeUnsignedInteger"
+        },
+        "artifact_bytes": {
+          "$ref": "#/$defs/safeUnsignedInteger"
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "usageMeasurement": {
+      "type": "object",
+      "required": [
+        "wall_time_ms",
+        "cpu_time_ms",
+        "model_input_tokens",
+        "model_output_tokens",
+        "model_total_tokens",
+        "model_calls",
+        "cost_microusd",
+        "tool_calls",
+        "memory_bytes",
+        "storage_bytes",
+        "pids",
+        "stdout_bytes",
+        "stderr_bytes",
+        "artifact_bytes"
+      ],
+      "properties": {
+        "wall_time_ms": {
+          "$ref": "#/$defs/nullableSafeUnsignedInteger"
+        },
+        "cpu_time_ms": {
+          "$ref": "#/$defs/nullableSafeUnsignedInteger"
+        },
+        "model_input_tokens": {
+          "$ref": "#/$defs/nullableSafeUnsignedInteger"
+        },
+        "model_output_tokens": {
+          "$ref": "#/$defs/nullableSafeUnsignedInteger"
+        },
+        "model_total_tokens": {
+          "$ref": "#/$defs/nullableSafeUnsignedInteger"
+        },
+        "model_calls": {
+          "$ref": "#/$defs/nullableSafeUnsignedInteger"
+        },
+        "cost_microusd": {
+          "$ref": "#/$defs/nullableSafeUnsignedInteger"
+        },
+        "tool_calls": {
+          "$ref": "#/$defs/nullableSafeUnsignedInteger"
+        },
+        "memory_bytes": {
+          "$ref": "#/$defs/nullableSafeUnsignedInteger"
+        },
+        "storage_bytes": {
+          "$ref": "#/$defs/nullableSafeUnsignedInteger"
+        },
+        "pids": {
+          "$ref": "#/$defs/nullableSafeUnsignedInteger"
+        },
+        "stdout_bytes": {
+          "$ref": "#/$defs/nullableSafeUnsignedInteger"
+        },
+        "stderr_bytes": {
+          "$ref": "#/$defs/nullableSafeUnsignedInteger"
+        },
+        "artifact_bytes": {
+          "$ref": "#/$defs/nullableSafeUnsignedInteger"
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "modelUsage": {
+      "type": "object",
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "calls",
+        "cost_microusd"
+      ],
+      "properties": {
+        "input_tokens": {
+          "$ref": "#/$defs/nullableSafeUnsignedInteger"
+        },
+        "output_tokens": {
+          "$ref": "#/$defs/nullableSafeUnsignedInteger"
+        },
+        "total_tokens": {
+          "$ref": "#/$defs/nullableSafeUnsignedInteger"
+        },
+        "calls": {
+          "$ref": "#/$defs/nullableSafeUnsignedInteger"
+        },
+        "cost_microusd": {
+          "$ref": "#/$defs/nullableSafeUnsignedInteger"
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "reportingCapability": {
+      "type": "string",
+      "enum": [
+        "unsupported",
+        "reported"
+      ]
+    },
+    "modelSelectionCapability": {
+      "type": "string",
+      "enum": [
+        "none",
+        "single",
+        "multiple"
+      ]
+    },
+    "capabilities": {
+      "type": "object",
+      "required": [
+        "workspace_edit",
+        "subagents",
+        "resumable",
+        "browser",
+        "model_events",
+        "tool_events",
+        "usage_events",
+        "checkpoint_events",
+        "model_selection",
+        "token_usage_reporting",
+        "call_usage_reporting",
+        "cost_usage_reporting"
+      ],
+      "properties": {
+        "workspace_edit": {
+          "type": "boolean"
+        },
+        "subagents": {
+          "type": "boolean"
+        },
+        "resumable": {
+          "type": "boolean"
+        },
+        "browser": {
+          "type": "boolean"
+        },
+        "model_events": {
+          "type": "boolean"
+        },
+        "tool_events": {
+          "type": "boolean"
+        },
+        "usage_events": {
+          "type": "boolean"
+        },
+        "checkpoint_events": {
+          "type": "boolean"
+        },
+        "model_selection": {
+          "$ref": "#/$defs/modelSelectionCapability"
+        },
+        "token_usage_reporting": {
+          "$ref": "#/$defs/reportingCapability"
+        },
+        "call_usage_reporting": {
+          "$ref": "#/$defs/reportingCapability"
+        },
+        "cost_usage_reporting": {
+          "$ref": "#/$defs/reportingCapability"
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "protocolLimits": {
+      "type": "object",
+      "required": [
+        "max_line_bytes",
+        "max_total_bytes",
+        "max_events",
+        "max_depth",
+        "max_nodes",
+        "max_object_properties"
+      ],
+      "properties": {
+        "max_line_bytes": {
+          "$ref": "#/$defs/safePositiveInteger"
+        },
+        "max_total_bytes": {
+          "$ref": "#/$defs/safePositiveInteger"
+        },
+        "max_events": {
+          "$ref": "#/$defs/safePositiveInteger"
+        },
+        "max_depth": {
+          "$ref": "#/$defs/safePositiveInteger"
+        },
+        "max_nodes": {
+          "$ref": "#/$defs/safePositiveInteger"
+        },
+        "max_object_properties": {
+          "$ref": "#/$defs/safePositiveInteger"
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "networkPolicy": {
+      "type": "object",
+      "required": [
+        "mode",
+        "allowed_destinations"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "none",
+            "model-gateway-only",
+            "allowlist"
+          ]
+        },
+        "allowed_destinations": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "pattern": "^[A-Za-z0-9.-]+(?::[1-9][0-9]{0,4})?$"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "none"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "properties": {
+              "allowed_destinations": {
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "model-gateway-only"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "properties": {
+              "allowed_destinations": {
+                "minItems": 1,
+                "maxItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "allowlist"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "properties": {
+              "allowed_destinations": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "toolPolicy": {
+      "type": "object",
+      "required": [
+        "allowed",
+        "denied"
+      ],
+      "properties": {
+        "allowed": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/identifier"
+          }
+        },
+        "denied": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/identifier"
+          }
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "artifactContract": {
+      "type": "object",
+      "required": [
+        "mode",
+        "required_paths",
+        "allowed_paths",
+        "allowed_media_types",
+        "max_files",
+        "max_total_bytes"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "workspace-tree",
+            "named-artifacts"
+          ]
+        },
+        "allow_any_relative_path": {
+          "type": "boolean"
+        },
+        "required_paths": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/relativePath"
+          }
+        },
+        "allowed_paths": {
+          "type": "array",
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/relativePath"
+          }
+        },
+        "allowed_media_types": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/mediaType"
+          }
+        },
+        "max_files": {
+          "$ref": "#/$defs/safePositiveInteger"
+        },
+        "max_total_bytes": {
+          "$ref": "#/$defs/safePositiveInteger"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "named-artifacts"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "properties": {
+              "allow_any_relative_path": {
+                "const": false
+              },
+              "required_paths": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "allow_any_relative_path": {
+                "const": true
+              }
+            },
+            "required": [
+              "allow_any_relative_path"
+            ]
+          },
+          "then": {
+            "properties": {
+              "allowed_paths": {
+                "maxItems": 0
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "allowed_paths": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "artifactDescriptor": {
+      "type": "object",
+      "required": [
+        "path",
+        "media_type",
+        "size_bytes",
+        "digest",
+        "role"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "media_type": {
+          "$ref": "#/$defs/mediaType"
+        },
+        "size_bytes": {
+          "$ref": "#/$defs/safeUnsignedInteger"
+        },
+        "digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "primary",
+            "supplemental",
+            "checkpoint",
+            "trajectory",
+            "log",
+            "attestation",
+            "output-tree",
+            "grader-result",
+            "model-receipt"
+          ]
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "documentDescriptor": {
+      "type": "object",
+      "required": [
+        "schema",
+        "path",
+        "media_type",
+        "size_bytes",
+        "digest"
+      ],
+      "properties": {
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._/-]+$"
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "media_type": {
+          "$ref": "#/$defs/mediaType"
+        },
+        "size_bytes": {
+          "$ref": "#/$defs/safeUnsignedInteger"
+        },
+        "digest": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "credentialHandle": {
+      "type": "object",
+      "required": [
+        "name",
+        "handle"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/environmentName"
+        },
+        "handle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^atv-credential://[a-z0-9][a-z0-9._/-]*$"
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "modelPolicy": {
+      "type": "object",
+      "required": [
+        "id",
+        "version",
+        "policy_digest",
+        "allowed_models",
+        "parameters_digest",
+        "retry_policy_digest",
+        "subagent_policy_digest",
+        "gateway"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "version": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "policy_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "allowed_models": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "parameters_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "retry_policy_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "subagent_policy_digest": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "gateway": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[A-Za-z0-9.-]+(?::[1-9][0-9]{0,4})?$"
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "sourceRevision": {
+      "type": "object",
+      "required": [
+        "repository",
+        "revision",
+        "tree_digest"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "format": "uri",
+          "maxLength": 2048
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 128,
+          "pattern": "^[0-9A-Za-z._/-]+$"
+        },
+        "tree_digest": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "runtimeIdentity": {
+      "$ref": "#/$defs/versionedRef"
+    },
+    "platform": {
+      "type": "object",
+      "required": [
+        "os",
+        "architecture"
+      ],
+      "properties": {
+        "os": {
+          "type": "string",
+          "enum": [
+            "linux",
+            "windows",
+            "macos"
+          ]
+        },
+        "architecture": {
+          "type": "string",
+          "enum": [
+            "amd64",
+            "arm64"
+          ]
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "failure": {
+      "type": "object",
+      "required": [
+        "code",
+        "scope",
+        "retryable",
+        "infrastructure"
+      ],
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/identifier"
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "harness",
+            "model",
+            "tool",
+            "policy",
+            "protocol",
+            "artifact",
+            "grader",
+            "runner",
+            "infrastructure"
+          ]
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "infrastructure": {
+          "type": "boolean"
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "cancellationPolicy": {
+      "type": "object",
+      "required": [
+        "soft_signal",
+        "grace_period_ms",
+        "hard_kill",
+        "destroy_execution_cell"
+      ],
+      "properties": {
+        "soft_signal": {
+          "type": "string",
+          "enum": [
+            "sigint",
+            "sigterm",
+            "ctrl-break",
+            "protocol"
+          ]
+        },
+        "grace_period_ms": {
+          "$ref": "#/$defs/safeUnsignedInteger"
+        },
+        "hard_kill": {
+          "const": true
+        },
+        "destroy_execution_cell": {
+          "const": true
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "attestationDescriptor": {
+      "type": "object",
+      "required": [
+        "role",
+        "document"
+      ],
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": [
+            "admission",
+            "harness-build",
+            "execution",
+            "model",
+            "evaluation",
+            "publication",
+            "reproduction",
+            "revocation"
+          ]
+        },
+        "document": {
+          "$ref": "#/$defs/documentDescriptor"
+        }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

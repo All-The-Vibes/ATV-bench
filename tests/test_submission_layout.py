@@ -13,11 +13,31 @@ identity is rejected.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
 from atv_bench.store import LeagueStore, build_leaderboard_from_store
+
+
+def _symlink_or_skip(
+    link: Path,
+    target: Path,
+    *,
+    directory: bool = False,
+) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=directory)
+    except (OSError, NotImplementedError) as exc:
+        detail = (
+            f"{type(exc).__name__}(errno={getattr(exc, 'errno', None)}, "
+            f"winerror={getattr(exc, 'winerror', None)}): {exc}"
+        )
+        pytest.skip(
+            "symlink capability unavailable after attempted creation: " + detail
+        )
 
 
 def _sub(identity, harness="claude-code", gstack=True):
@@ -167,7 +187,8 @@ def _write_record(league, identity, record):
 
 def test_non_object_fingerprint_fails_closed(tmp_path):
     league = tmp_path / "league"
-    rec = _valid_record("alice"); rec["fingerprint"] = "oops"
+    rec = _valid_record("alice")
+    rec["fingerprint"] = "oops"
     _write_record(league, "alice", rec)
     with pytest.raises(ValueError):
         LeagueStore(str(league)).load_submissions()
@@ -199,7 +220,8 @@ def test_valid_nested_record_still_loads(tmp_path):
 
 def test_non_string_bot_sha256_fails_closed_on_load(tmp_path):
     league = tmp_path / "league"
-    rec = _valid_record("alice"); rec["bot_sha256"] = 7
+    rec = _valid_record("alice")
+    rec["bot_sha256"] = 7
     _write_record(league, "alice", rec)
     with pytest.raises(ValueError):
         LeagueStore(str(league)).load_submissions()
@@ -207,7 +229,8 @@ def test_non_string_bot_sha256_fails_closed_on_load(tmp_path):
 
 def test_bad_bot_sha256_pattern_fails_closed_on_load(tmp_path):
     league = tmp_path / "league"
-    rec = _valid_record("alice"); rec["bot_sha256"] = "NOT-HEX"
+    rec = _valid_record("alice")
+    rec["bot_sha256"] = "NOT-HEX"
     _write_record(league, "alice", rec)
     with pytest.raises(ValueError):
         LeagueStore(str(league)).load_submissions()
@@ -217,7 +240,8 @@ def test_non_http_urls_fail_closed_on_load(tmp_path):
     for field, bad in [("pr_url", 123), ("pr_url", "javascript:alert(1)"),
                        ("logs_url", "ftp://x/y"), ("logs_url", "")]:
         league = tmp_path / f"league_{field}_{abs(hash(str(bad)))}"
-        rec = _valid_record("alice"); rec[field] = bad
+        rec = _valid_record("alice")
+        rec[field] = bad
         _write_record(league, "alice", rec)
         with pytest.raises(ValueError):
             LeagueStore(str(league)).load_submissions()
@@ -234,9 +258,6 @@ def test_well_formed_scalars_still_load(tmp_path):
 #     the hash from the sibling main.py and STAMPS the trusted value, so the row can never
 #     advertise a hash that isn't the scored bytes. ---
 
-import hashlib
-
-
 def test_bot_sha256_is_stamped_from_committed_main_py(tmp_path):
     """A submission.json whose bot_sha256 disagrees with the sibling main.py bytes must not
     publish the claimed hash — the store stamps the REAL hash of main.py."""
@@ -244,8 +265,9 @@ def test_bot_sha256_is_stamped_from_committed_main_py(tmp_path):
     d = league / "submissions" / "alice"
     d.mkdir(parents=True)
     body = "def move(s):\n    return 'up'\n"
-    (d / "main.py").write_text(body)
-    real = hashlib.sha256(body.encode()).hexdigest()
+    canonical_bytes = body.encode("utf-8")
+    (d / "main.py").write_bytes(canonical_bytes)
+    real = hashlib.sha256(canonical_bytes).hexdigest()
     rec = _sub("alice")
     rec["bot_sha256"] = "b" * 64  # valid pattern, but NOT the hash of main.py
     (d / "submission.json").write_text(json.dumps(rec))
@@ -260,8 +282,9 @@ def test_bot_sha256_matching_committed_main_py_loads(tmp_path):
     d = league / "submissions" / "alice"
     d.mkdir(parents=True)
     body = "def move(s):\n    return 'up'\n"
-    (d / "main.py").write_text(body)
-    real = hashlib.sha256(body.encode()).hexdigest()
+    canonical_bytes = body.encode("utf-8")
+    (d / "main.py").write_bytes(canonical_bytes)
+    real = hashlib.sha256(canonical_bytes).hexdigest()
     rec = _sub("alice")
     rec["bot_sha256"] = real
     (d / "submission.json").write_text(json.dumps(rec))
@@ -307,7 +330,7 @@ def test_symlinked_record_escaping_tree_fails_closed(tmp_path):
     (d / "main.py").write_text("def move(s):\n    return 'up'\n")
     secret = tmp_path / "outside_secret.json"
     secret.write_text(json.dumps(_sub("mallory")))
-    (d / "submission.json").symlink_to(secret)
+    _symlink_or_skip(d / "submission.json", secret)
     with pytest.raises(ValueError):
         LeagueStore(str(league)).load_submissions()
 
@@ -320,7 +343,7 @@ def test_symlinked_bot_escaping_tree_fails_closed(tmp_path):
     (d / "submission.json").write_text(json.dumps(_sub("mallory")))
     secret = tmp_path / "outside_bot.py"
     secret.write_text("import os\n")
-    (d / "main.py").symlink_to(secret)
+    _symlink_or_skip(d / "main.py", secret)
     with pytest.raises(ValueError):
         LeagueStore(str(league)).load_submissions()
 
@@ -339,7 +362,11 @@ def test_symlinked_entrant_directory_fails_closed(tmp_path):
     (payload / "main.py").write_text("import os\n")
     (payload / "submission.json").write_text(json.dumps(_sub("alice")))
     # git can track a symlinked directory; simulate the committed tree
-    (league / "submissions" / "alice").symlink_to(payload, target_is_directory=True)
+    _symlink_or_skip(
+        league / "submissions" / "alice",
+        payload,
+        directory=True,
+    )
     with pytest.raises(ValueError):
         LeagueStore(str(league)).load_submissions()
 
@@ -350,7 +377,7 @@ def test_symlinked_matches_file_fails_closed(tmp_path):
     league.mkdir(parents=True)
     outside = tmp_path / "outside_matches.jsonl"
     outside.write_text('{"player_a":"a","player_b":"b","outcome":"a_wins","match_id":"x"}\n')
-    (league / "matches.jsonl").symlink_to(outside)
+    _symlink_or_skip(league / "matches.jsonl", outside)
     with pytest.raises(ValueError):
         LeagueStore(str(league)).load_matches()
 
@@ -388,7 +415,7 @@ def test_symlinked_submissions_dir_boundary_fails_closed(tmp_path):
     (payload / "alice").mkdir(parents=True)
     (payload / "alice" / "main.py").write_text("def move(s):\n    return 'up'\n")
     (payload / "alice" / "submission.json").write_text(json.dumps(_sub("alice")))
-    (league / "submissions").symlink_to(payload, target_is_directory=True)
+    _symlink_or_skip(league / "submissions", payload, directory=True)
     with pytest.raises(ValueError):
         LeagueStore(str(league)).load_submissions()
 

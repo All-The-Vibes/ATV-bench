@@ -15,6 +15,24 @@ from atv_bench.fingerprint import reader
 from atv_bench.fingerprint import probe as fp
 
 
+def _symlink_or_skip(
+    link: Path,
+    target: Path,
+    *,
+    directory: bool = False,
+) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=directory)
+    except (OSError, NotImplementedError) as exc:
+        detail = (
+            f"{type(exc).__name__}(errno={getattr(exc, 'errno', None)}, "
+            f"winerror={getattr(exc, 'winerror', None)}): {exc}"
+        )
+        pytest.skip(
+            "symlink capability unavailable after attempted creation: " + detail
+        )
+
+
 def test_count_child_files_returns_count_and_errors(tmp_path):
     root = tmp_path / ".claude"
     agents = root / "agents"
@@ -35,10 +53,7 @@ def test_count_child_files_refuses_symlink_escape(tmp_path):
     outside.mkdir()
     secret = outside / "sk-proj-leaked-agent.md"
     secret.write_text("secret")
-    try:
-        (agents / "sk-proj-leaked-agent.md").symlink_to(secret)
-    except OSError:
-        pytest.skip("symlinks unsupported")
+    _symlink_or_skip(agents / "sk-proj-leaked-agent.md", secret)
     count, errors = reader.count_child_files(agents, root, suffix=".md")
     # the escaping symlink is NOT counted and IS reported
     assert count == 1
@@ -56,10 +71,7 @@ def test_probe_surfaces_agent_symlink_escape_in_unknown(tmp_path):
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "target.md").write_text("secret")
-    try:
-        (agents / "sk-proj-escape.md").symlink_to(outside / "target.md")
-    except OSError:
-        pytest.skip("symlinks unsupported")
+    _symlink_or_skip(agents / "sk-proj-escape.md", outside / "target.md")
     result = fp.probe_claude_code(home)
     # escaping agent file not counted; reason surfaced; name never in manifest
     assert result.manifest["custom_agents_count"] == 1
@@ -123,7 +135,7 @@ def test_read_toml_broken_symlink_is_not_readable(tmp_path):
     root = tmp_path / ".codex"
     root.mkdir()
     link = root / "config.toml"
-    link.symlink_to(root / "missing-target.toml")  # target within root, doesn't exist
+    _symlink_or_skip(link, root / "missing-target.toml")
     out = reader.read_toml(link, root)
     assert not out.ok
     assert out.reason == reader.REASON_NOT_READABLE, out.reason
@@ -134,7 +146,7 @@ def test_read_json_broken_symlink_is_not_readable(tmp_path):
     root = tmp_path / ".claude"
     root.mkdir()
     link = root / "settings.json"
-    link.symlink_to(root / "missing-target.json")
+    _symlink_or_skip(link, root / "missing-target.json")
     out = reader.read_json(link, root)
     assert not out.ok
     assert out.reason == reader.REASON_NOT_READABLE, out.reason
@@ -162,10 +174,7 @@ def test_read_toml_symlink_escape(tmp_path):
     root = tmp_path / ".codex"
     root.mkdir()
     link = root / "config.toml"
-    try:
-        link.symlink_to(secret)
-    except OSError:
-        pytest.skip("symlinks not supported")
+    _symlink_or_skip(link, secret)
     out = reader.read_toml(link, root)
     assert not out.ok
     assert out.reason == reader.REASON_SYMLINK_ESCAPE

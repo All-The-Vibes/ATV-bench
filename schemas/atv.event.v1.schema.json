@@ -1,0 +1,1007 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:atv-bench:schema:atv.event:v1",
+  "title": "ATV-Bench normalized protocol event v1",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/hello"
+    },
+    {
+      "$ref": "#/$defs/accepted"
+    },
+    {
+      "$ref": "#/$defs/status"
+    },
+    {
+      "$ref": "#/$defs/modelCall"
+    },
+    {
+      "$ref": "#/$defs/toolCall"
+    },
+    {
+      "$ref": "#/$defs/checkpoint"
+    },
+    {
+      "$ref": "#/$defs/artifact"
+    },
+    {
+      "$ref": "#/$defs/usage"
+    },
+    {
+      "$ref": "#/$defs/error"
+    },
+    {
+      "$ref": "#/$defs/cancel"
+    },
+    {
+      "$ref": "#/$defs/controllerError"
+    },
+    {
+      "$ref": "#/$defs/result"
+    }
+  ],
+  "$defs": {
+    "base": {
+      "type": "object",
+      "required": [
+        "schema",
+        "type",
+        "source",
+        "protocol_version",
+        "trial_id",
+        "attempt_id",
+        "sequence",
+        "emitted_at",
+        "recorded_at"
+      ],
+      "properties": {
+        "schema": {
+          "const": "atv.event/v1"
+        },
+        "type": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "harness",
+            "controller"
+          ]
+        },
+        "protocol_version": {
+          "const": 1
+        },
+        "trial_id": {
+          "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/identifier"
+        },
+        "attempt_id": {
+          "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/identifier"
+        },
+        "sequence": {
+          "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/safeUnsignedInteger"
+        },
+        "emitted_at": {
+          "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/timestamp"
+        },
+        "recorded_at": {
+          "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/timestamp"
+        }
+      }
+    },
+    "hello": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/base"
+        },
+        {
+          "type": "object",
+          "required": [
+            "supported_protocol_versions",
+            "capabilities",
+            "harness"
+          ],
+          "properties": {
+            "type": {
+              "const": "hello"
+            },
+            "source": {
+              "const": "harness"
+            },
+            "supported_protocol_versions": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "uniqueItems": true,
+              "items": {
+                "const": 1
+              }
+            },
+            "capabilities": {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/capabilities"
+            },
+            "harness": {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/versionedRef"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "accepted": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/base"
+        },
+        {
+          "type": "object",
+          "required": [
+            "selected_protocol_version",
+            "capabilities",
+            "effective_budget_limits",
+            "effective_protocol_limits",
+            "request_digest",
+            "policy_digest"
+          ],
+          "properties": {
+            "type": {
+              "const": "accepted"
+            },
+            "source": {
+              "const": "controller"
+            },
+            "selected_protocol_version": {
+              "const": 1
+            },
+            "capabilities": {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/capabilities"
+            },
+            "effective_budget_limits": {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/budgetLimits"
+            },
+            "effective_protocol_limits": {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/protocolLimits"
+            },
+            "request_digest": {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/sha256"
+            },
+            "policy_digest": {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/sha256"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "status": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/base"
+        },
+        {
+          "type": "object",
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "type": {
+              "const": "status"
+            },
+            "source": {
+              "const": "harness"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "initializing",
+                "running",
+                "verifying",
+                "checkpointing",
+                "recovering",
+                "cancelling"
+              ]
+            },
+            "detail_code": {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/identifier"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "modelCall": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/base"
+        },
+        {
+          "type": "object",
+          "required": [
+            "call_id",
+            "parent_call_id",
+            "phase",
+            "requested_model",
+            "resolved_model",
+            "provider",
+            "provider_request_id",
+            "usage_delta",
+            "retry_index",
+            "elapsed_ms",
+            "finish_reason",
+            "failure"
+          ],
+          "properties": {
+            "type": {
+              "const": "model_call"
+            },
+            "source": {
+              "const": "harness"
+            },
+            "call_id": {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/identifier"
+            },
+            "parent_call_id": {
+              "oneOf": [
+                {
+                  "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/identifier"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "phase": {
+              "type": "string",
+              "enum": [
+                "started",
+                "completed",
+                "failed"
+              ]
+            },
+            "requested_model": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "resolved_model": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "provider": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "provider_request_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "usage_delta": {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/modelUsage"
+            },
+            "retry_index": {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/safeUnsignedInteger"
+            },
+            "elapsed_ms": {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/nullableSafeUnsignedInteger"
+            },
+            "finish_reason": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "failure": {
+              "oneOf": [
+                {
+                  "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/failure"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "phase": {
+                    "const": "started"
+                  }
+                },
+                "required": [
+                  "phase"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "resolved_model": {
+                    "type": "null"
+                  },
+                  "provider": {
+                    "type": "null"
+                  },
+                  "provider_request_id": {
+                    "type": "null"
+                  },
+                  "elapsed_ms": {
+                    "type": "null"
+                  },
+                  "finish_reason": {
+                    "type": "null"
+                  },
+                  "failure": {
+                    "type": "null"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "phase": {
+                    "const": "completed"
+                  }
+                },
+                "required": [
+                  "phase"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "resolved_model": {
+                    "type": "string"
+                  },
+                  "provider": {
+                    "type": "string"
+                  },
+                  "provider_request_id": {
+                    "type": "string"
+                  },
+                  "elapsed_ms": {
+                    "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/safeUnsignedInteger"
+                  },
+                  "finish_reason": {
+                    "type": "string"
+                  },
+                  "failure": {
+                    "type": "null"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "phase": {
+                    "const": "failed"
+                  }
+                },
+                "required": [
+                  "phase"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "elapsed_ms": {
+                    "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/safeUnsignedInteger"
+                  },
+                  "failure": {
+                    "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/failure"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "toolCall": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/base"
+        },
+        {
+          "type": "object",
+          "required": [
+            "call_id",
+            "parent_call_id",
+            "tool",
+            "phase",
+            "policy_decision",
+            "elapsed_ms",
+            "outcome",
+            "failure"
+          ],
+          "properties": {
+            "type": {
+              "const": "tool_call"
+            },
+            "source": {
+              "const": "harness"
+            },
+            "call_id": {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/identifier"
+            },
+            "parent_call_id": {
+              "oneOf": [
+                {
+                  "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/identifier"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "tool": {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/identifier"
+            },
+            "phase": {
+              "type": "string",
+              "enum": [
+                "started",
+                "completed",
+                "failed"
+              ]
+            },
+            "policy_decision": {
+              "type": "string",
+              "enum": [
+                "allowed",
+                "denied"
+              ]
+            },
+            "elapsed_ms": {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/nullableSafeUnsignedInteger"
+            },
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "success",
+                "error",
+                "denied",
+                "cancelled"
+              ]
+            },
+            "failure": {
+              "oneOf": [
+                {
+                  "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/failure"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "phase": {
+                    "const": "started"
+                  }
+                },
+                "required": [
+                  "phase"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "elapsed_ms": {
+                    "type": "null"
+                  },
+                  "outcome": {
+                    "const": "pending"
+                  },
+                  "failure": {
+                    "type": "null"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "phase": {
+                    "const": "completed"
+                  }
+                },
+                "required": [
+                  "phase"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "elapsed_ms": {
+                    "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/safeUnsignedInteger"
+                  },
+                  "outcome": {
+                    "enum": [
+                      "success",
+                      "denied",
+                      "cancelled"
+                    ]
+                  },
+                  "failure": {
+                    "type": "null"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "phase": {
+                    "const": "failed"
+                  }
+                },
+                "required": [
+                  "phase"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "elapsed_ms": {
+                    "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/safeUnsignedInteger"
+                  },
+                  "outcome": {
+                    "const": "error"
+                  },
+                  "failure": {
+                    "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/failure"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "checkpoint": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/base"
+        },
+        {
+          "type": "object",
+          "required": [
+            "checkpoint_id",
+            "content",
+            "resumable"
+          ],
+          "properties": {
+            "type": {
+              "const": "checkpoint"
+            },
+            "source": {
+              "const": "harness"
+            },
+            "checkpoint_id": {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/identifier"
+            },
+            "content": {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/documentDescriptor"
+            },
+            "resumable": {
+              "type": "boolean"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "artifact": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/base"
+        },
+        {
+          "type": "object",
+          "required": [
+            "artifact"
+          ],
+          "properties": {
+            "type": {
+              "const": "artifact"
+            },
+            "source": {
+              "const": "harness"
+            },
+            "artifact": {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/artifactDescriptor"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "usage": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/base"
+        },
+        {
+          "type": "object",
+          "required": [
+            "cumulative_reported"
+          ],
+          "properties": {
+            "type": {
+              "const": "usage"
+            },
+            "source": {
+              "const": "harness"
+            },
+            "cumulative_reported": {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/usageMeasurement"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "error": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/base"
+        },
+        {
+          "type": "object",
+          "required": [
+            "failure",
+            "recovered",
+            "related_call_id"
+          ],
+          "properties": {
+            "type": {
+              "const": "error"
+            },
+            "source": {
+              "const": "harness"
+            },
+            "failure": {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/failure"
+            },
+            "recovered": {
+              "type": "boolean"
+            },
+            "related_call_id": {
+              "oneOf": [
+                {
+                  "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/identifier"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "cancel": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/base"
+        },
+        {
+          "type": "object",
+          "required": [
+            "reason_code",
+            "grace_period_ms"
+          ],
+          "properties": {
+            "type": {
+              "const": "cancel"
+            },
+            "source": {
+              "const": "controller"
+            },
+            "reason_code": {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/identifier"
+            },
+            "grace_period_ms": {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/safeUnsignedInteger"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "controllerError": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/base"
+        },
+        {
+          "type": "object",
+          "required": [
+            "failure"
+          ],
+          "properties": {
+            "type": {
+              "const": "controller_error"
+            },
+            "source": {
+              "const": "controller"
+            },
+            "failure": {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/failure"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "harnessFailure": {
+      "type": "object",
+      "required": [
+        "code",
+        "scope",
+        "retryable"
+      ],
+      "properties": {
+        "code": {
+          "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/identifier"
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "harness",
+            "model",
+            "tool",
+            "policy",
+            "protocol",
+            "artifact"
+          ]
+        },
+        "retryable": {
+          "type": "boolean"
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "harnessResult": {
+      "type": "object",
+      "required": [
+        "schema",
+        "status",
+        "exit",
+        "output_tree_digest",
+        "artifacts",
+        "reported_usage",
+        "failure"
+      ],
+      "properties": {
+        "schema": {
+          "const": "atv.harness-result/v1"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "completed",
+            "no_edit",
+            "invalid_artifact",
+            "task_timeout",
+            "model_unreachable",
+            "auth_failed",
+            "policy_denied",
+            "budget_exhausted",
+            "harness_crash",
+            "cancelled"
+          ]
+        },
+        "exit": {
+          "type": "object",
+          "required": [
+            "code",
+            "signal",
+            "timed_out",
+            "cancelled"
+          ],
+          "properties": {
+            "code": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": -2147483648,
+              "maximum": 2147483647
+            },
+            "signal": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Z0-9_]+$"
+            },
+            "timed_out": {
+              "type": "boolean"
+            },
+            "cancelled": {
+              "type": "boolean"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "output_tree_digest": {
+          "oneOf": [
+            {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "artifacts": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/artifactDescriptor"
+          }
+        },
+        "reported_usage": {
+          "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/usageMeasurement"
+        },
+        "failure": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/harnessFailure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "completed"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "exit": {
+                "properties": {
+                  "code": {
+                    "const": 0
+                  },
+                  "timed_out": {
+                    "const": false
+                  },
+                  "cancelled": {
+                    "const": false
+                  }
+                },
+                "required": [
+                  "code",
+                  "timed_out",
+                  "cancelled"
+                ]
+              },
+              "output_tree_digest": {
+                "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/sha256"
+              },
+              "failure": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "failure": {
+                "$ref": "#/$defs/harnessFailure"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "task_timeout"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "exit": {
+                "properties": {
+                  "timed_out": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "timed_out"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "cancelled"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "exit": {
+                "properties": {
+                  "cancelled": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "cancelled"
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "result": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/base"
+        },
+        {
+          "type": "object",
+          "required": [
+            "harness_result"
+          ],
+          "properties": {
+            "type": {
+              "const": "result"
+            },
+            "source": {
+              "const": "harness"
+            },
+            "harness_result": {
+              "$ref": "#/$defs/harnessResult"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

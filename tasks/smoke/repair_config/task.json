@@ -1,0 +1,209 @@
+{
+  "schema": "atv.task/v1",
+  "id": "smoke.repair-config",
+  "version": "1.0.0",
+  "title": "Repair a small JSON configuration",
+  "category": "repair",
+  "capability_tags": [
+    "json",
+    "localized-repair"
+  ],
+  "track_compatibility": [
+    "controlled",
+    "systems"
+  ],
+  "difficulty": "smoke",
+  "visibility": "public",
+  "source": {
+    "repository": "https://github.com/All-The-Vibes/ATV-bench",
+    "revision": "smoke-fixture-v1",
+    "tree_digest": {
+      "algorithm": "sha256",
+      "value": "e77d21291addcc78226dd474f5f70f6a2cf0f06b4e6c6f70c6f39eedf77986ea"
+    }
+  },
+  "environment": {
+    "image": "docker.io/library/python@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b",
+    "platform": {
+      "os": "linux",
+      "architecture": "amd64"
+    }
+  },
+  "prompt": {
+    "path": "prompt.md",
+    "encoding": "utf-8",
+    "media_type": "text/markdown",
+    "digest": {
+      "algorithm": "sha256",
+      "value": "4b89dfc879fa75ed4d64036bcfbe5629a1c48789977010fceaacc23b44e5e4cc"
+    }
+  },
+  "policy": {
+    "tools": {
+      "allowed": [
+        "editor",
+        "shell"
+      ],
+      "denied": [
+        "browser"
+      ]
+    },
+    "network": {
+      "mode": "none",
+      "allowed_destinations": []
+    },
+    "writable_paths": [
+      "/workspace",
+      "/artifacts"
+    ],
+    "credential_names": []
+  },
+  "budget_limits": {
+    "wall_time_ms": 60000,
+    "cpu_time_ms": 60000,
+    "model_input_tokens": 10000,
+    "model_output_tokens": 10000,
+    "model_total_tokens": 20000,
+    "model_calls": 20,
+    "cost_microusd": 500000,
+    "tool_calls": 200,
+    "memory_bytes": 536870912,
+    "storage_bytes": 1073741824,
+    "pids": 128,
+    "stdout_bytes": 8388608,
+    "stderr_bytes": 8388608,
+    "artifact_bytes": 16777216
+  },
+  "output": {
+    "mode": "workspace-tree",
+    "allow_any_relative_path": false,
+    "required_paths": [
+      "config.json"
+    ],
+    "allowed_paths": [
+      "config.json"
+    ],
+    "allowed_media_types": [
+      "application/json"
+    ],
+    "max_files": 32,
+    "max_total_bytes": 1048576
+  },
+  "grader": {
+    "image": "docker.io/library/python@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b",
+    "command": [
+      "python",
+      "-m",
+      "atv_bench.eval.grader"
+    ],
+    "network": {
+      "mode": "none",
+      "allowed_destinations": []
+    },
+    "budget_limits": {
+      "wall_time_ms": 10000,
+      "cpu_time_ms": 10000,
+      "model_input_tokens": 0,
+      "model_output_tokens": 0,
+      "model_total_tokens": 0,
+      "model_calls": 0,
+      "cost_microusd": 0,
+      "tool_calls": 0,
+      "memory_bytes": 134217728,
+      "storage_bytes": 134217728,
+      "pids": 16,
+      "stdout_bytes": 1048576,
+      "stderr_bytes": 1048576,
+      "artifact_bytes": 1048576
+    },
+    "hidden_inputs_digest": {
+      "algorithm": "sha256",
+      "value": "c6e220de434d4971d9382cd1146f7d93a1e3b9147ecda1881d3751e136effef1"
+    },
+    "result_schema_digest": {
+      "algorithm": "sha256",
+      "value": "e163e1177a4052d713d8517fa5a8a209d1cc4912f0bb74c4efad1ff3aab87022"
+    },
+    "score_scale": {
+      "possible": 1000,
+      "unit": "points"
+    },
+    "replay_runs": 2
+  },
+  "validation_evidence": {
+    "oracle": {
+      "schema": "atv.validation-case/v1",
+      "path": "trusted/validation/oracle.json",
+      "media_type": "application/json",
+      "size_bytes": 94,
+      "digest": {
+        "algorithm": "sha256",
+        "value": "181b7fdc7daa97a622185675062319d2a37f155c0cc5ba10414468425c3da469"
+      }
+    },
+    "noop": {
+      "schema": "atv.validation-case/v1",
+      "path": "trusted/validation/noop.json",
+      "media_type": "application/json",
+      "size_bytes": 85,
+      "digest": {
+        "algorithm": "sha256",
+        "value": "183b2ef096e60c645760d5a2846e611b1bcd0ccb46af08cd3b15626fba2bc119"
+      }
+    },
+    "alternative_solutions": [
+      {
+        "schema": "atv.validation-case/v1",
+        "path": "trusted/validation/alternative.json",
+        "media_type": "application/json",
+        "size_bytes": 99,
+        "digest": {
+          "algorithm": "sha256",
+          "value": "5daaf18eb39434be1af61016f3a8c9de6db338b169783c0382214ba184037906"
+        }
+      }
+    ],
+    "exploit_cases": [
+      {
+        "schema": "atv.validation-case/v1",
+        "path": "trusted/validation/exploit.json",
+        "media_type": "application/json",
+        "size_bytes": 95,
+        "digest": {
+          "algorithm": "sha256",
+          "value": "b34b3bbce25b059c3fc219c676cf37ed2cd33fc3aae69bfba30e4a77852c42c6"
+        }
+      }
+    ],
+    "mutation_cases": [
+      {
+        "schema": "atv.validation-case/v1",
+        "path": "trusted/validation/mutation.json",
+        "media_type": "application/json",
+        "size_bytes": 96,
+        "digest": {
+          "algorithm": "sha256",
+          "value": "ff46a61d070021ba1d8e8fc400dc45fbbb327f981a42fb2c2745d1ebffb27ef1"
+        }
+      }
+    ],
+    "independent_review": {
+      "schema": "atv.independent-review/v2",
+      "path": "metadata/independent-review.json",
+      "media_type": "application/json",
+      "size_bytes": 656,
+      "digest": {
+        "algorithm": "sha256",
+        "value": "86d9b41dce14847808cc00d621144a9289a4ca867f4ecbbe4200bd683b0369fb"
+      }
+    }
+  },
+  "protocol_range": {
+    "minimum": 1,
+    "maximum": 1
+  },
+  "license": {
+    "spdx": "MIT",
+    "redistribution": "allowed"
+  }
+}

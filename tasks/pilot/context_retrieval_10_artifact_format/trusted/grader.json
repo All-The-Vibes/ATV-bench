@@ -1,0 +1,33 @@
+{
+  "assertions": [
+    {
+      "expected": "be58e37c3622bb1caacac99d2556dab608c561cfe09b4403cb7dd3c32558dc64",
+      "id": "index-preserved",
+      "kind": "sha256_equals",
+      "path": "docs/index-artifact-format.md",
+      "weight": 1
+    },
+    {
+      "expected": "5d781cd90df6a2baf30fffb0c9b0fad3b0357d85ece57a7448c605b2e83a95b9",
+      "id": "source-preserved",
+      "kind": "sha256_equals",
+      "path": "docs/artifact-format.md",
+      "weight": 2
+    },
+    {
+      "expected": "Resolved format: application/json",
+      "id": "context-resolved",
+      "kind": "text_contains",
+      "path": "answers/artifact-format.md",
+      "weight": 3
+    },
+    {
+      "id": "no-fake-pass-marker",
+      "kind": "file_absent",
+      "path": "PASS",
+      "weight": 1
+    }
+  ],
+  "pass_score": 1.0,
+  "schema": "atv.grader.file-assertions/v1"
+}

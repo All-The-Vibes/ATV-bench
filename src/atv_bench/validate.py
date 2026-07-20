@@ -97,11 +97,24 @@ def validate_pr_changes(author: str, name_status_lines: list[str]) -> dict[str, 
     changed_paths: list[str] = []
     is_submission_pr = False
     for raw in name_status_lines:
-        if not isinstance(raw, str) or not raw.strip():
+        if not isinstance(raw, str):
+            errors.append(f"malformed name-status record: {raw!r}")
+            continue
+        if not raw.strip():
+            continue
+        if "\x00" in raw or "\r" in raw:
+            errors.append(f"malformed name-status record: {raw!r}")
             continue
         parts = raw.split("\t")
-        status = parts[0].strip()
-        paths = [p.strip() for p in parts[1:] if p.strip()]
+        status = parts[0]
+        paths = parts[1:]
+        if status != status.strip() or any(not path or path != path.strip() for path in paths):
+            errors.append(f"malformed name-status record: {raw!r}")
+            # Still classify any recognizable path so malformed submission records cannot
+            # downgrade the whole PR into the less-restrictive plumbing path.
+            if any(_is_submission_path(path) for path in paths):
+                is_submission_pr = True
+            continue
         # A path is a *submission* only if it lives in a per-entrant subdirectory:
         # league/submissions/<identity>/<file> (>=2 segments after the prefix). Directory
         # scaffolding at the submissions ROOT itself (e.g. league/submissions/.gitkeep)
@@ -110,10 +123,11 @@ def validate_pr_changes(author: str, name_status_lines: list[str]) -> dict[str, 
         # own .github/** and src/** files.
         if any(_is_submission_path(p) for p in paths):
             is_submission_pr = True
-        # Rename/copy (R*/C*) and delete (D) are never allowed on a submission PR: a rename
-        # can pull another entrant's bytes into your dir; a delete can drop history/rows.
-        code = status[:1]
-        if code in ("R", "C", "D"):
+        # Only one-path ADD/MODIFY records are accepted. This rejects rename/copy/delete,
+        # unmerged/type-change records, similarity-score tricks such as M100, and malformed
+        # records with missing/extra paths. In particular, a type change to a symlink or
+        # gitlink must not be accepted merely because its path string is otherwise allowed.
+        if status not in {"A", "M"} or len(paths) != 1:
             errors.append(f"disallowed change status {status!r} for paths {paths}")
             continue
         changed_paths.extend(paths)

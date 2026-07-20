@@ -1,17 +1,14 @@
 <!-- /autoplan restore point: ~/.gstack/projects/atv-bench/master-autoplan-restore-20260715-103015.md -->
 
-> ## ⚠️ SUPERSEDED — re-scoped to Community League (Approach A)
-> This document describes the **v1 local-harness benchmark** (adapters, containerized
-> Portkey runner, local ELO/leaderboard). A later 4-phase dual-voice review (2026-07-15,
-> confidence 9) **re-scoped the shipping v1 to the Community League, Approach A**:
-> git + GitHub Action + static Pages, with a leak-safe harness fingerprint probe as the
-> credibility gate. The hosted Approach B is **deferred** behind an owner + adoption gate.
->
-> **Active build target:** `docs/COMMUNITY_LEAGUE.md` and the 30 tasks in
-> `~/.gstack/projects/atv-bench/tasks-{ceo,design,eng,devex}-review-*.jsonl`.
-> The adapter contract, spike core, and CodeClash reuse below still hold; the
-> **runner/Portkey/local-dashboard** sections are retained for historical context only
-> and are NOT the v1 surface. Read the banner, then treat Approach-B prose as archived.
+> ## ⚠️ SUPERSEDED — historical design only
+> This July 15, 2026 document records the earlier local-runner and Community League
+> design. It is not the specification for official harness benchmarking. The current
+> product boundaries, trial unit, trust model, statistics, and launch gates are defined
+> by [`docs/HARNESS_BENCHMARKING_BLUEPRINT.md`](docs/HARNESS_BENCHMARKING_BLUEPRINT.md),
+> [`docs/HARNESS_BENCHMARKING_TEST_PLAN.md`](docs/HARNESS_BENCHMARKING_TEST_PLAN.md),
+> [`docs/PRODUCTS_AND_TRACKS.md`](docs/PRODUCTS_AND_TRACKS.md), and
+> [`BENCHMARK_CHARTER.md`](BENCHMARK_CHARTER.md). Where this historical plan conflicts
+> with those July 19, 2026 documents, the newer documents control.
 
 # ATV-bench — Implementation Plan (local-harness v1, retained for context)
 

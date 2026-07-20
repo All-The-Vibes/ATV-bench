@@ -15,7 +15,6 @@ published, never crashes. Fail-closed.
 from __future__ import annotations
 
 from atv_bench.leaderboard import build_leaderboard_doc
-from atv_bench.elo import MatchResult, Outcome
 
 
 def _sub(identity, *, skills=None, mcps=None, plugins=None, harness="claude-code"):

@@ -63,6 +63,11 @@ def read_json(path: Path, root: Path) -> ReadOutcome:
             return ReadOutcome(reason=REASON_NOT_READABLE)
         if not path.exists():
             return ReadOutcome(reason=REASON_ABSENT)
+        # Windows reports opening a directory as PermissionError while POSIX reports
+        # IsADirectoryError. Classify the filesystem shape before opening so both hosts
+        # produce the semantic reason (present but not a readable regular file).
+        if not path.is_file():
+            return ReadOutcome(reason=REASON_NOT_READABLE)
         raw = path.read_text(encoding="utf-8")
     except PermissionError:
         return ReadOutcome(reason=REASON_PERMISSION)
@@ -94,6 +99,8 @@ def read_toml(path: Path, root: Path) -> ReadOutcome:
             return ReadOutcome(reason=REASON_NOT_READABLE)
         if not path.exists():
             return ReadOutcome(reason=REASON_ABSENT)
+        if not path.is_file():
+            return ReadOutcome(reason=REASON_NOT_READABLE)
         raw = path.read_text(encoding="utf-8")
     except PermissionError:
         return ReadOutcome(reason=REASON_PERMISSION)

@@ -9,6 +9,7 @@ specific harness.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -18,6 +19,19 @@ from atv_bench.cli import app
 from atv_bench.fingerprint import probe as fp
 
 runner = CliRunner()
+
+
+def _symlink_or_skip(link: Path, target: Path, *, directory: bool = False) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=directory)
+    except (OSError, NotImplementedError) as exc:
+        detail = (
+            f"{type(exc).__name__}(errno={getattr(exc, 'errno', None)}, "
+            f"winerror={getattr(exc, 'winerror', None)}): {exc}"
+        )
+        pytest.skip(
+            "symlink capability unavailable after attempted creation: " + detail
+        )
 
 
 # --- registry -------------------------------------------------------------------------
@@ -64,7 +78,10 @@ def test_harness_config_present_needs_primary_file(tmp_path):
     assert hz.harness_config_present("codex", base=tmp_path) is True
     # dangling-symlink primary → still present (fails closed later, not skipped)
     (tmp_path / ".claude").mkdir()
-    (tmp_path / ".claude" / "settings.json").symlink_to(tmp_path / ".claude" / "missing.json")
+    _symlink_or_skip(
+        tmp_path / ".claude" / "settings.json",
+        tmp_path / ".claude" / "missing.json",
+    )
     assert hz.harness_config_present("claude-code", base=tmp_path) is True
     # unknown / planned harness → False
     assert hz.harness_config_present("bogus", base=tmp_path) is False

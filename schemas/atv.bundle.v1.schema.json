@@ -1,0 +1,317 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:atv-bench:schema:atv.bundle:v1",
+  "title": "ATV-Bench content-addressed trial bundle v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "bundle_id",
+    "created_at",
+    "trust_tier",
+    "canonicalization",
+    "hash_algorithm",
+    "run_id",
+    "trial_id",
+    "attempt_id",
+    "contents",
+    "contents_digest",
+    "runner",
+    "platform"
+  ],
+  "properties": {
+    "schema": {
+      "const": "atv.bundle/v1"
+    },
+    "bundle_id": {
+      "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/identifier"
+    },
+    "created_at": {
+      "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/timestamp"
+    },
+    "trust_tier": {
+      "type": "string",
+      "enum": [
+        "local-self-attested",
+        "community-reproducible",
+        "official-attested",
+        "independently-reproduced"
+      ]
+    },
+    "canonicalization": {
+      "const": "atv.canonical-json/v1"
+    },
+    "hash_algorithm": {
+      "const": "sha256"
+    },
+    "run_id": {
+      "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/identifier"
+    },
+    "trial_id": {
+      "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/identifier"
+    },
+    "attempt_id": {
+      "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/identifier"
+    },
+    "contents": {
+      "type": "object",
+      "required": [
+        "harness_manifest",
+        "task_manifest",
+        "trial_request",
+        "event_stream",
+        "harness_result",
+        "trial_result",
+        "output_tree",
+        "grader_result",
+        "artifacts",
+        "logs",
+        "model_receipts",
+        "attestations"
+      ],
+      "properties": {
+        "harness_manifest": {
+          "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/documentDescriptor"
+        },
+        "task_manifest": {
+          "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/documentDescriptor"
+        },
+        "trial_request": {
+          "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/documentDescriptor"
+        },
+        "event_stream": {
+          "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/documentDescriptor"
+        },
+        "harness_result": {
+          "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/documentDescriptor"
+        },
+        "trial_result": {
+          "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/documentDescriptor"
+        },
+        "output_tree": {
+          "oneOf": [
+            {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/artifactDescriptor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "grader_result": {
+          "oneOf": [
+            {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/documentDescriptor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "artifacts": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/artifactDescriptor"
+          }
+        },
+        "logs": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": {
+            "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/documentDescriptor"
+          }
+        },
+        "model_receipts": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/documentDescriptor"
+          }
+        },
+        "attestations": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": {
+            "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/attestationDescriptor"
+          }
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "contents_digest": {
+      "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/sha256"
+    },
+    "runner": {
+      "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/versionedRef"
+    },
+    "platform": {
+      "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/platform"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "trust_tier": {
+            "enum": [
+              "official-attested",
+              "independently-reproduced"
+            ]
+          }
+        },
+        "required": [
+          "trust_tier"
+        ]
+      },
+      "then": {
+        "properties": {
+          "contents": {
+            "properties": {
+              "grader_result": {
+                "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/documentDescriptor"
+              },
+              "attestations": {
+                "minItems": 4,
+                "allOf": [
+                  {
+                    "contains": {
+                      "properties": {
+                        "role": {
+                          "const": "admission"
+                        }
+                      },
+                      "required": [
+                        "role"
+                      ]
+                    },
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "role": {
+                          "const": "harness-build"
+                        }
+                      },
+                      "required": [
+                        "role"
+                      ]
+                    },
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "role": {
+                          "const": "execution"
+                        }
+                      },
+                      "required": [
+                        "role"
+                      ]
+                    },
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "role": {
+                          "const": "evaluation"
+                        }
+                      },
+                      "required": [
+                        "role"
+                      ]
+                    },
+                    "minContains": 1
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "trust_tier": {
+            "enum": [
+              "official-attested",
+              "independently-reproduced"
+            ]
+          },
+          "contents": {
+            "properties": {
+              "model_receipts": {
+                "minItems": 1
+              }
+            },
+            "required": [
+              "model_receipts"
+            ]
+          }
+        },
+        "required": [
+          "trust_tier",
+          "contents"
+        ]
+      },
+      "then": {
+        "properties": {
+          "contents": {
+            "properties": {
+              "attestations": {
+                "contains": {
+                  "properties": {
+                    "role": {
+                      "const": "model"
+                    }
+                  },
+                  "required": [
+                    "role"
+                  ]
+                },
+                "minContains": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "trust_tier": {
+            "const": "independently-reproduced"
+          }
+        },
+        "required": [
+          "trust_tier"
+        ]
+      },
+      "then": {
+        "properties": {
+          "contents": {
+            "properties": {
+              "attestations": {
+                "contains": {
+                  "properties": {
+                    "role": {
+                      "const": "reproduction"
+                    }
+                  },
+                  "required": [
+                    "role"
+                  ]
+                },
+                "minContains": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "unevaluatedProperties": false
+}

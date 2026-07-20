@@ -1,17 +1,15 @@
 """Demo data for `atv-bench board --demo`.
 
-A populated, obviously-synthetic leaderboard so a first-time user can *see* what the
-board looks like — with several ranked harnesses and real fingerprint chips — before
-they've submitted anything or run a single match. Nothing here touches the network or
-the real league store; it writes a throwaay store into a temp dir the caller owns.
+A populated, obviously-synthetic League board so a first-time user can *see* what the
+bot/identity ranking and descriptive fingerprint chips look like before submitting or
+running a match. Nothing here touches the network or the real league store; it writes a
+throwaway store into a temp dir the caller owns.
 
 The entrants + matches are fixed (no RNG) so the demo board is deterministic.
 """
 from __future__ import annotations
 
 from typing import Any
-
-from atv_bench.elo import ANCHOR_IDENTITY
 
 # Synthetic entrants: (identity, harness, model, gstack, skills, mcps, plugins, agents).
 # Deliberately fictional logins so no real person is implied on a demo board.

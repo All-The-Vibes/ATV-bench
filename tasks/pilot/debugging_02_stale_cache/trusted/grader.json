@@ -1,0 +1,35 @@
+{
+  "assertions": [
+    {
+      "expected": "abfe75415d1606aed30f8df58a4559df102d2f8dd0426be2c741e769aafbeb27",
+      "id": "trace-preserved",
+      "kind": "sha256_equals",
+      "path": "logs/stale-cache.log",
+      "weight": 2
+    },
+    {
+      "expected": "cache-generation-mismatch",
+      "id": "root-cause-correct",
+      "kind": "json_value",
+      "path": "diagnostics/stale-cache.json",
+      "pointer": "/root_cause",
+      "weight": 2
+    },
+    {
+      "expected": "v3",
+      "id": "corrected-value",
+      "kind": "json_value",
+      "path": "diagnostics/stale-cache.json",
+      "pointer": "/corrected_value",
+      "weight": 2
+    },
+    {
+      "id": "no-fake-pass-marker",
+      "kind": "file_absent",
+      "path": "PASS",
+      "weight": 1
+    }
+  ],
+  "pass_score": 1.0,
+  "schema": "atv.grader.file-assertions/v1"
+}

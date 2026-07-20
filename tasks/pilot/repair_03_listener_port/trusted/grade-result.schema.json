@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"properties":{"passed":{"type":"boolean"},"score":{"maximum":1,"minimum":0,"type":"number"}},"required":["passed","score"],"title":"ATV pilot grade result for pilot.repair.03-listener-port","type":"object"}

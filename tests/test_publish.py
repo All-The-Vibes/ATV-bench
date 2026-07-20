@@ -73,7 +73,8 @@ def test_validate_artifact_accepts_forfeit_with_reason(tmp_path):
 
 def test_validate_artifact_rejects_missing_players(tmp_path):
     p = tmp_path / "r.json"
-    bad = _ok(); del bad["player_b"]
+    bad = _ok()
+    del bad["player_b"]
     p.write_text(json.dumps(bad))
     with pytest.raises(ValueError):
         validate_artifact(str(p))

@@ -1,0 +1,35 @@
+{
+  "assertions": [
+    {
+      "expected": "1420ec7d66fedb62eb74261d6055e8c137966289f75d08b7e818bf6b1f6dbb87",
+      "id": "trace-preserved",
+      "kind": "sha256_equals",
+      "path": "logs/inverted-flag.log",
+      "weight": 2
+    },
+    {
+      "expected": "negated-health-check",
+      "id": "root-cause-correct",
+      "kind": "json_value",
+      "path": "diagnostics/inverted-flag.json",
+      "pointer": "/root_cause",
+      "weight": 2
+    },
+    {
+      "expected": true,
+      "id": "corrected-value",
+      "kind": "json_value",
+      "path": "diagnostics/inverted-flag.json",
+      "pointer": "/corrected_value",
+      "weight": 2
+    },
+    {
+      "id": "no-fake-pass-marker",
+      "kind": "file_absent",
+      "path": "PASS",
+      "weight": 1
+    }
+  ],
+  "pass_score": 1.0,
+  "schema": "atv.grader.file-assertions/v1"
+}

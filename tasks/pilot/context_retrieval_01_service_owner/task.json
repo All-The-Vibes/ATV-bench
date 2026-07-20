@@ -1,0 +1,215 @@
+{
+  "budget_limits": {
+    "artifact_bytes": 4194304,
+    "cost_microusd": 250000,
+    "cpu_time_ms": 12000,
+    "memory_bytes": 268435456,
+    "model_calls": 12,
+    "model_input_tokens": 6000,
+    "model_output_tokens": 4000,
+    "model_total_tokens": 10000,
+    "pids": 64,
+    "stderr_bytes": 2097152,
+    "stdout_bytes": 2097152,
+    "storage_bytes": 268435456,
+    "tool_calls": 100,
+    "wall_time_ms": 15000
+  },
+  "capability_tags": [
+    "context-retrieval",
+    "operation-service-owner",
+    "deterministic",
+    "public-synthetic"
+  ],
+  "category": "context-retrieval",
+  "difficulty": "easy",
+  "environment": {
+    "image": "docker.io/library/python@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b",
+    "platform": {
+      "architecture": "amd64",
+      "os": "linux"
+    }
+  },
+  "grader": {
+    "budget_limits": {
+      "artifact_bytes": 1048576,
+      "cost_microusd": 0,
+      "cpu_time_ms": 5000,
+      "memory_bytes": 134217728,
+      "model_calls": 0,
+      "model_input_tokens": 0,
+      "model_output_tokens": 0,
+      "model_total_tokens": 0,
+      "pids": 16,
+      "stderr_bytes": 1048576,
+      "stdout_bytes": 1048576,
+      "storage_bytes": 134217728,
+      "tool_calls": 0,
+      "wall_time_ms": 5000
+    },
+    "command": [
+      "python",
+      "-m",
+      "atv_bench.eval.grader"
+    ],
+    "hidden_inputs_digest": {
+      "algorithm": "sha256",
+      "value": "1cef97c56c1bdaaa457481adc20981e16793dd18b1647a302284fe5f5188ca96"
+    },
+    "image": "docker.io/library/python@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b",
+    "network": {
+      "allowed_destinations": [],
+      "mode": "none"
+    },
+    "replay_runs": 2,
+    "result_schema_digest": {
+      "algorithm": "sha256",
+      "value": "e3cc53a937ecf6e3c1d43a889da08b38f3428835860cebc2fc36beaccde6d229"
+    },
+    "score_scale": {
+      "possible": 1000,
+      "unit": "points"
+    }
+  },
+  "id": "pilot.context-retrieval.01-service-owner",
+  "license": {
+    "redistribution": "allowed",
+    "spdx": "MIT"
+  },
+  "output": {
+    "allow_any_relative_path": false,
+    "allowed_media_types": [
+      "text/plain"
+    ],
+    "allowed_paths": [
+      "answers/service-owner.md",
+      "docs/index-service-owner.md",
+      "docs/service-owner.md"
+    ],
+    "max_files": 16,
+    "max_total_bytes": 262144,
+    "mode": "workspace-tree",
+    "required_paths": [
+      "answers/service-owner.md",
+      "docs/index-service-owner.md",
+      "docs/service-owner.md"
+    ]
+  },
+  "policy": {
+    "credential_names": [],
+    "network": {
+      "allowed_destinations": [],
+      "mode": "none"
+    },
+    "tools": {
+      "allowed": [
+        "editor",
+        "shell"
+      ],
+      "denied": [
+        "browser"
+      ]
+    },
+    "writable_paths": [
+      "/workspace",
+      "/artifacts"
+    ]
+  },
+  "prompt": {
+    "digest": {
+      "algorithm": "sha256",
+      "value": "a5fd2f392f5dfc0cb452281e1818aad42253ddd672fcd78377499bc60982e59e"
+    },
+    "encoding": "utf-8",
+    "media_type": "text/markdown",
+    "path": "prompt.md"
+  },
+  "protocol_range": {
+    "maximum": 1,
+    "minimum": 1
+  },
+  "schema": "atv.task/v1",
+  "source": {
+    "repository": "https://github.com/All-The-Vibes/ATV-bench",
+    "revision": "public-synthetic-pilot-v1",
+    "tree_digest": {
+      "algorithm": "sha256",
+      "value": "7dff01597ba0dd4b887506f045d9afea7a3df8cac0e42ae2ed6c9a2a2f3a02cc"
+    }
+  },
+  "title": "Retrieve service owner context",
+  "track_compatibility": [
+    "controlled",
+    "systems"
+  ],
+  "validation_evidence": {
+    "alternative_solutions": [
+      {
+        "digest": {
+          "algorithm": "sha256",
+          "value": "49760d1dbebea100770c1fec3538e3da0198e15ac8019be25eb8667e723e15c5"
+        },
+        "media_type": "application/json",
+        "path": "trusted/validation/alternative.json",
+        "schema": "atv.validation-case/v1",
+        "size_bytes": 99
+      }
+    ],
+    "exploit_cases": [
+      {
+        "digest": {
+          "algorithm": "sha256",
+          "value": "5db6529c6d5b2dd5d19bed4fce20d1dec0fb05c98589288b2206c49654358270"
+        },
+        "media_type": "application/json",
+        "path": "trusted/validation/exploit.json",
+        "schema": "atv.validation-case/v1",
+        "size_bytes": 95
+      }
+    ],
+    "independent_review": {
+      "digest": {
+        "algorithm": "sha256",
+        "value": "faf8947c35f29051bfe34ae03ecb04b373f2dea616718a0cf998a8019763e37e"
+      },
+      "media_type": "application/json",
+      "path": "metadata/independent-review.json",
+      "schema": "atv.independent-review/v2",
+      "size_bytes": 957
+    },
+    "mutation_cases": [
+      {
+        "digest": {
+          "algorithm": "sha256",
+          "value": "240939471a58f16b0007a3183b9bb3c7839dff618e1e9cc357f81500805dbc96"
+        },
+        "media_type": "application/json",
+        "path": "trusted/validation/mutation.json",
+        "schema": "atv.validation-case/v1",
+        "size_bytes": 96
+      }
+    ],
+    "noop": {
+      "digest": {
+        "algorithm": "sha256",
+        "value": "100824619d68151a87e55a7c9ffaa0ac1e1615406830ff549c27e0c0539dbf3b"
+      },
+      "media_type": "application/json",
+      "path": "trusted/validation/noop.json",
+      "schema": "atv.validation-case/v1",
+      "size_bytes": 85
+    },
+    "oracle": {
+      "digest": {
+        "algorithm": "sha256",
+        "value": "de951687a308e6c6af8861d6288b18b95b0d200159290a16ee27f0d514eaeda3"
+      },
+      "media_type": "application/json",
+      "path": "trusted/validation/oracle.json",
+      "schema": "atv.validation-case/v1",
+      "size_bytes": 94
+    }
+  },
+  "version": "1.0.0",
+  "visibility": "public"
+}

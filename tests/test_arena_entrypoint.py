@@ -18,8 +18,6 @@ import sys
 import textwrap
 from pathlib import Path
 
-import pytest
-
 
 def run_entrypoint(bot_dir: Path, env_extra: dict[str, str]) -> dict:
     import os

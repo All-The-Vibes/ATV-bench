@@ -1,0 +1,3 @@
+scenario=08
+observation=counter reported four before third retry completed
+source=public-pilot

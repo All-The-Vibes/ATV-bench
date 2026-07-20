@@ -1,0 +1,4 @@
+scenario=09
+observation=inactive rows were counted with two active rows
+source=public-pilot
+observation=rewritten

@@ -14,6 +14,8 @@ license-clean. The track is built for a ~30s product showcase:
 Written to a 44.1k mono WAV.
 """
 import sys
+import wave as wavelib
+
 import numpy as np
 from scipy.signal import lfilter
 
@@ -232,7 +234,6 @@ mix[-fade:] *= np.linspace(1, 0, fade)
 mix = mix / (np.max(np.abs(mix)) + 1e-9) * 0.92
 
 pcm = (mix * 32767).astype("<i2")
-import wave as wavelib
 with wavelib.open(OUT, "wb") as w:
     w.setnchannels(1)
     w.setsampwidth(2)

@@ -1,0 +1,28 @@
+{
+  "assertions": [
+    {
+      "expected": 3,
+      "id": "target-repaired",
+      "kind": "json_value",
+      "path": "config/replica-count.json",
+      "pointer": "/deployment/replicas",
+      "weight": 3
+    },
+    {
+      "expected": "repair-anchor-06",
+      "id": "anchor-preserved",
+      "kind": "json_value",
+      "path": "config/replica-count.json",
+      "pointer": "/anchor",
+      "weight": 2
+    },
+    {
+      "id": "no-fake-pass-marker",
+      "kind": "file_absent",
+      "path": "PASS",
+      "weight": 1
+    }
+  ],
+  "pass_score": 1.0,
+  "schema": "atv.grader.file-assertions/v1"
+}

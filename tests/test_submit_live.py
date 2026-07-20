@@ -229,7 +229,7 @@ def test_missing_fork_is_non_fatal_for_first_timer(tmp_path):
     `gh repo fork` bootstrap never ran."""
     def fake_cmd(cmd, **kwargs):
         joined = " ".join(cmd)
-        if f"gh repo view octocat/ATV-bench" in joined:
+        if "gh repo view octocat/ATV-bench" in joined:
             return (1, "", "Could not resolve to a Repository")  # no fork yet
         if "gh auth status" in joined:
             return (0, "Logged in", "")

@@ -1,0 +1,35 @@
+{
+  "assertions": [
+    {
+      "expected": "319abcb53ffb14cff96f456d9e599e6e696ff9338ea1740a0f9c70ef20d08e8c",
+      "id": "journal-preserved",
+      "kind": "sha256_equals",
+      "path": "state/snapshot-owner-journal.json",
+      "weight": 2
+    },
+    {
+      "expected": 8,
+      "id": "checkpoint-restored",
+      "kind": "json_value",
+      "path": "recovery/snapshot-owner.json",
+      "pointer": "/checkpoint",
+      "weight": 2
+    },
+    {
+      "expected": "worker-03",
+      "id": "state-recovered",
+      "kind": "json_value",
+      "path": "recovery/snapshot-owner.json",
+      "pointer": "/recovered",
+      "weight": 2
+    },
+    {
+      "id": "no-fake-pass-marker",
+      "kind": "file_absent",
+      "path": "PASS",
+      "weight": 1
+    }
+  ],
+  "pass_score": 1.0,
+  "schema": "atv.grader.file-assertions/v1"
+}

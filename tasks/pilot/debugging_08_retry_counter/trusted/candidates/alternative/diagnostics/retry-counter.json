@@ -1,0 +1,5 @@
+{
+  "corrected_value": 3,
+  "explanation": "derived from retry-counter trace",
+  "root_cause": "preincremented-retry-count"
+}

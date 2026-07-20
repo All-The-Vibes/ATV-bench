@@ -1,0 +1,38 @@
+{
+  "assertions": [
+    {
+      "expected": "165b332a6b32b389deac7ff45829b191beb7481c4339b5c9de0a01ada71237a7",
+      "id": "journal-preserved",
+      "kind": "sha256_equals",
+      "path": "state/retry-state-journal.json",
+      "weight": 2
+    },
+    {
+      "expected": 2,
+      "id": "checkpoint-restored",
+      "kind": "json_value",
+      "path": "recovery/retry-state.json",
+      "pointer": "/checkpoint",
+      "weight": 2
+    },
+    {
+      "expected": {
+        "attempt": 3,
+        "status": "retry"
+      },
+      "id": "state-recovered",
+      "kind": "json_value",
+      "path": "recovery/retry-state.json",
+      "pointer": "/recovered",
+      "weight": 2
+    },
+    {
+      "id": "no-fake-pass-marker",
+      "kind": "file_absent",
+      "path": "PASS",
+      "weight": 1
+    }
+  ],
+  "pass_score": 1.0,
+  "schema": "atv.grader.file-assertions/v1"
+}

@@ -1,0 +1,4 @@
+scenario=04
+observation=six rows observed but two identifiers repeat
+source=public-pilot
+observation=rewritten

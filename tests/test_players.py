@@ -1,4 +1,4 @@
-"""TDD for players.py — HarnessPlayerCore promoted with snapshot capture + build-once.
+"""TDD for players.py — persistent iterative edits plus frozen-artifact control.
 
 Uses a FAKE container (a dir-backed tree) and a FAKE adapter (writes files, optionally
 commits) so the edit turn is fully unit-testable with zero Docker/CodeClash.
@@ -33,14 +33,16 @@ class DirContainer:
         out: dict[str, str] = {}
         for p in sorted(self.root.rglob("*")):
             if p.is_file():
-                out[p.relative_to(self.root).as_posix()] = p.read_text()
+                out[p.relative_to(self.root).as_posix()] = p.read_bytes().decode(
+                    "utf-8"
+                )
         return out
 
     def write_tree(self, files: dict[str, str]) -> None:
         for rel, content in files.items():
             dest = self.root / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(content)
+            dest.write_bytes(content.encode("utf-8"))
 
 
 class FakeAdapter(HarnessAdapter):
@@ -61,10 +63,10 @@ class FakeAdapter(HarnessAdapter):
         self.calls += 1
         repo = Path(req.repo_path)
         if not self.no_edit:
-            (repo / req.bot_file).write_text(self.new_content)
+            (repo / req.bot_file).write_bytes(self.new_content.encode("utf-8"))
             for rel, content in self.extra_files.items():
                 (repo / rel).parent.mkdir(parents=True, exist_ok=True)
-                (repo / rel).write_text(content)
+                (repo / rel).write_bytes(content.encode("utf-8"))
             if self.commit:
                 subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
                 subprocess.run(
@@ -136,11 +138,18 @@ def test_planted_secret_in_captured_tree_is_rejected(tmp_path):
 
 
 def test_build_once_across_multiple_triggers(tmp_path):
-    """ENG-4/gap#9: the harness builds exactly once; N round-triggers reuse the artifact."""
+    """Frozen-artifact is the explicit one-build replay control."""
     c = DirContainer(tmp_path / "ctr")
     c.write_tree({"main.py": "def get_move(o):\n    return 'N'\n"})
     adapter = FakeAdapter(commit=False)
-    core = _core(c, adapter, player_id="p1", game="lightcycles", prompt_version="edit@1")
+    core = _core(
+        c,
+        adapter,
+        player_id="p1",
+        game="lightcycles",
+        prompt_version="edit@1",
+        adaptation="frozen-artifact",
+    )
     core.edit_turn()
     core.edit_turn()
     core.edit_turn()
@@ -153,6 +162,6 @@ def test_provenance_diff_captured(tmp_path):
     c.write_tree({"main.py": "def get_move(o):\n    return 'N'\n"})
     adapter = FakeAdapter(commit=True)
     core = _core(c, adapter)
-    result = core.edit_turn()
+    core.edit_turn()
     # diff is provenance/display; the materialized tree is authoritative (ENG-3)
     assert core.last_diff and "return 'S'" in core.last_diff

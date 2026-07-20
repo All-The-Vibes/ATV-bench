@@ -1,0 +1,5 @@
+{
+  "corrected_value": 4,
+  "explanation": "derived from duplicate-row trace",
+  "root_cause": "missing-deduplication"
+}

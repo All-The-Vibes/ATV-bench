@@ -1,0 +1,24 @@
+{
+  "anchor": "repair-anchor-09",
+  "deployment": {
+    "mode": "release",
+    "region": "us-central",
+    "replicas": 3
+  },
+  "feature": {
+    "enabled": true
+  },
+  "limits": {
+    "error_threshold": 5,
+    "retries": 12,
+    "timeout_ms": 2500
+  },
+  "listener": {
+    "port": 8443
+  },
+  "output": {
+    "format": "json"
+  },
+  "service": "pilot-service-09",
+  "status": "ready"
+}

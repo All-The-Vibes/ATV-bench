@@ -18,8 +18,6 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-import pytest
-
 from atv_bench.adapters.snapshot import capture_diff, seed_base
 
 

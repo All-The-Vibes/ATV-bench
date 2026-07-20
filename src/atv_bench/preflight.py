@@ -79,13 +79,28 @@ def check_docker() -> CheckResult:
 
 
 def check_codeclash() -> CheckResult:
-    from atv_bench.codeclash_env import codeclash_available
+    from atv_bench.codeclash_env import (
+        CODECLASH_INSTALL_HINT,
+        CODECLASH_PIN,
+        CodeClashUnavailable,
+        import_codeclash,
+        resolve_codeclash_source,
+    )
 
-    if codeclash_available():
-        return CheckResult("codeclash", True, "importable at pinned version")
+    try:
+        import_codeclash()
+        resolve_codeclash_source()
+    except CodeClashUnavailable as exc:
+        return CheckResult(
+            "codeclash",
+            False,
+            str(exc),
+            fix=CODECLASH_INSTALL_HINT,
+        )
     return CheckResult(
-        "codeclash", False, "vendored CodeClash not importable",
-        fix="install it: `uv pip install -e vendor/CodeClash --no-deps` plus its deps",
+        "codeclash",
+        True,
+        f"pinned commit {CODECLASH_PIN[:12]} with arena assets verified",
     )
 
 

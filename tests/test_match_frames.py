@@ -8,7 +8,7 @@ frames.
 """
 from __future__ import annotations
 
-from atv_bench.arena.engine import Direction, Outcome, TronEngine
+from atv_bench.arena.engine import Direction, TronEngine
 from atv_bench.arena.referee import run_match
 from atv_bench.bots import make_bot
 

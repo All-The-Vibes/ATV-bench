@@ -1,0 +1,8 @@
+{
+  "changed_by_mutation_case": 10,
+  "transitions": [
+    "cold",
+    "warming",
+    "active"
+  ]
+}

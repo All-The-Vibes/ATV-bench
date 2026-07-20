@@ -1,0 +1,33 @@
+{
+  "assertions": [
+    {
+      "expected": "8511812e7f444055fb1a1196c760193f50b41861c413cd7bd758bddc774da9df",
+      "id": "index-preserved",
+      "kind": "sha256_equals",
+      "path": "docs/index-escalation-channel.md",
+      "weight": 1
+    },
+    {
+      "expected": "725378cfb2ae2a166a3bde1bcd94a4a4ae5bd9ab4332e6422cd64a5124f5349b",
+      "id": "source-preserved",
+      "kind": "sha256_equals",
+      "path": "docs/escalation-channel.md",
+      "weight": 2
+    },
+    {
+      "expected": "Resolved channel: operations-triage",
+      "id": "context-resolved",
+      "kind": "text_contains",
+      "path": "answers/escalation-channel.md",
+      "weight": 3
+    },
+    {
+      "id": "no-fake-pass-marker",
+      "kind": "file_absent",
+      "path": "PASS",
+      "weight": 1
+    }
+  ],
+  "pass_score": 1.0,
+  "schema": "atv.grader.file-assertions/v1"
+}

@@ -274,5 +274,9 @@ def build_replay_html(result: dict[str, Any], out_dir: str | Path,
         .replace("__MATCH_JSON__", match_json)
     )
     path = out / "replay.html"
-    path.write_text(html_text)
+    # Evidence bytes must not depend on the host locale or newline convention.
+    # Normalize the source template to canonical LF, then write UTF-8 bytes directly
+    # so CP1252 Windows hosts neither reject emoji nor rewrite LF to CRLF.
+    canonical_html = html_text.replace("\r\n", "\n").replace("\r", "\n")
+    path.write_bytes(canonical_html.encode("utf-8"))
     return path

@@ -1,0 +1,13 @@
+{
+  "changed_by_mutation_case": 9,
+  "items": [
+    {
+      "quantity": 3,
+      "weight": 5
+    },
+    {
+      "quantity": 2,
+      "weight": 4
+    }
+  ]
+}

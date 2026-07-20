@@ -1,0 +1,5 @@
+{
+  "corrected_value": "src/app.py",
+  "explanation": "derived from path-normalization trace",
+  "root_cause": "backslash-normalization"
+}

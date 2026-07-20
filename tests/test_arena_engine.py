@@ -18,9 +18,7 @@ Rules (lightcycles / Tron):
 """
 from __future__ import annotations
 
-import pytest
-
-from atv_bench.arena.engine import Direction, GameState, TronEngine, Outcome
+from atv_bench.arena.engine import Direction, Outcome, TronEngine
 
 
 def make_engine(**kw):

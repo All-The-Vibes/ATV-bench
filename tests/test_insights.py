@@ -1,8 +1,7 @@
 """Tests for the leaderboard insights generator (demo Act 3).
 
-`build_insights(rows)` turns ranked board rows into a short list of human-readable
-insight strings tying fingerprint tags to ranking — the "listed insights from our
-gstack plan" the demo shows next to the board. Pure function; RED before implementation.
+`build_insights(rows)` turns ranked League rows into short human-readable strings
+without treating self-attested fingerprint tags as causal explanations of Elo.
 """
 from __future__ import annotations
 
@@ -39,10 +38,12 @@ def test_build_insights_returns_nonempty_strings():
     assert all(isinstance(s, str) and s.strip() for s in out)
 
 
-def test_build_insights_mentions_gstack_advantage():
-    # gstack harnesses (avg of ada+grace = 1587.5) beat the non-gstack (linus = 1320).
+def test_build_insights_mentions_gstack_only_as_self_attested_metadata():
     out = " ".join(build_insights(_rows())).lower()
     assert "gstack" in out
+    assert "self-attested" in out
+    assert "does not establish a harness effect" in out
+    assert "average +" not in out
 
 
 def test_build_insights_names_the_leader():

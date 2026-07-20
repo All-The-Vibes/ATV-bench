@@ -28,7 +28,6 @@ from atv_bench.fingerprint.provenance import (
     fingerprint_hash,
     verify_provenance,
 )
-from atv_bench.errors import AtvError, ErrorCode
 
 
 FP_CLAUDE = {

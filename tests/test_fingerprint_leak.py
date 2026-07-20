@@ -11,7 +11,6 @@ Design: docs/COMMUNITY_LEAGUE.md 'Harness fingerprint (the credibility gate)'.
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 import pytest
@@ -181,7 +180,6 @@ def test_claude_installpath_escape_rejected(tmp_path, bad_install_path):
         "enabledPlugins": {"evil@mkt": True},
     }))
     result = fp.probe_claude_code(home)  # must not raise
-    blob = json.dumps(result.manifest)
     # the escaping tree contributes no skill basenames
     assert "ssh" not in result.manifest["skills"]
     assert "aws" not in result.manifest["skills"]

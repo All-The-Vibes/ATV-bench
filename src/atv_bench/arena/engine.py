@@ -12,7 +12,7 @@ same terminal state, so a match is reproducible from its seed and move log.
 from __future__ import annotations
 
 import enum
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 
 
 class Direction(str, enum.Enum):

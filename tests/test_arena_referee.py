@@ -12,17 +12,13 @@ INVALID move and LOSES; it can never inject a win.
 """
 from __future__ import annotations
 
-import json
 import sys
 import textwrap
 from pathlib import Path
 
-import pytest
-
 from atv_bench.arena.engine import Direction, Outcome, TronEngine
 from atv_bench.arena.referee import (
     ForfeitReason,
-    MoveSource,
     SubprocessMoveSource,
     TrustedGreedyBot,
     run_match,

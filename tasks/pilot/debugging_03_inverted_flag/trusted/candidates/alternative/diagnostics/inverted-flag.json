@@ -1,0 +1,5 @@
+{
+  "corrected_value": true,
+  "explanation": "derived from inverted-flag trace",
+  "root_cause": "negated-health-check"
+}

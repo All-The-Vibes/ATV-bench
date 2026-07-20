@@ -1,0 +1,58 @@
+{
+  "schema": "atv.harness/v1",
+  "id": "generic-command-example",
+  "version": "1.0.0",
+  "display_name": "Generic Command Example",
+  "runtime": {
+    "kind": "process",
+    "command": [
+      "python",
+      "{manifest_dir}/generic_harness.py"
+    ],
+    "working_directory": "/workspace",
+    "executable_digest": {
+      "algorithm": "sha256",
+      "value": "4605390708958b2dd20cc1d4de7c0c30314e90bc5cdae27445b878494969567d"
+    }
+  },
+  "protocol": {
+    "minimum_version": 1,
+    "maximum_version": 1,
+    "input": "stdin-json",
+    "output": "stdout-jsonl"
+  },
+  "capabilities": {
+    "workspace_edit": true,
+    "subagents": false,
+    "resumable": false,
+    "browser": false,
+    "model_events": true,
+    "tool_events": false,
+    "usage_events": true,
+    "checkpoint_events": false,
+    "model_selection": "multiple",
+    "token_usage_reporting": "reported",
+    "call_usage_reporting": "reported",
+    "cost_usage_reporting": "reported"
+  },
+  "security": {
+    "env_allowlist": [],
+    "network_requirement": "none",
+    "writable_paths": [
+      "/workspace",
+      "/artifacts"
+    ],
+    "requires_tty": false
+  },
+  "metadata": {
+    "source": {
+      "repository": "https://github.com/All-The-Vibes/ATV-bench",
+      "revision": "example-generic-command-v1",
+      "tree_digest": {
+        "algorithm": "sha256",
+        "value": "4605390708958b2dd20cc1d4de7c0c30314e90bc5cdae27445b878494969567d"
+      }
+    },
+    "license": "MIT"
+  }
+}

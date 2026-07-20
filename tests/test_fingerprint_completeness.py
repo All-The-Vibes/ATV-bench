@@ -13,8 +13,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from atv_bench.fingerprint import probe
 from atv_bench.fingerprint.probe import FINGERPRINT_SCHEMA_KEYS
 

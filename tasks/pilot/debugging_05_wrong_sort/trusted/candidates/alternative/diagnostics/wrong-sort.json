@@ -1,0 +1,5 @@
+{
+  "corrected_value": "alpha",
+  "explanation": "derived from wrong-sort trace",
+  "root_cause": "descending-sort"
+}

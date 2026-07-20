@@ -1,0 +1,4 @@
+scenario=01
+observation=loop emitted six rows for a five-row request
+source=public-pilot
+observation=rewritten

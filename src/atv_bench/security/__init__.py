@@ -1,0 +1,96 @@
+"""Trusted credential-broker and model-gateway primitives for official trials.
+
+These types implement infrastructure controls and signed evidence. They do not
+claim that a provider cryptographically proved its internal model execution.
+See :class:`atv_bench.security.attestation.TrustAssumptions`.
+"""
+
+from atv_bench.security.attestation import (
+    AttestationSigner,
+    SignedAttestation,
+    TrustAssumptions,
+    VerificationResult,
+    canonical_json_bytes,
+)
+from atv_bench.security.broker import (
+    Authorization,
+    BudgetIdentity,
+    BrokerError,
+    BrokerErrorCode,
+    CapabilityMaterial,
+    CredentialBroker,
+    OpaqueTrialHandle,
+    TrialBudget,
+    TrialPolicy,
+    UnderreportPolicy,
+)
+from atv_bench.security.gateway import (
+    FakeProvider,
+    GatewayLogRecord,
+    GatewayResult,
+    GatewayStatus,
+    GatewayTerminalError,
+    ModelGateway,
+    NormalizedModelRequest,
+    ProviderCallError,
+    ProviderResponse,
+    ProviderUsage,
+    RouteDefinition,
+    UsageSummary,
+)
+from atv_bench.security.signing import (
+    AttestationRole,
+    DsseSignature,
+    Ed25519StatementSigner,
+    OfficialBindings,
+    OfficialTrustPolicy,
+    SignedDsseEnvelope,
+    SigningError,
+    TrustedEd25519Key,
+    TrustPolicyError,
+    VerifiedOfficialStatement,
+    build_official_statement,
+    dsse_pae,
+)
+
+__all__ = [
+    "AttestationSigner",
+    "AttestationRole",
+    "Authorization",
+    "BudgetIdentity",
+    "BrokerError",
+    "BrokerErrorCode",
+    "CapabilityMaterial",
+    "CredentialBroker",
+    "DsseSignature",
+    "Ed25519StatementSigner",
+    "FakeProvider",
+    "GatewayLogRecord",
+    "GatewayResult",
+    "GatewayStatus",
+    "GatewayTerminalError",
+    "ModelGateway",
+    "NormalizedModelRequest",
+    "OfficialBindings",
+    "OfficialTrustPolicy",
+    "OpaqueTrialHandle",
+    "ProviderCallError",
+    "ProviderResponse",
+    "ProviderUsage",
+    "RouteDefinition",
+    "SignedAttestation",
+    "SignedDsseEnvelope",
+    "SigningError",
+    "TrialBudget",
+    "TrialPolicy",
+    "TrustAssumptions",
+    "TrustedEd25519Key",
+    "TrustPolicyError",
+    "UnderreportPolicy",
+    "UsageSummary",
+    "VerificationResult",
+    "VerifiedOfficialStatement",
+    "build_official_statement",
+    "canonical_json_bytes",
+    "dsse_pae",
+]

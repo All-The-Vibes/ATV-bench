@@ -1,24 +1,10 @@
-"""Fork-safe publish split (santa re-review #7) — runs on EVERY push.
-
-THE BUG: `CONTRIBUTING.md` documents "fork → open PR → maintainer labels run-match", but
-the original single-workflow design ran the trusted publish job (contents/pages/id-token
-write) inside the SAME `pull_request` run as the untrusted match job. GitHub gives a
-`pull_request` run from a FORKED repo a READ-ONLY `GITHUB_TOKEN`, so the documented
-external-contributor flow could score in-workspace but could never persist `league/` or
-deploy Pages. It worked only for same-repo branches.
-
-THE FIX (documented GitHub pattern): split the privileged phase onto a separate
-`workflow_run` workflow that runs in the TRUSTED base-repo context with a full write token
-even for fork PRs, and never checks out or executes untrusted PR code. The untrusted match
-job still holds no token; it hands the trusted publish workflow (a) the sanitized result
-artifact and (b) a trusted metadata artifact (submitter/opponent/match_id/bot_sha256 built
-from GitHub context, NOT bot stdout).
-
-These tests assert the two-workflow topology and that the split preserves every isolation
-property. Comment-stripped, real-behavior assertions against the parsed workflows.
-"""
+"""Fork-safe League publication and PR-workflow forgery tripwires."""
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -27,151 +13,387 @@ import yaml
 WF_DIR = Path(__file__).parent.parent / ".github" / "workflows"
 MATCH_WF = WF_DIR / "league.yml"
 PUBLISH_WF = WF_DIR / "league-publish.yml"
+DEPLOY_WF = WF_DIR / "league-deploy.yml"
+
+RUN_ID = "123"
+PR_NUMBER = 7
+RUN_SHA = "c" * 40
+HEAD_SHA = RUN_SHA
+TRUSTED_SHA = "b" * 40
+WORKFLOW_BLOB = "d" * 40
+BOT_BLOB = "e" * 40
+BOT_BYTES = b"print('safe bot')\n"
+BOT_SHA256 = hashlib.sha256(BOT_BYTES).hexdigest()
 
 
 @pytest.fixture(scope="module")
 def match_wf():
-    assert MATCH_WF.exists(), "league.yml (match workflow) must exist"
-    return yaml.safe_load(MATCH_WF.read_text())
+    return yaml.safe_load(MATCH_WF.read_text(encoding="utf-8"))
 
 
 @pytest.fixture(scope="module")
 def publish_wf():
-    assert PUBLISH_WF.exists(), "league-publish.yml (trusted publish workflow) must exist"
-    return yaml.safe_load(PUBLISH_WF.read_text())
+    return yaml.safe_load(PUBLISH_WF.read_text(encoding="utf-8"))
 
 
-def _on(wf):
-    return wf.get("on") or wf.get(True)  # PyYAML parses bare `on:` as boolean True
+@pytest.fixture(scope="module")
+def deploy_wf():
+    return yaml.safe_load(DEPLOY_WF.read_text(encoding="utf-8"))
 
 
-# --- the match workflow no longer holds the privileged publish job ---
-
-def test_match_workflow_has_no_privileged_publish_job(match_wf):
-    """The pull_request-triggered workflow must NOT contain a job with write scope: on a
-    fork PR that token is read-only, so privileged work must live in the workflow_run
-    workflow instead. Every job here must be read-only / no-token."""
-    for name, job in match_wf["jobs"].items():
-        perms = job.get("permissions", {})
-        assert perms.get("contents") != "write", f"{name} must not have contents:write in the PR workflow"
-        assert "pages" not in perms, f"{name} must not have pages scope in the PR workflow"
-        assert "id-token" not in perms, f"{name} must not have id-token scope in the PR workflow"
+def _on(workflow):
+    return workflow.get("on") or workflow.get(True)
 
 
-def test_match_workflow_still_has_untrusted_match_job(match_wf):
-    assert "match" in match_wf["jobs"], "match job must remain in league.yml"
+def _step(workflow, *, job="publish", step_id=None, name_fragment=None):
+    for item in workflow["jobs"][job]["steps"]:
+        if step_id is not None and item.get("id") == step_id:
+            return item
+        if name_fragment is not None and name_fragment.lower() in item.get("name", "").lower():
+            return item
+    raise AssertionError(f"step not found: id={step_id!r}, name={name_fragment!r}")
+
+
+def _python_heredoc(step) -> str:
+    run = step["run"]
+    prefix = "python3 - <<'PY'\n"
+    assert prefix in run
+    return run.split(prefix, 1)[1].rsplit("\nPY", 1)[0]
+
+
+def _default_api_responses(*, workflow_blob=WORKFLOW_BLOB, bot_mode="100644"):
+    workflow_path = ".github/workflows/league.yml"
+    bot_path = "league/submissions/octocat/main.py"
+    return {
+        f"repos/All-The-Vibes/ATV-bench/actions/runs/{RUN_ID}": {
+            "id": int(RUN_ID),
+            "event": "pull_request",
+            "conclusion": "success",
+            "path": workflow_path,
+            "head_sha": RUN_SHA,
+            "pull_requests": [],
+        },
+        f"repos/All-The-Vibes/ATV-bench/commits/{RUN_SHA}/pulls": [
+            {"number": PR_NUMBER, "user": {"login": "octocat"}}
+        ],
+        "repos/All-The-Vibes/ATV-bench": {"default_branch": "main"},
+        "repos/All-The-Vibes/ATV-bench/git/ref/heads/main": {
+            "object": {"sha": TRUSTED_SHA}
+        },
+        f"repos/All-The-Vibes/ATV-bench/git/trees/{RUN_SHA}?recursive=1": {
+            "truncated": False,
+            "tree": [
+                {
+                    "path": workflow_path,
+                    "type": "blob",
+                    "mode": "100644",
+                    "sha": workflow_blob,
+                },
+                {
+                    "path": bot_path,
+                    "type": "blob",
+                    "mode": bot_mode,
+                    "sha": BOT_BLOB,
+                    "size": len(BOT_BYTES),
+                }
+            ],
+        },
+        f"repos/All-The-Vibes/ATV-bench/git/trees/{TRUSTED_SHA}?recursive=1": {
+            "truncated": False,
+            "tree": [
+                {
+                    "path": workflow_path,
+                    "type": "blob",
+                    "mode": "100644",
+                    "sha": WORKFLOW_BLOB,
+                }
+            ],
+        },
+        f"repos/All-The-Vibes/ATV-bench/git/blobs/{BOT_BLOB}": {
+            "encoding": "base64",
+            "content": base64.b64encode(BOT_BYTES).decode("ascii"),
+        },
+    }
+
+
+def _execute_preflight(
+    publish_wf,
+    monkeypatch,
+    tmp_path,
+    *,
+    responses=None,
+    api_error: Exception | None = None,
+):
+    output = tmp_path / "github-output.txt"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("REPO", "All-The-Vibes/ATV-bench")
+    monkeypatch.setenv("RUN_ID", RUN_ID)
+    monkeypatch.setenv("TRUSTED_WORKFLOW_PATH", ".github/workflows/league.yml")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    calls = []
+    table = responses or _default_api_responses()
+
+    def fake_check_output(args, **_kwargs):
+        calls.append(args)
+        if api_error is not None:
+            raise api_error
+        endpoint = args[2]
+        if endpoint not in table:
+            raise AssertionError(f"unexpected API endpoint: {endpoint}")
+        return json.dumps(table[endpoint])
+
+    monkeypatch.setattr(subprocess, "check_output", fake_check_output)
+    script = _python_heredoc(_step(publish_wf, step_id="meta"))
+    try:
+        exec(compile(script, "league-publish-preflight.py", "exec"), {})
+    except SystemExit as exc:
+        return int(exc.code or 0), output.read_text() if output.exists() else "", calls
+    return 0, output.read_text(encoding="utf-8"), calls
+
+
+def _execute_artifact_check(publish_wf, monkeypatch, tmp_path, meta):
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "match-meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    (root / "match-result.json").write_text(
+        json.dumps(
+            {
+                "status": "crash",
+                "loser": "octocat",
+                "opponent": "byok-anchor",
+                "match_id": RUN_ID,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    expected = {
+        "EXPECTED_SUBMITTER": "octocat",
+        "EXPECTED_OPPONENT": "byok-anchor",
+        "EXPECTED_MATCH_ID": RUN_ID,
+        "EXPECTED_BOT_SHA256": BOT_SHA256,
+        "EXPECTED_PR_NUMBER": str(PR_NUMBER),
+        "EXPECTED_HEAD_SHA": HEAD_SHA,
+    }
+    for key, value in expected.items():
+        monkeypatch.setenv(key, value)
+    step = _step(publish_wf, name_fragment="artifact metadata")
+    try:
+        exec(compile(_python_heredoc(step), "league-artifact-check.py", "exec"), {})
+    except SystemExit as exc:
+        return int(exc.code or 0)
+    return 0
+
+
+def test_match_workflow_is_read_only_and_uses_immutable_base_and_head(match_wf):
     match = match_wf["jobs"]["match"]
-    assert match.get("permissions") in ({}, {"contents": "read"}), \
-        "match job must remain no-token / read-only"
+    assert match["permissions"] == {"contents": "read"}
+    checkouts = [s for s in match["steps"] if "actions/checkout" in str(s.get("uses", ""))]
+    assert len(checkouts) == 2
+    assert "pull_request.base.sha" in str(checkouts[0]["with"]["ref"])
+    assert checkouts[0]["with"]["persist-credentials"] is False
+    assert "pull_request.head.repo.full_name" in str(checkouts[1]["with"]["repository"])
+    assert "pull_request.head.sha" in str(checkouts[1]["with"]["ref"])
+    assert checkouts[1]["with"]["persist-credentials"] is False
 
 
-def test_match_job_uploads_trusted_meta_artifact(match_wf):
-    """The match job must emit the trusted match spec (submitter/opponent/match_id/
-    bot_sha256, all from GitHub context) as a SEPARATE artifact the publish workflow reads,
-    since a workflow_run event does not carry the PR author directly."""
-    match = match_wf["jobs"]["match"]
-    body = yaml.safe_dump(match)
-    # a metadata file distinct from the bot-controlled match-result.json
-    assert "match-meta" in body, "match job must produce a trusted match-meta artifact"
-    uploads = [s for s in match["steps"]
-               if "upload-artifact" in str(s.get("uses", ""))]
-    assert uploads, "match job must upload its outputs"
-    # the meta file must be included in an upload path (same or separate artifact)
-    assert any("match-meta" in str(s.get("with", {}).get("path", "")) for s in uploads), \
-        "an upload-artifact step must include match-meta.json in its path"
+def test_match_workflow_uses_name_status_guard_and_emits_audit_meta(match_wf):
+    body = yaml.safe_dump(match_wf["jobs"]["match"], width=10**9)
+    assert "diff --name-status" in body
+    assert "--name-status" in body
+    assert "--no-textconv" in body
+    for field in ("pr_number", "head_sha", "bot_sha256"):
+        assert field in body
 
 
-# --- the trusted publish workflow ---
-
-def test_publish_workflow_triggers_on_workflow_run(publish_wf):
-    on = _on(publish_wf)
-    assert "workflow_run" in on, "publish workflow must trigger on workflow_run (fork-safe)"
-    wr = on["workflow_run"]
-    assert "league" in [str(w) for w in wr.get("workflows", [])], \
-        "publish must trigger on the league (match) workflow completing"
-    assert "completed" in [str(t) for t in wr.get("types", [])], \
-        "publish must trigger on the 'completed' type"
-
-
-def test_publish_workflow_runs_only_on_success(publish_wf):
-    """Must gate on the triggering run's conclusion == success so a failed/cancelled match
-    (no valid artifact) never drives a publish."""
-    body = yaml.safe_dump(publish_wf)
-    assert "conclusion" in body and "success" in body, \
-        "publish workflow must gate on workflow_run.conclusion == 'success'"
+def test_publish_is_a_success_gated_workflow_run_consumer(publish_wf):
+    trigger = _on(publish_wf)["workflow_run"]
+    assert "league" in trigger["workflows"]
+    assert "completed" in trigger["types"]
+    assert "workflow_run.conclusion" in publish_wf["jobs"]["publish"]["if"]
+    permissions = publish_wf["jobs"]["publish"]["permissions"]
+    assert permissions["actions"] == "read"
+    assert permissions["pull-requests"] == "read"
+    assert permissions["contents"] == "read"
 
 
-def test_publish_workflow_has_write_scopes(publish_wf):
-    """The trusted workflow_run context has a full token even for fork PRs — it needs
-    contents:write to persist the store. Pages deploy moved to league-deploy.yml (G4,
-    santa round-2), so the publish job no longer holds pages/id-token scope."""
-    job = next(iter(publish_wf["jobs"].values()))
-    perms = job.get("permissions", {}) or publish_wf.get("permissions", {})
-    assert perms.get("contents") == "write", "publish must have contents:write"
-    # actions:read is required to download artifacts from the triggering run
-    assert perms.get("actions") == "read", "publish must have actions:read to fetch artifacts"
-    # Pages scopes moved out with the deploy step (no fence→upload TOCTOU here anymore).
-    assert "pages" not in perms, "publish no longer deploys Pages; scope moved to league-deploy.yml"
-    assert "id-token" not in perms, "publish no longer needs Pages OIDC scope"
+def test_publish_preflight_runs_before_artifact_download(publish_wf):
+    steps = publish_wf["jobs"]["publish"]["steps"]
+    preflight = steps.index(_step(publish_wf, step_id="meta"))
+    download = next(i for i, step in enumerate(steps) if "download-artifact" in str(step.get("uses", "")))
+    assert preflight < download
 
 
-def test_publish_workflow_never_executes_bot(publish_wf):
-    body = yaml.safe_dump(publish_wf).lower()
-    for forbidden in ("docker run", "arena", "refs/pull/", "codeclash run"):
-        assert forbidden not in body, f"publish workflow must not execute bot code: {forbidden!r}"
+def test_publish_preflight_independently_derives_all_fields(
+    publish_wf, monkeypatch, tmp_path
+):
+    code, output, calls = _execute_preflight(publish_wf, monkeypatch, tmp_path)
+    assert code == 0
+    assert "submitter=octocat\n" in output
+    assert "opponent=byok-anchor\n" in output
+    assert f"match_id={RUN_ID}\n" in output
+    assert f"bot_sha256={BOT_SHA256}\n" in output
+    assert f"pr_number={PR_NUMBER}\n" in output
+    assert f"head_sha={HEAD_SHA}\n" in output
+    endpoints = {call[2] for call in calls}
+    assert f"repos/All-The-Vibes/ATV-bench/actions/runs/{RUN_ID}" in endpoints
+    assert f"repos/All-The-Vibes/ATV-bench/commits/{RUN_SHA}/pulls" in endpoints
+    assert f"repos/All-The-Vibes/ATV-bench/git/blobs/{BOT_BLOB}" in endpoints
 
 
-def test_publish_workflow_downloads_artifacts_from_triggering_run(publish_wf):
-    """It must fetch the artifacts from the TRIGGERING run (cross-run download needs the
-    run id + token), not re-run the match."""
-    body = yaml.safe_dump(publish_wf)
-    assert "download-artifact" in body or "gh run download" in body or "gh api" in body, \
-        "publish workflow must download the match artifacts from the triggering run"
-    assert "workflow_run.id" in body or "event.workflow_run.id" in body, \
-        "cross-run artifact download must reference the triggering workflow_run.id"
+def test_pr_modified_league_workflow_is_rejected_before_publication(
+    publish_wf, monkeypatch, tmp_path
+):
+    responses = _default_api_responses(workflow_blob="f" * 40)
+    code, output, _calls = _execute_preflight(
+        publish_wf, monkeypatch, tmp_path, responses=responses
+    )
+    assert code == 1
+    assert output == ""
 
 
-def test_publish_workflow_checks_out_trusted_ref_only(publish_wf):
-    """Every checkout must pin a trusted ref (default branch), never the PR head — the
-    whole point of the split is to never run PR-controlled code with a write token."""
-    job = next(iter(publish_wf["jobs"].values()))
-    checkouts = [s for s in job["steps"] if "actions/checkout" in str(s.get("uses", ""))]
-    for step in checkouts:
-        ref = str(step.get("with", {}).get("ref", ""))
-        assert "pull_request" not in ref and "head" not in ref.lower(), \
-            f"publish checkout must be a trusted ref, got {ref!r}"
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda responses: responses[
+            f"repos/All-The-Vibes/ATV-bench/commits/{RUN_SHA}/pulls"
+        ].clear(),
+        lambda responses: responses[
+            f"repos/All-The-Vibes/ATV-bench/actions/runs/{RUN_ID}"
+        ].update({"path": ".github/workflows/evil.yml"}),
+        lambda responses: responses[
+            f"repos/All-The-Vibes/ATV-bench/git/trees/{RUN_SHA}?recursive=1"
+        ].update({"truncated": True}),
+    ],
+)
+def test_ambiguous_or_unverifiable_run_metadata_fails_closed(
+    publish_wf, monkeypatch, tmp_path, mutator
+):
+    responses = _default_api_responses()
+    mutator(responses)
+    code, output, _calls = _execute_preflight(
+        publish_wf, monkeypatch, tmp_path, responses=responses
+    )
+    assert code == 1
+    assert output == ""
 
 
-def test_publish_workflow_ingests_with_require_spec(publish_wf):
-    body = yaml.safe_dump(publish_wf)
-    assert "--require-spec" in body, \
-        "publish must ingest with --require-spec (bind ok artifact to the trusted spec)"
-    for key in ("ATV_SUBMITTER", "ATV_OPPONENT", "ATV_MATCH_ID"):
-        assert key in body, f"publish must export {key} from the trusted meta artifact"
+def test_api_failure_stops_publication(publish_wf, monkeypatch, tmp_path):
+    code, output, _calls = _execute_preflight(
+        publish_wf,
+        monkeypatch,
+        tmp_path,
+        api_error=RuntimeError("API unavailable"),
+    )
+    assert code == 1
+    assert output == ""
 
 
-def test_publish_workflow_persists_with_retry_loop(publish_wf):
-    """The optimistic-concurrency persist loop (santa #3) must live here now."""
-    body = yaml.safe_dump(publish_wf)
-    assert "git push" in body, "publish must persist the store"
-    assert "while" in body or "until" in body, "persist must run in a retry loop"
-    assert "publish ingest" in body, "persist loop must re-ingest (optimistic re-apply)"
+def test_invalid_bot_type_derives_an_empty_hash_for_a_scored_crash(
+    publish_wf, monkeypatch, tmp_path
+):
+    responses = _default_api_responses(bot_mode="120000")
+    code, output, calls = _execute_preflight(
+        publish_wf, monkeypatch, tmp_path, responses=responses
+    )
+    assert code == 0
+    assert "bot_sha256=\n" in output
+    assert not any("/git/blobs/" in call[2] for call in calls)
 
 
-def test_publish_workflow_persists_but_does_not_deploy(publish_wf):
-    """G4 (santa round-2): Pages deploy moved to league-deploy.yml (push-triggered) to close
-    the fence→upload TOCTOU. The publish job must still persist the store (durable history)
-    but must NOT upload/deploy Pages — that is the deploy workflow's job, triggered by the
-    push this persist step makes."""
-    job = next(iter(publish_wf["jobs"].values()))
-    steps = job["steps"]
+def test_executable_regular_bot_is_hashed(publish_wf, monkeypatch, tmp_path):
+    responses = _default_api_responses(bot_mode="100755")
+    code, output, calls = _execute_preflight(
+        publish_wf, monkeypatch, tmp_path, responses=responses
+    )
+    assert code == 0
+    assert f"bot_sha256={BOT_SHA256}\n" in output
+    assert any("/git/blobs/" in call[2] for call in calls)
 
-    def code(s):
-        return "\n".join(ln.split("#", 1)[0] for ln in str(s.get("run", "")).splitlines())
 
-    assert any("ingest" in code(s) and "git push" in code(s) for s in steps), \
-        "publish must still ingest + persist the match to the store"
-    assert not any("upload-pages-artifact" in str(s.get("uses", "")) for s in steps), \
-        "publish must NOT upload Pages artifact (deploy moved to league-deploy.yml)"
-    assert not any("deploy-pages" in str(s.get("uses", "")) for s in steps), \
-        "publish must NOT deploy Pages (deploy moved to league-deploy.yml)"
+def test_artifact_meta_must_exactly_match_the_derived_spec(
+    publish_wf, monkeypatch, tmp_path
+):
+    meta = {
+        "submitter": "octocat",
+        "opponent": "byok-anchor",
+        "match_id": RUN_ID,
+        "bot_sha256": BOT_SHA256,
+        "pr_number": PR_NUMBER,
+        "head_sha": HEAD_SHA,
+    }
+    assert _execute_artifact_check(publish_wf, monkeypatch, tmp_path, meta) == 0
+
+
+def test_forged_artifact_meta_stops_publication(publish_wf, monkeypatch, tmp_path):
+    meta = {
+        "submitter": "mallory",
+        "opponent": "byok-anchor",
+        "match_id": RUN_ID,
+        "bot_sha256": BOT_SHA256,
+        "pr_number": PR_NUMBER,
+        "head_sha": HEAD_SHA,
+    }
+    assert _execute_artifact_check(publish_wf, monkeypatch, tmp_path, meta) == 1
+
+
+def test_publish_checks_out_only_trusted_code_and_never_executes_submission(publish_wf):
+    publish = publish_wf["jobs"]["publish"]
+    for step in publish["steps"]:
+        if "actions/checkout" in str(step.get("uses", "")):
+            ref = str(step.get("with", {}).get("ref", ""))
+            assert "default_branch" in ref
+            assert step["with"]["persist-credentials"] is False
+    body = yaml.safe_dump(publish).lower()
+    for forbidden in ("docker run", "refs/pull/", "codeclash run"):
+        assert forbidden not in body
+
+
+def test_publish_binds_ingest_to_independently_derived_outputs(publish_wf):
+    persist = _step(publish_wf, name_fragment="protected bot PR")
+    assert "--require-spec" in persist["run"]
+    for key in ("ATV_SUBMITTER", "ATV_OPPONENT", "ATV_MATCH_ID", "ATV_BOT_SHA256"):
+        assert "steps.meta.outputs" in str(persist["env"][key])
+
+
+def test_publish_uses_a_protected_bot_pr_and_never_pushes_default_directly(publish_wf):
+    persist = _step(publish_wf, name_fragment="protected bot PR")
+    code = persist["run"]
+    assert "LEAGUE_BOT_TOKEN" in persist["env"]
+    assert "league/match-${MATCH_RUN_ID}" in code
+    assert "gh pr create" in code
+    assert "gh pr merge" in code and "--auto" in code
+    assert "git push" in code
+    assert "GIT_ASKPASS" in code
+    assert "x-access-token:${LEAGUE_BOT_TOKEN}@" not in code
+    assert "HEAD:$DEFAULT_BRANCH" not in code
+    assert "HEAD:${DEFAULT_BRANCH}" not in code
+    assert "refs/heads/${branch}" in code
+
+
+def test_publish_retry_reingests_on_latest_default_branch(publish_wf):
+    code = _step(publish_wf, name_fragment="protected bot PR")["run"]
+    assert "while :" in code
+    assert "deadline" in code
+    assert "git fetch origin \"$DEFAULT_BRANCH\"" in code
+    assert "refs/remotes/origin/${branch}" in code
+    assert "--force-with-lease=refs/heads/${branch}:${branch_lease}" in code
+    assert "--force-with-lease=refs/heads/${branch}:" in code
+    assert "publish ingest" in code
+    assert "git add -A league/" in code
+    assert "git diff --cached --quiet" in code
+    assert "sleep" in code
+    assert "exit 1" in code
+
+
+def test_publish_does_not_deploy_pages(publish_wf):
+    body = yaml.safe_dump(publish_wf["jobs"]["publish"])
+    assert "upload-pages-artifact" not in body
+    assert "deploy-pages" not in body
+
+
+def test_deploy_ignores_pre_merge_publish_completion(deploy_wf):
+    # The legacy workflow_run trigger may remain, but the deploy job must only run after
+    # the bot PR actually merges and produces a default-branch push.
+    assert "workflow_run" in _on(deploy_wf)
+    assert "event_name == 'push'" in deploy_wf["jobs"]["deploy"]["if"]

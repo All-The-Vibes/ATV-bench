@@ -293,12 +293,13 @@ def build_leaderboard_doc(
 def build_insights(rows: list[dict[str, Any]]) -> list[str]:
     """Derive short, human-readable insight lines from ranked board rows (demo Act 3).
 
-    Pure heuristic — no I/O. Ties fingerprint traits to ranking the way the gstack plan
-    frames it ("we rank the harness, not the model"). Always returns at least one line;
-    never raises on empty or partial rows.
+    Pure heuristic — no I/O. League Elo describes submitted bot/identity history.
+    Fingerprint fields are self-attested descriptors and are never presented as causal
+    explanations of rating. Always returns at least one line and never raises on empty
+    or partial rows.
     """
     if not rows:
-        return ["No matches yet — submit two harnesses to populate the board."]
+        return ["No matches yet — submit two bots to populate the League board."]
 
     def _elo(r: dict[str, Any]) -> float:
         try:
@@ -317,39 +318,29 @@ def build_insights(rows: list[dict[str, Any]]) -> list[str]:
 
     leader = ranked[0]
     out.append(
-        f"#1 @{leader.get('identity', '?')} ({leader.get('harness_name', 'harness')}) "
-        f"leads at {round(_elo(leader))} ELO."
+        f"#1 bot identity @{leader.get('identity', '?')} leads ATV League at "
+        f"{round(_elo(leader))} Elo."
     )
 
-    # gstack vs non-gstack cohort ELO — the plan's core thesis.
+    # Report only the self-attested metadata mix. Do not compare cohort Elo: the League
+    # does not execute or randomize harnesses and therefore cannot estimate an effect.
     gstack = [r for r in rows if r.get("fingerprint_gstack")]
     non = [r for r in rows if not r.get("fingerprint_gstack")]
     if gstack and non:
-        g_avg = sum(_elo(r) for r in gstack) / len(gstack)
-        n_avg = sum(_elo(r) for r in non) / len(non)
-        delta = round(g_avg - n_avg)
-        if delta > 0:
-            out.append(
-                f"gstack harnesses average +{delta} ELO over non-gstack "
-                f"({len(gstack)} vs {len(non)} entrants)."
-            )
-        elif delta < 0:
-            out.append(
-                f"non-gstack harnesses lead gstack by {abs(delta)} ELO so far "
-                f"({len(non)} vs {len(gstack)} entrants) — small sample."
-            )
-        else:
-            out.append("gstack and non-gstack harnesses are dead even so far.")
+        out.append(
+            f"Self-attested metadata: {len(gstack)} gstack-tagged and {len(non)} "
+            "other entrants. League Elo does not establish a harness effect."
+        )
 
-    # Tooling depth of the leader.
+    # Descriptive only; the League does not attest that this configuration executed.
     details = leader.get("details") or {}
     n_skills = len(details.get("skills") or [])
     n_mcps = len(details.get("mcps") or [])
     n_plugins = len(details.get("plugins") or [])
     if n_skills or n_mcps or n_plugins:
         out.append(
-            f"The leader runs {n_skills} skills, {n_mcps} MCP servers, "
-            f"and {n_plugins} plugins."
+            f"The leader reports {n_skills} skills, {n_mcps} MCP servers, "
+            f"and {n_plugins} plugins (self-attested metadata)."
         )
 
     return out

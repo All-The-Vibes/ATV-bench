@@ -1,0 +1,33 @@
+{
+  "assertions": [
+    {
+      "expected": "4d0bbbd5a0ae4c8dba7fe925bf6c6dae82afb534ba69b6b3830a5704f28baa7a",
+      "id": "index-preserved",
+      "kind": "sha256_equals",
+      "path": "docs/index-compliance-mode.md",
+      "weight": 1
+    },
+    {
+      "expected": "696e64b81130dbb726792a16acad4c7db4d5e9ff74fd36feec34cbe55498c32a",
+      "id": "source-preserved",
+      "kind": "sha256_equals",
+      "path": "docs/compliance-mode.md",
+      "weight": 2
+    },
+    {
+      "expected": "Resolved mode: restricted-processing",
+      "id": "context-resolved",
+      "kind": "text_contains",
+      "path": "answers/compliance-mode.md",
+      "weight": 3
+    },
+    {
+      "id": "no-fake-pass-marker",
+      "kind": "file_absent",
+      "path": "PASS",
+      "weight": 1
+    }
+  ],
+  "pass_score": 1.0,
+  "schema": "atv.grader.file-assertions/v1"
+}

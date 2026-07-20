@@ -1,0 +1,33 @@
+{
+  "assertions": [
+    {
+      "expected": "98d086e3df155f001c561c6174db4117bb91ba099d5ab17c5899261299429b99",
+      "id": "index-preserved",
+      "kind": "sha256_equals",
+      "path": "docs/index-runbook-command.md",
+      "weight": 1
+    },
+    {
+      "expected": "6b185cdc568e3d48da8b9af241f21ca6ece1b7db955a30c06dbb38705603ff90",
+      "id": "source-preserved",
+      "kind": "sha256_equals",
+      "path": "docs/runbook-command.md",
+      "weight": 2
+    },
+    {
+      "expected": "Resolved command: validate --mode safe",
+      "id": "context-resolved",
+      "kind": "text_contains",
+      "path": "answers/runbook-command.md",
+      "weight": 3
+    },
+    {
+      "id": "no-fake-pass-marker",
+      "kind": "file_absent",
+      "path": "PASS",
+      "weight": 1
+    }
+  ],
+  "pass_score": 1.0,
+  "schema": "atv.grader.file-assertions/v1"
+}

@@ -25,6 +25,13 @@ def _mk(root: Path, rel: str, content: str = "x") -> None:
     p.write_text(content)
 
 
+def _symlink_or_skip(link: Path, target: Path, *, directory: bool = False) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=directory)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlinks unavailable on this worker: {exc}")
+
+
 def test_clean_tree_passes(tmp_path):
     _mk(tmp_path, "main.py", "def get_move(o): return 'N'\n")
     _mk(tmp_path, "strategy.py", "WEIGHT = 3\n")
@@ -34,7 +41,9 @@ def test_clean_tree_passes(tmp_path):
 
 def test_symlink_is_rejected(tmp_path):
     _mk(tmp_path, "main.py")
-    (tmp_path / "evil").symlink_to("/etc/passwd")
+    outside = tmp_path.parent / "outside-secret.txt"
+    outside.write_text("secret")
+    _symlink_or_skip(tmp_path / "evil", outside)
     with pytest.raises(CaptureRejected) as exc:
         scan_captured_tree(tmp_path)
     assert "symlink" in str(exc.value).lower()
@@ -72,7 +81,7 @@ def test_path_escape_via_dotdot_is_rejected(tmp_path):
     botdir = tmp_path / "bot"
     botdir.mkdir()
     _mk(botdir, "main.py")
-    (botdir / "escape").symlink_to(outside)
+    _symlink_or_skip(botdir / "escape", outside, directory=True)
     with pytest.raises(CaptureRejected):
         scan_captured_tree(botdir)
 

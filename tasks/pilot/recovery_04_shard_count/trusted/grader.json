@@ -1,0 +1,35 @@
+{
+  "assertions": [
+    {
+      "expected": "02468a456c1b18da661d9e45be9739532013bc6a6261143529128ea82543d2e2",
+      "id": "journal-preserved",
+      "kind": "sha256_equals",
+      "path": "state/shard-count-journal.json",
+      "weight": 2
+    },
+    {
+      "expected": 6,
+      "id": "checkpoint-restored",
+      "kind": "json_value",
+      "path": "recovery/shard-count.json",
+      "pointer": "/checkpoint",
+      "weight": 2
+    },
+    {
+      "expected": 6,
+      "id": "state-recovered",
+      "kind": "json_value",
+      "path": "recovery/shard-count.json",
+      "pointer": "/recovered",
+      "weight": 2
+    },
+    {
+      "id": "no-fake-pass-marker",
+      "kind": "file_absent",
+      "path": "PASS",
+      "weight": 1
+    }
+  ],
+  "pass_score": 1.0,
+  "schema": "atv.grader.file-assertions/v1"
+}

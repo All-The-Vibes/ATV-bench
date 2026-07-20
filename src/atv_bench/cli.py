@@ -13,17 +13,52 @@ from pathlib import Path
 
 import typer
 
+from atv_bench.benchmark_cli import benchmark_app
 from atv_bench.fingerprint import probe as fp
 from atv_bench.games import GAMES, DEFAULT_GAME, assert_playable
 from atv_bench.harnesses import HARNESSES, DEFAULT_HARNESS, detect_harness, harness_config_present
 from atv_bench.submit import run_preflight, submission_status_trail
 
+
+def _configure_console_stream(stream) -> None:
+    """Keep the CLI usable on legacy Windows code pages.
+
+    Typer help and ATV's human output intentionally contain Unicode status and
+    navigation glyphs. Windows shells that expose cp1252 (or another legacy
+    encoding) otherwise raise ``UnicodeEncodeError`` before a command can run.
+    Preserve the console encoding, but replace only glyphs it cannot represent.
+    """
+    encoding = str(getattr(stream, "encoding", "") or "").lower().replace("-", "")
+    if encoding in {"", "utf8", "utf8sig"}:
+        return
+    reconfigure = getattr(stream, "reconfigure", None)
+    if not callable(reconfigure):
+        return
+    try:
+        reconfigure(errors="replace")
+    except (AttributeError, OSError, ValueError):
+        # Test capture streams and embedded hosts may reject reconfiguration.
+        # In that case leave the host-owned stream untouched.
+        return
+
+
+_configure_console_stream(sys.stdout)
+_configure_console_stream(sys.stderr)
+
+
 app = typer.Typer(
     name="atv-bench",
-    help="Community league for coding-agent harnesses: fingerprint your harness and submit a bot.",
+    help=(
+        "Community bot league and versioned harness-evaluation tooling. "
+        "League Elo ranks submitted bots, not harness quality."
+    ),
     no_args_is_help=True,
     add_completion=False,
 )
+
+# Real benchmark execution is local-only. This subapp has no GitHub, upload, or
+# score-publication path; every run is explicitly self-attested and unranked.
+app.add_typer(benchmark_app, name="benchmark")
 
 
 def _probe_or_exit(home: Path | None, harness: str | None) -> fp.ProbeResult:
@@ -586,7 +621,7 @@ def play(
     out: Path = typer.Option(None, "--out", help="Where to write the replay (default: ./_replay)."),
     open_browser: bool = typer.Option(True, "--open/--no-open", help="Open the animated replay in a browser."),
 ) -> None:
-    """Run a REAL refereed match locally and watch it — your bot vs the opponent series.
+    """Run a REAL refereed match locally: your bot vs the opponent series.
 
     This is the honest, un-mocked visualization: the same trusted engine + referee the
     sandboxed arena uses adjudicates the match from real gameplay. Pick a named bot with
@@ -645,7 +680,7 @@ def board(
     demo: bool = typer.Option(False, "--demo", help="Build a populated sample board (no store needed)."),
     open_browser: bool = typer.Option(True, "--open/--no-open", help="Open the board in a browser."),
 ) -> None:
-    """Build the leaderboard locally and open it — see where every harness ranks.
+    """Build the ATV League bot leaderboard locally and open it.
 
     Renders the same static site the GitHub Action publishes, from your local league
     store (submissions + match history). With --demo it fabricates a populated sample
@@ -817,7 +852,7 @@ def demo_match_cmd(
                                help="Terminal mode: after the match, build the leaderboard + insights."),
     seed: int = typer.Option(0, "--seed", help="Trusted engine seed (reproducible match)."),
 ) -> None:
-    """Play two harness bots head-to-head in Tron with a live feed, then show the board.
+    """Play two submitted bots head-to-head in Tron, then show the League board.
 
     The demo in three acts: (1) two named harnesses enter, (2) a live turn-by-turn Tron
     feed, (3) the leaderboard + gstack insights. With no bot paths it uses two distinct
@@ -921,7 +956,6 @@ def demo_match_cmd(
     import shutil
     from datetime import datetime, timezone
     from atv_bench.demo import build_demo_store
-    from atv_bench.store import LeagueStore
     from atv_bench.publish import build_site
     from atv_bench.leaderboard import build_insights
 
@@ -1017,8 +1051,18 @@ def doctor(
     dchk = pf.check_docker()
     lines.append(f"  {'✓' if dchk.ok else '·'} Docker daemon (for `run`): {dchk.detail}")
     cchk = pf.check_codeclash()
-    lines.append(f"  {'✓' if cchk.ok else '·'} CodeClash arena dep (for `run`): {cchk.detail}"
-                 + ("" if cchk.ok else f" — {cchk.fix}"))
+    if cchk.ok:
+        codeclash_detail = cchk.detail
+        codeclash_fix = ""
+    else:
+        from atv_bench.codeclash_env import CODECLASH_INSTALL_HINT
+
+        codeclash_detail = "pinned official CodeClash commit is not importable"
+        codeclash_fix = f" — {CODECLASH_INSTALL_HINT}"
+    lines.append(
+        f"  {'✓' if cchk.ok else '·'} CodeClash arena dep (for `run`): "
+        f"{codeclash_detail}{codeclash_fix}"
+    )
     for binary in ("claude", "copilot"):
         bc = pf.check_cli_on_path(binary)
         lines.append(f"  {'✓' if bc.ok else '·'} Harness CLI `{binary}` (for `run`): {bc.detail}")
@@ -1050,8 +1094,20 @@ def run(
     a: str = typer.Option(None, "--a", "--player-a", help="Harness A (see --list-harnesses)."),
     b: str = typer.Option(None, "--b", "--player-b", help="Harness B (see --list-harnesses)."),
     model: str = typer.Option(None, "--model", help="Model BOTH harnesses run for parity."),
-    rounds: int = typer.Option(3, "--rounds", help="Number of edit+compete rounds."),
-    demo: bool = typer.Option(False, "--demo", help="Replay a canned REAL match — zero Docker/auth/network."),
+    rounds: int = typer.Option(
+        3,
+        "--rounds",
+        help="Nested rounds inside one CodeClash tournament trial.",
+    ),
+    adaptation: str = typer.Option(
+        "iterative",
+        "--adaptation",
+        help=(
+            "iterative (paper-faithful edit/compete/feedback) or "
+            "frozen-artifact (one successful build replayed; not adaptation)."
+        ),
+    ),
+    demo: bool = typer.Option(False, "--demo", help="Replay a canned REAL match; zero Docker/auth/network."),
     json_out: bool = typer.Option(False, "--json", help="Emit the stable machine-readable envelope."),
     list_games: bool = typer.Option(False, "--list-games", help="List valid --game values and exit."),
     list_harnesses: bool = typer.Option(False, "--list-harnesses", help="List valid --a/--b harness values and exit."),
@@ -1059,8 +1115,11 @@ def run(
     a_home: Path = typer.Option(None, "--a-home", help="Config root for harness A (e.g. a cloned repo) to fingerprint."),
     b_home: Path = typer.Option(None, "--b-home", help="Config root for harness B to fingerprint."),
 ) -> None:
-    """Run a REAL harness-vs-harness match: each harness CLI builds its own bot headless,
-    the two bots compete in a CodeClash arena (Docker), and a schema-v2 record is written.
+    """Run one REAL CodeClash tournament trial.
+
+    ``iterative`` starts a fresh harness/model context every round against the persistent
+    prior-round codebase and trusted competition feedback. ``frozen-artifact`` is a
+    non-adaptive single-build replay control. Rounds are nested evidence, never trials.
 
     Start with `--demo` (no prerequisites) to see a real recorded match, then `atv-bench
     doctor`, then a live `run`. Phase 1 results are labeled unverified/local-debug and do
@@ -1085,7 +1144,7 @@ def run(
         _run_demo(json_out=json_out, out=out)
         return
 
-    from atv_bench.run_envelope import RunError, ok_envelope
+    from atv_bench.run_envelope import RunError
     from atv_bench.runner import RunConfig
 
     if not a or not b or not model:
@@ -1095,7 +1154,14 @@ def run(
                            "--b claude-code --model claude-opus-4.8")
         _emit_run_error(err, json_out)
 
-    cfg = RunConfig(game=game, a=a, b=b, model=model, rounds=rounds)
+    cfg = RunConfig(
+        game=game,
+        a=a,
+        b=b,
+        model=model,
+        rounds=rounds,
+        adaptation=adaptation,
+    )
     try:
         cfg.validate()
     except RunError as err:
@@ -1146,13 +1212,25 @@ def _run_live(cfg, out_dir, a_home, b_home, json_out):  # pragma: no cover - Doc
     )
 
     preflight_or_raise(cfg)
-    typer.echo(f"▶ building bots: {cfg.a} vs {cfg.b} on {cfg.model} ({cfg.rounds} rounds)…")
+    if cfg.adaptation == "iterative":
+        mode_text = "iterative edit/compete/feedback"
+    else:
+        mode_text = "frozen-artifact replay (non-adaptive control)"
+    typer.echo(
+        f"▶ {cfg.a} vs {cfg.b} on {cfg.model}: {mode_text}; "
+        f"{cfg.rounds} nested rounds in one tournament trial…"
+    )
     homes = {cfg.a: a_home, cfg.b: b_home}
     raw = run_live_match(cfg, output_dir=Path(out_dir), homes=homes)
 
     # Fingerprint each harness (leak-safe) for the record identity.
     fps: dict[str, str] = {}
+    identities = raw.get("harness_identities", {})
     for h, home in homes.items():
+        cached = identities.get(h, {}).get("config_digest")
+        if cached:
+            fps[h] = cached
+            continue
         try:
             sha, _manifest = fingerprint_harness_repo(h, home)
             fps[h] = sha

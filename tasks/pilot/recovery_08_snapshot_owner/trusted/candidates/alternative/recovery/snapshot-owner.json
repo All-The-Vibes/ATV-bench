@@ -1,0 +1,5 @@
+{
+  "checkpoint": 8,
+  "method": "journal-replay-08",
+  "recovered": "worker-03"
+}

@@ -1,0 +1,7 @@
+{
+  "transitions": [
+    "cold",
+    "warming",
+    "active"
+  ]
+}

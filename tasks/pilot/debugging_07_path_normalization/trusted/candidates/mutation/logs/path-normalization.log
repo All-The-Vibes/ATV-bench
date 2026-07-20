@@ -1,0 +1,4 @@
+scenario=07
+observation=portable path expected src/app.py but host separators leaked
+source=public-pilot
+observation=rewritten

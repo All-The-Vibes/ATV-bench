@@ -1,0 +1,8 @@
+{
+  "checkpoint": 2,
+  "method": "journal-replay-06",
+  "recovered": {
+    "attempt": 3,
+    "status": "retry"
+  }
+}

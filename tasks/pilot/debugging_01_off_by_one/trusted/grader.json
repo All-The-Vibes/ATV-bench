@@ -1,0 +1,35 @@
+{
+  "assertions": [
+    {
+      "expected": "d24a132c196d434bb2361c480a1127cb0a74cedb1c2be706baa111abba192100",
+      "id": "trace-preserved",
+      "kind": "sha256_equals",
+      "path": "logs/off-by-one.log",
+      "weight": 2
+    },
+    {
+      "expected": "inclusive-upper-bound",
+      "id": "root-cause-correct",
+      "kind": "json_value",
+      "path": "diagnostics/off-by-one.json",
+      "pointer": "/root_cause",
+      "weight": 2
+    },
+    {
+      "expected": 5,
+      "id": "corrected-value",
+      "kind": "json_value",
+      "path": "diagnostics/off-by-one.json",
+      "pointer": "/corrected_value",
+      "weight": 2
+    },
+    {
+      "id": "no-fake-pass-marker",
+      "kind": "file_absent",
+      "path": "PASS",
+      "weight": 1
+    }
+  ],
+  "pass_score": 1.0,
+  "schema": "atv.grader.file-assertions/v1"
+}

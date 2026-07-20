@@ -1,0 +1,4 @@
+{
+  "corrected_value": 12.5,
+  "root_cause": "rounded-before-aggregation"
+}

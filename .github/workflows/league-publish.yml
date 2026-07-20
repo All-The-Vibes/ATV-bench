@@ -1,26 +1,18 @@
-# ATV-bench Community League — TRUSTED publish workflow (fork-safe).
+# ATV-bench Community League — trusted artifact verifier and bot-PR publisher.
 #
-# santa re-review #7: the original single-workflow design ran the privileged publish job
-# (contents/pages/id-token write) inside the SAME `pull_request` run as the untrusted
-# match job. GitHub gives a `pull_request` run from a FORKED repo a READ-ONLY GITHUB_TOKEN,
-# so the documented external-contributor flow (fork → PR → maintainer labels `run-match`)
-# could score in-workspace but could NEVER persist league/ or deploy Pages.
+# A pull_request workflow is PR-rewritable even when its token is read-only. Therefore this
+# privileged workflow_run consumer MUST NOT trust the triggering workflow or its metadata
+# artifact by default. Before downloading anything it:
+#   1. resolves the immutable Actions run and its single commit-associated PR from GitHub;
+#   2. proves the exact league.yml blob at the run commit equals the trusted default-branch
+#      blob checked by the API at publish time;
+#   3. independently derives submitter, PR number/head SHA, run id, opponent, and bot hash
+#      from GitHub's run/PR/tree/blob records; and
+#   4. requires the base-produced match-meta artifact to equal those derived fields exactly.
 #
-# THE FIX (canonical GitHub pattern): this workflow triggers on `workflow_run` when the
-# match workflow (league.yml) completes. A workflow_run workflow ALWAYS runs in the base
-# repo's trusted context with a full write token — even for fork PRs — and here it NEVER
-# checks out or executes any PR-authored code. It consumes only two artifacts the match
-# run produced:
-#   - match-result.json : UNTRUSTED bot stdout (bound to the spec on ingest).
-#   - match-meta.json   : TRUSTED spec (submitter/opponent/match_id/bot_sha256), built by
-#                         the match job from GitHub context, never bot stdout.
-#
-# Isolation invariants (asserted by tests/test_fork_safe_publish.py + test_action_isolation):
-#   - never runs the bot / arena / PR head code
-#   - checks out only the trusted default branch
-#   - binds the ok artifact to the trusted spec (--require-spec)
-#   - the same optimistic-concurrency persist loop (santa #3) and settled-store rebuild
-#     before deploy (santa #6) as before, now in the trusted context.
+# Durable history is never pushed directly to the protected default branch. The workflow
+# pushes a run-scoped `league/match-<run-id>` branch with a separately provisioned bot token,
+# opens a PR, and enables auto-merge. Required checks and CODEOWNERS remain authoritative.
 
 name: league-publish
 
@@ -29,155 +21,343 @@ on:
     workflows: [league]
     types: [completed]
 
-# NOTE: intentionally NO job-level concurrency group here either — a serializing group
-# would DROP matches (GitHub cancels pending runs in a group). The persist step uses the
-# idempotent fetch + re-ingest + retry loop instead. See tests/test_publish_race.py.
-
+# No serializing concurrency group: GitHub cancels older pending runs in a shared group.
+# The run-scoped branch plus idempotent re-ingest/retry loop handles reruns safely.
 permissions: {}
 
 jobs:
   publish:
-    # Gate on the triggering match run SUCCEEDING: a failed/cancelled match produced no
-    # valid artifact, so there is nothing trustworthy to publish.
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
-      contents: write   # commit the ingested match back to league/ (durable history)
-      actions: read     # download artifacts from the triggering workflow_run
-      pull-requests: read  # independently resolve the triggering PR's author (identity check)
+      contents: read        # write operations use only the separately scoped bot token
+      actions: read         # download artifacts from the triggering workflow run
+      pull-requests: read   # the separate LEAGUE_BOT_TOKEN creates/manages the bot PR
     steps:
-      - name: Checkout TRUSTED league code (default branch, never PR head)
-        uses: actions/checkout@v4
+      - name: Checkout trusted publisher code (default branch, never PR head)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          # persist-credentials default (true) so the commit-back can push. This workflow
-          # runs in trusted base-repo context and never checks out PR-authored code, so the
-          # token is never exposed to untrusted code. Pin to the default branch explicitly.
           ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
 
-      - name: Download match artifacts from the TRIGGERING run
-        uses: actions/download-artifact@v4
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          # A workflow_run event's artifacts live on the TRIGGERING run, not this one — so
-          # we must pass its run-id + this workflow's GITHUB_TOKEN to fetch them.
+          python-version: "3.12"
+
+      - name: Verify the triggering workflow and derive every trusted match field
+        id: meta
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          TRUSTED_WORKFLOW_PATH: .github/workflows/league.yml
+        run: |
+          python3 - <<'PY'
+          import base64
+          import binascii
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import re
+          import subprocess
+          import sys
+
+          SHA_RE = re.compile(r"[0-9a-f]{40}")
+          AUTHOR_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}")
+          repo = os.environ["REPO"]
+          run_id = os.environ["RUN_ID"]
+          workflow_path = os.environ["TRUSTED_WORKFLOW_PATH"]
+
+          def fail(message):
+              print(f"trusted preflight failed: {message}", file=sys.stderr)
+              sys.exit(1)
+
+          def api(endpoint):
+              try:
+                  raw = subprocess.check_output(
+                      [
+                          "gh", "api", endpoint,
+                          "-H", "Accept: application/vnd.github+json",
+                      ],
+                      text=True,
+                      stderr=subprocess.DEVNULL,
+                  )
+                  return json.loads(raw)
+              except Exception as exc:
+                  fail(f"GitHub API request {endpoint!r} failed: {exc}")
+
+          def full_sha(value, label):
+              value = str(value or "").strip().lower()
+              if not SHA_RE.fullmatch(value):
+                  fail(f"{label} is not a full commit SHA")
+              return value
+
+          def tree(commit_sha):
+              value = api(f"repos/{repo}/git/trees/{commit_sha}?recursive=1")
+              if not isinstance(value, dict) or value.get("truncated") is True:
+                  fail(f"tree for {commit_sha} is missing or truncated")
+              entries = value.get("tree")
+              if not isinstance(entries, list):
+                  fail(f"tree for {commit_sha} has no entries")
+              return entries
+
+          def exact_entry(entries, path, *, required=True):
+              matches = [
+                  entry for entry in entries
+                  if isinstance(entry, dict) and entry.get("path") == path
+              ]
+              if len(matches) > 1:
+                  fail(f"tree contains duplicate entries for {path}")
+              if not matches:
+                  if required:
+                      fail(f"tree is missing {path}")
+                  return None
+              return matches[0]
+
+          run = api(f"repos/{repo}/actions/runs/{run_id}")
+          if not isinstance(run, dict) or str(run.get("id", "")) != run_id:
+              fail("Actions run id does not match the triggering run")
+          if run.get("event") != "pull_request":
+              fail(f"unexpected triggering event {run.get('event')!r}")
+          if run.get("conclusion") != "success":
+              fail(f"triggering run conclusion is {run.get('conclusion')!r}")
+          if str(run.get("path", "")).split("@", 1)[0] != workflow_path:
+              fail(f"triggering workflow path is not {workflow_path}")
+
+          run_sha = full_sha(run.get("head_sha"), "workflow run SHA")
+          # The Actions run API often returns an empty pull_requests array for real
+          # pull_request runs. Resolve via the immutable run commit instead.
+          associated = api(f"repos/{repo}/commits/{run_sha}/pulls")
+          if not isinstance(associated, list) or len(associated) != 1:
+              fail("triggering commit must be associated with exactly one PR")
+          pr = associated[0]
+          if not isinstance(pr, dict):
+              fail("commit-associated PR is malformed")
+          try:
+              pr_number = int(pr["number"])
+          except (KeyError, TypeError, ValueError):
+              fail("commit-associated PR has no valid number")
+          if pr_number <= 0:
+              fail("commit-associated PR number must be positive")
+          submitter = str((pr.get("user") or {}).get("login", "")).strip()
+          if not AUTHOR_RE.fullmatch(submitter):
+              fail("PR author is missing or is not a canonical GitHub login")
+
+          repository = api(f"repos/{repo}")
+          default_branch = str(
+              repository.get("default_branch", "") if isinstance(repository, dict) else ""
+          ).strip()
+          if not default_branch:
+              fail("repository API returned no default branch")
+          trusted_ref = api(f"repos/{repo}/git/ref/heads/{default_branch}")
+          trusted_sha = full_sha(
+              (trusted_ref.get("object") or {}).get("sha")
+              if isinstance(trusted_ref, dict)
+              else None,
+              "trusted default-branch SHA",
+          )
+
+          run_tree = tree(run_sha)
+          trusted_tree = tree(trusted_sha)
+          run_workflow = exact_entry(run_tree, workflow_path)
+          trusted_workflow = exact_entry(trusted_tree, workflow_path)
+          for label, entry in (("run", run_workflow), ("trusted", trusted_workflow)):
+              if entry.get("type") != "blob" or entry.get("mode") != "100644":
+                  fail(f"{label} workflow is not a regular file")
+          if run_workflow.get("sha") != trusted_workflow.get("sha"):
+              fail("league.yml was modified by the PR; its artifacts are untrusted")
+
+          bot_path = f"league/submissions/{submitter}/main.py"
+          bot_entry = exact_entry(run_tree, bot_path, required=False)
+          bot_sha256 = ""
+          if bot_entry is not None:
+              size = bot_entry.get("size")
+              # Mirror the match producer's fail-closed extraction rules. Missing,
+              # symlink/gitlink, and oversized bots produce a scored crash with no hash.
+              if (
+                  bot_entry.get("type") == "blob"
+                  and bot_entry.get("mode") in {"100644", "100755"}
+                  and isinstance(size, int)
+                  and 0 <= size <= 262144
+              ):
+                  blob_sha = full_sha(bot_entry.get("sha"), "bot blob SHA")
+                  blob = api(f"repos/{repo}/git/blobs/{blob_sha}")
+                  if not isinstance(blob, dict) or blob.get("encoding") != "base64":
+                      fail("bot blob is not base64 encoded")
+                  try:
+                      bot_bytes = base64.b64decode(
+                          str(blob.get("content", "")).encode("ascii"),
+                          validate=True,
+                      )
+                  except (UnicodeEncodeError, binascii.Error) as exc:
+                      fail(f"bot blob base64 is invalid: {exc}")
+                  if len(bot_bytes) != size:
+                      fail("bot blob size does not match its tree entry")
+                  bot_sha256 = hashlib.sha256(bot_bytes).hexdigest()
+
+          outputs = {
+              "submitter": submitter,
+              "opponent": "byok-anchor",
+              "match_id": run_id,
+              "bot_sha256": bot_sha256,
+              "pr_number": str(pr_number),
+              "head_sha": run_sha,
+          }
+          out = pathlib.Path(os.environ["GITHUB_OUTPUT"])
+          with out.open("a", encoding="utf-8") as handle:
+              for key, value in outputs.items():
+                  handle.write(f"{key}={value}\n")
+          print(
+              f"trusted preflight accepted PR #{pr_number} by {submitter} "
+              f"at {run_sha[:12]}"
+          )
+          PY
+
+      - name: Download match artifacts from the verified triggering run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
           name: match-result
           path: ./artifacts
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install pinned deps (NOT an editable install of checked-out code)
-        run: |
-          # Do NOT `pip install -e .` — that executes the package's build hooks. We only
-          # need the runtime deps to run atv_bench as a module from the trusted checkout.
-          pip install "jsonschema>=4.0"
-
-      - name: Load the TRUSTED match spec into the environment
-        id: meta
+      - name: Require the artifact metadata to match the independently derived spec
         env:
-          GH_TOKEN: ${{ github.token }}
-          # The triggering run's metadata — this workflow_run event carries the head SHA and
-          # the PRs associated with the match run. We use them to INDEPENDENTLY verify the
-          # submitter identity against GitHub's own record, from THIS trusted default-branch
-          # workflow (which a PR cannot rewrite), instead of trusting the artifact alone.
-          EVENT_SHA: ${{ github.event.workflow_run.head_sha }}
-          REPO: ${{ github.repository }}
+          EXPECTED_SUBMITTER: ${{ steps.meta.outputs.submitter }}
+          EXPECTED_OPPONENT: ${{ steps.meta.outputs.opponent }}
+          EXPECTED_MATCH_ID: ${{ steps.meta.outputs.match_id }}
+          EXPECTED_BOT_SHA256: ${{ steps.meta.outputs.bot_sha256 }}
+          EXPECTED_PR_NUMBER: ${{ steps.meta.outputs.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ steps.meta.outputs.head_sha }}
         run: |
-          # The spec artifact was authored by the untrusted match JOB from GitHub context —
-          # but that job runs from the PR's OWN copy of league.yml (GitHub's fork-PR model),
-          # so a malicious PR could rewrite the scorer to emit an arbitrary submitter. This
-          # TRUSTED workflow runs from the default branch and CANNOT be rewritten by a PR, so
-          # here we cross-check the artifact's submitter against the real PR author reported
-          # by the GitHub API for the triggering head SHA. A mismatch fails closed.
           python3 - <<'PY'
-          import json, os, pathlib, subprocess, sys
-          p = pathlib.Path("artifacts/match-meta.json")
-          if not p.exists():
-              print("no match-meta.json — nothing scoreable"); sys.exit(1)
-          meta = json.loads(p.read_text())
-          submitter = str(meta.get("submitter", "")).strip()
-          if not submitter:
-              print("match-meta has no submitter — fail closed (no scoreable identity)")
-              sys.exit(1)
-          # Independently resolve the PR author for the triggering head SHA via the API.
-          repo, sha = os.environ["REPO"], os.environ.get("EVENT_SHA", "").strip()
-          trusted_author = ""
-          if sha:
-              try:
-                  raw = subprocess.check_output(
-                      ["gh", "api", f"repos/{repo}/commits/{sha}/pulls",
-                       "-H", "Accept: application/vnd.github+json"],
-                      text=True, stderr=subprocess.DEVNULL)
-                  prs = json.loads(raw)
-                  authors = {str((pr.get("user") or {}).get("login", "")).strip()
-                             for pr in prs if pr.get("user")}
-                  authors.discard("")
-                  # Exactly one PR author must own the triggering head, and it MUST equal the
-                  # artifact's submitter. Ambiguity or mismatch fails closed.
-                  if len(authors) == 1:
-                      trusted_author = authors.pop()
-              except Exception as e:
-                  print(f"could not resolve PR author via API: {e}")
-          if trusted_author and trusted_author != submitter:
-              print(f"submitter {submitter!r} does not match trusted PR author "
-                    f"{trusted_author!r} for {sha} — fail closed (identity forgery)")
-              sys.exit(1)
-          if not trusted_author:
-              print(f"WARNING: could not independently confirm PR author for {sha}; "
-                    f"proceeding on artifact submitter {submitter!r}")
-          out = pathlib.Path(os.environ["GITHUB_OUTPUT"])
-          with out.open("a") as fh:
-              fh.write(f"submitter={submitter}\n")
-              fh.write(f"opponent={meta.get('opponent','byok-anchor')}\n")
-              fh.write(f"match_id={meta['match_id']}\n")
-              fh.write(f"bot_sha256={meta.get('bot_sha256','')}\n")
-          print("loaded trusted spec for submitter:", submitter)
+          import json
+          import os
+          import pathlib
+          import sys
+
+          root = pathlib.Path("artifacts")
+          expected_files = ["match-meta.json", "match-result.json"]
+          actual_files = sorted(
+              path.relative_to(root).as_posix()
+              for path in root.rglob("*")
+              if path.is_file() or path.is_symlink()
+          )
+          if actual_files != expected_files:
+              raise SystemExit(
+                  f"artifact must contain exactly {expected_files}, got {actual_files}"
+              )
+          meta_path = root / "match-meta.json"
+          result_path = root / "match-result.json"
+          if meta_path.is_symlink() or result_path.is_symlink():
+              raise SystemExit("artifact files must not be symlinks")
+          if meta_path.stat().st_size > 4096:
+              raise SystemExit("match-meta.json is oversized")
+          if result_path.stat().st_size > 262144:
+              raise SystemExit("match-result.json is oversized")
+          try:
+              meta = json.loads(meta_path.read_text(encoding="utf-8"))
+          except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+              raise SystemExit(f"match-meta.json is invalid: {exc}") from exc
+          expected = {
+              "submitter": os.environ["EXPECTED_SUBMITTER"],
+              "opponent": os.environ["EXPECTED_OPPONENT"],
+              "match_id": os.environ["EXPECTED_MATCH_ID"],
+              "bot_sha256": os.environ["EXPECTED_BOT_SHA256"],
+              "pr_number": int(os.environ["EXPECTED_PR_NUMBER"]),
+              "head_sha": os.environ["EXPECTED_HEAD_SHA"],
+          }
+          if meta != expected:
+              print("artifact metadata does not match GitHub-derived metadata", file=sys.stderr)
+              raise SystemExit(1)
+          print("artifact metadata exactly matches the independently derived spec")
           PY
 
-      - name: Persist match history to the default branch (durable store)
+      - name: Install hash-locked schema validation dependencies
+        env:
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
+          PIP_NO_INPUT: "1"
+        run: |
+          cat > "$RUNNER_TEMP/league-requirements.txt" <<'EOF'
+          attrs==26.1.0 \
+              --hash=sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309
+          jsonschema==4.26.0 \
+              --hash=sha256:d489f15263b8d200f8387e64b4c3a75f06629559fb73deb8fdfb525f2dab50ce
+          jsonschema-specifications==2025.9.1 \
+              --hash=sha256:98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe
+          referencing==0.37.0 \
+              --hash=sha256:381329a9f99628c9069361716891d34ad94af76e461dcb0335825aecc7692231
+          rpds-py==2026.6.3 \
+              --hash=sha256:ecabd69db66de867690f9797f2f8fa27ba501bbc24540cbdbdc649cd15888ba6
+          typing-extensions==4.16.0 \
+              --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8
+          EOF
+          python -m pip install \
+            --require-hashes --only-binary=:all: --no-deps \
+            --requirement "$RUNNER_TEMP/league-requirements.txt"
+
+      - name: Persist through a protected bot PR (never push the default branch)
         shell: bash
         env:
           PYTHONPATH: src
-          # TRUSTED spec from the match-meta artifact — bound to the ok artifact via
-          # --require-spec so a forged identity/match_id/bot_sha256 is rebound to a
-          # submitter forfeit, never trusted, never dropped.
           ATV_SUBMITTER: ${{ steps.meta.outputs.submitter }}
           ATV_OPPONENT: ${{ steps.meta.outputs.opponent }}
           ATV_MATCH_ID: ${{ steps.meta.outputs.match_id }}
           ATV_BOT_SHA256: ${{ steps.meta.outputs.bot_sha256 }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          MATCH_RUN_ID: ${{ github.event.workflow_run.id }}
+          GH_TOKEN: ${{ secrets.LEAGUE_BOT_TOKEN }}
+          LEAGUE_BOT_TOKEN: ${{ secrets.LEAGUE_BOT_TOKEN }}
         run: |
-          # Optimistic-concurrency persist loop (santa #3): on each attempt reset to the
-          # freshly-fetched trusted branch, RE-INGEST this match (idempotent — matches.jsonl
-          # dedups on the stable github.run_id match_id), rebuild, push. A rejected push
-          # re-fetches and re-applies. Deadline-bounded with backoff+jitter; fails closed
-          # (exit 1) if the deadline is hit — never silently drops a match. league/
-          # matches.jsonl is UNTRACKED until the first match, so we stage with `git add -A`
-          # and detect changes via `git diff --cached`, never a bare `git diff --quiet`.
-          #
-          # Pages DEPLOY is NOT done here (G4, santa round-2): deploying from this event-
-          # driven job reintroduced a fence→upload TOCTOU. The push this loop makes to the
-          # default branch triggers the dedicated league-deploy.yml, which deploys the
-          # settled store head (last-write-wins). This job's job is durable history only.
+          set -euo pipefail
+          if [ -z "${LEAGUE_BOT_TOKEN:-}" ]; then
+            echo "LEAGUE_BOT_TOKEN is required for protected bot-PR publication" >&2
+            exit 1
+          fi
+
           git config user.name "atv-bench-bot"
           git config user.email "atv-bench-bot@users.noreply.github.com"
+          # Keep the token out of the remote URL, .git/config, and Git error output.
+          # Git asks this helper for credentials only when talking to github.com.
+          askpass="$RUNNER_TEMP/league-git-askpass.sh"
+          cat > "$askpass" <<'EOF'
+          #!/usr/bin/env bash
+          case "${1:-}" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *Password*) printf '%s\n' "${LEAGUE_BOT_TOKEN:?}" ;;
+            *) exit 1 ;;
+          esac
+          EOF
+          chmod 700 "$askpass"
+          export GIT_ASKPASS="$askpass"
+          export GIT_TERMINAL_PROMPT=0
 
-          deadline=$(( $(date +%s) + 420 ))   # ~7 min budget, inside the 10-min job timeout
+          branch="league/match-${MATCH_RUN_ID}"
+          deadline=$(( $(date +%s) + 420 ))
           attempt=0
           while :; do
             if [ "$(date +%s)" -ge "$deadline" ]; then
-              echo "store push did not succeed within the deadline after $attempt attempts" >&2
+              echo "bot branch/PR publication did not succeed before the deadline" >&2
               exit 1
             fi
             attempt=$((attempt + 1))
 
             git fetch origin "$DEFAULT_BRANCH"
-            git reset --hard "origin/$DEFAULT_BRANCH"
-            git clean -fd league/
+            # Record an explicit lease for the run-scoped branch. A fresh workflow
+            # runner has no origin/<branch> tracking ref, so bare --force-with-lease
+            # cannot safely refresh an existing bot PR on rerun.
+            if git fetch origin \
+              "refs/heads/${branch}:refs/remotes/origin/${branch}"; then
+              branch_lease="$(git rev-parse "refs/remotes/origin/${branch}")"
+            else
+              branch_lease=""
+              git update-ref -d "refs/remotes/origin/${branch}" || true
+            fi
+            git checkout -B "$branch" "origin/$DEFAULT_BRANCH"
+            git clean -fd league/ site/
 
             python -m atv_bench.publish ingest ./artifacts/match-result.json \
               --store league --require-spec
@@ -187,19 +367,50 @@ jobs:
 
             git add -A league/
             if git diff --cached --quiet -- league/; then
-              echo "match already present in latest store; nothing to push"
+              echo "match is already present on the protected default branch"
               exit 0
             fi
 
-            git commit -m "league: record match ${{ github.event.workflow_run.id }}"
-            if git push origin "HEAD:$DEFAULT_BRANCH"; then
-              echo "store push succeeded on attempt $attempt (league-deploy.yml will deploy)"
-              exit 0
+            git commit -m "league: record match ${MATCH_RUN_ID}"
+            if [ -n "$branch_lease" ]; then
+              lease="--force-with-lease=refs/heads/${branch}:${branch_lease}"
+            else
+              # Empty expected value means "create only if still absent", closing the
+              # race where another retry creates the branch after our failed fetch.
+              lease="--force-with-lease=refs/heads/${branch}:"
+            fi
+            if ! git push "$lease" origin "HEAD:refs/heads/${branch}"; then
+              backoff=$(( attempt * attempt ))
+              [ "$backoff" -gt 30 ] && backoff=30
+              sleep "$(( backoff + (RANDOM % 5) ))"
+              echo "run-scoped branch push raced; re-fetching and re-ingesting"
+              continue
             fi
 
-            backoff=$(( attempt * attempt ))
-            [ "$backoff" -gt 30 ] && backoff=30
-            sleep "$(( backoff + (RANDOM % 5) ))"
-            echo "push rejected (race on attempt $attempt); backed off, re-fetching"
+            pr_number="$(
+              gh pr list --repo "$GITHUB_REPOSITORY" --state open \
+                --base "$DEFAULT_BRANCH" --head "$branch" \
+                --json number --jq '.[0].number // empty'
+            )"
+            if [ -z "$pr_number" ]; then
+              pr_url="$(
+                gh pr create --repo "$GITHUB_REPOSITORY" \
+                  --base "$DEFAULT_BRANCH" --head "$branch" \
+                  --title "league: record match ${MATCH_RUN_ID}" \
+                  --body "Automated, independently verified League result from workflow run ${MATCH_RUN_ID}. This PR intentionally remains subject to required checks, CODEOWNERS, and branch protection."
+              )"
+              pr_number="$(
+                gh pr view "$pr_url" --repo "$GITHUB_REPOSITORY" \
+                  --json number --jq '.number'
+              )"
+            fi
+
+            if ! gh pr merge "$pr_number" --repo "$GITHUB_REPOSITORY" \
+              --auto --squash; then
+              echo "bot PR #${pr_number} is open, but auto-merge could not be enabled." >&2
+              echo "Enable repository auto-merge and allow the bot token to manage PRs." >&2
+              exit 1
+            fi
+            echo "opened/refreshed protected bot PR #${pr_number}; merge awaits policy"
+            exit 0
           done
-

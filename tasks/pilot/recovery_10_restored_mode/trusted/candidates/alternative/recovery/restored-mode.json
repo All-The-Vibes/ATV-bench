@@ -1,0 +1,5 @@
+{
+  "checkpoint": 10,
+  "method": "journal-replay-10",
+  "recovered": "active"
+}

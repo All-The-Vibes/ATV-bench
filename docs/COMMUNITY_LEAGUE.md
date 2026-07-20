@@ -4,10 +4,16 @@ The shipping v1. Supersedes the local-harness plan in `IMPLEMENTATION_PLAN.md`
 (retained for context). Re-scoped by a 4-phase dual-voice review (2026-07-15):
 both models 6/6 rejected the hosted Approach B on strategy; it had no owner.
 
+> **Scope boundary:** ATV League ranks frozen submitted bots and contributor identities.
+> It does not execute the claimed harness inside the trusted workflow and therefore does
+> not rank harness quality. Fingerprints are descriptive, self-attested metadata. Online
+> Elo is confined to the League and must not be mixed with ATV Controlled, ATV Systems,
+> or ATV Resilience results.
+
 ## The mechanic
 
-1. A contributor runs a local match with their harness, producing a **bot file** the
-   harness edited (e.g. `main.py` for lightcycles) + a **harness fingerprint**.
+1. A contributor produces a **bot file** (e.g. `main.py` for Lightcycles), optionally
+   using any harness, and captures a **harness fingerprint** as descriptive metadata.
 2. `atv-bench submit --dry-run` builds the submission record (bot + fingerprint JSON);
    the contributor commits it under `league/submissions/<identity>/` and opens the PR —
    either automatically with `atv-bench submit --live --identity <login>` (fork → clone →
@@ -16,29 +22,30 @@ both models 6/6 rejected the hosted Approach B on strategy; it had no owner.
    (forgeable) — only the artifact.
 3. A **GitHub Action** runs when a maintainer adds the `run-match` label to the PR
    (the label is the trust boundary gating untrusted bot execution):
-   - **match job (untrusted):** executes the bot in the CodeClash Docker arena against
-     the stored roster with fixed seeds. Runs with `permissions: {}`, no `GITHUB_TOKEN`,
-     no Pages token, egress blocked, resource caps, non-root read-only container. Writes
-     only a schema-validated **result artifact**.
+   - **match job (untrusted):** executes the bot in the ATV Lightcycles Docker arena against
+     the stored roster with fixed seeds. Runs with read-only repository permission, no
+     write or Pages token, egress blocked, resource caps, and a non-root read-only
+     container. Writes only a schema-validated **result artifact** plus GitHub-context
+     metadata.
    - **publish job (trusted, on `workflow_run`):** reads the artifact (never executes bot
-     code), recomputes ELO from full history (deterministic), re-scans every merged
-     fingerprint for secret-shaped values (leak-safety on the publish path, not just at
-     probe time), and persists the match to the store on the default branch. It holds
-     `contents:write` only — no Pages scope.
+     code), first proves that the producer used the trusted `league.yml`, independently
+     derives the PR author/head/bot hash from GitHub, requires the artifact metadata to
+     match, recomputes ELO deterministically, and opens a run-scoped protected bot PR.
+     It never pushes the default branch directly and has no Pages scope; required checks,
+     CODEOWNERS, and branch protection remain authoritative.
    - **deploy job (trusted, on `push` to the default branch — `league-deploy.yml`):** the
-     store commit triggers a rebuild + GitHub Pages deploy from that exact settled head
+     merged bot PR triggers a rebuild + GitHub Pages deploy from that exact settled head
      (a `pages` concurrency group makes the newest deploy win, so the board never
      regresses to a stale snapshot). A merged submission PR triggers the same path, so a
      new entrant's row appears on merge.
 4. The **static leaderboard** publishes each row: rank · ELO · fingerprint chips.
 
-**Onboarding timing (by design):** the publish job builds from the submissions committed
-on the default branch. A brand-new entrant's `submission.json` lands on the default branch
-only when their PR **merges**, so a pre-merge labeled `run-match` records the match into
-history but the new entrant's row appears once the PR is merged. Matches are never lost
-(recompute-from-history is durable); only the row's first appearance waits for merge. A bot
-whose match is recorded but whose submission is not yet merged contributes to ELO history
-without a visible row until then.
+**Onboarding timing (by design):** the match-result bot PR is based on the latest protected
+default branch. A brand-new entrant's `submission.json` lands there only when the
+submission PR merges, while its independently verified match may land through a separate
+bot PR before or after that merge. Matches are never lost because history is recomputed
+from committed records; the entrant's row appears after both the submission and relevant
+match records have reached the default branch.
 
 ## Attribution (eng T13 — no client-side crypto)
 
@@ -47,9 +54,11 @@ no PKI, no `fingerprint.sig`. Under a serverless git+Action model the PR author 
 authenticated by GitHub; a client-generated signature would verify nothing the platform
 doesn't already prove and is security theater. Removed from scope.
 
-Fingerprint **honesty** is still trust-based (Premise 4): GitHub identity proves *who*
-submitted, not that the reported skills/MCPs/plugins are truthful. Public match logs are
-the dispute mechanism. See the "Scope of the claim" section in the README.
+Fingerprint **honesty and execution binding** are still trust-based: GitHub identity
+proves *who* submitted, not that the reported skills/MCPs/plugins are truthful or that
+the claimed harness produced the bot. Public match logs can help investigate a dispute,
+but they do not repair that missing execution evidence. See "Scope of the claim" in the
+README.
 
 ## Match-result trust boundary (what the Action does and does NOT prove)
 
@@ -107,7 +116,7 @@ Enforced/asserted by `tests/test_action_isolation.py`
 (`test_codeowners_protects_trust_critical_paths`,
 `test_publish_job_cross_checks_submitter_against_pr_author`) + `.github/CODEOWNERS`.
 
-## Harness fingerprint (the credibility gate)
+## Harness fingerprint (descriptive metadata, not attestation)
 
 A per-harness probe reads on-disk config and emits ONE normalized, **leak-safe** schema:
 
@@ -138,7 +147,7 @@ Non-negotiable safety properties (enforced by the canary leak-test):
   0-byte / symlink-outside-`~/.claude` → `unknown[{field, reason}]` with a reason enum;
   never `except: pass`, never raise.
 
-The CLI is **harness-agnostic**: `atv-bench harnesses` lists what's fingerprintable and
+The fingerprint CLI is **harness-agnostic**: `atv-bench harnesses` lists what's fingerprintable and
 auto-detects the local harness; `atv-bench fingerprint [--harness <key>]` probes it. v1
 ships **live fingerprint readers for `claude-code` (`~/.claude`), `copilot-cli`
 (`~/.copilot`), and `codex` (`~/.codex`)** — each with an allowlist-emit reader + canary
@@ -201,7 +210,11 @@ This is deliberately client tamper-evidence, not anti-forgery: it makes lying *e
 (edits break verification, logs remain the dispute mechanism) without over-claiming a
 guarantee the client trust boundary can't provide.
 
-## ELO (deterministic, forfeit-safe, variance-gated)
+## League-only Elo (deterministic, forfeit-safe, variance-gated)
+
+This Elo answers only: "How has this contributor's submitted bot performed in ATV
+League history?" It is not a Controlled or Systems harness estimate, and nested games
+must not be reinterpreted as independent harness trials.
 
 - **Row identity is the GitHub login, by design.** This is a per-contributor / per-harness
   league: a row's ELO is the recompute-from-full-history of every match that login has

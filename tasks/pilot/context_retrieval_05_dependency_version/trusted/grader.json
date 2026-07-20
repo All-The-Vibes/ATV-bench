@@ -1,0 +1,33 @@
+{
+  "assertions": [
+    {
+      "expected": "cc0635ee96b7c0f1aab5984945b4d45a2715239a178fc104df74d3756acd534d",
+      "id": "index-preserved",
+      "kind": "sha256_equals",
+      "path": "docs/index-dependency-version.md",
+      "weight": 1
+    },
+    {
+      "expected": "861bacf2b18dfabac2ca668ecb1785edf75515aab2cb7dc7a08a04371bc0dcf6",
+      "id": "source-preserved",
+      "kind": "sha256_equals",
+      "path": "docs/dependency-version.md",
+      "weight": 2
+    },
+    {
+      "expected": "Resolved dependency: parser 3.8.2",
+      "id": "context-resolved",
+      "kind": "text_contains",
+      "path": "answers/dependency-version.md",
+      "weight": 3
+    },
+    {
+      "id": "no-fake-pass-marker",
+      "kind": "file_absent",
+      "path": "PASS",
+      "weight": 1
+    }
+  ],
+  "pass_score": 1.0,
+  "schema": "atv.grader.file-assertions/v1"
+}

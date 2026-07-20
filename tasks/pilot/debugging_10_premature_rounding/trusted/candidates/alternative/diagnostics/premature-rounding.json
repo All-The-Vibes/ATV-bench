@@ -1,0 +1,5 @@
+{
+  "corrected_value": 12.5,
+  "explanation": "derived from premature-rounding trace",
+  "root_cause": "rounded-before-aggregation"
+}

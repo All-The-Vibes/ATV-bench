@@ -1,0 +1,8 @@
+{
+  "checkpoint": 3,
+  "recovered": [
+    "job-c",
+    "job-a",
+    "job-b"
+  ]
+}

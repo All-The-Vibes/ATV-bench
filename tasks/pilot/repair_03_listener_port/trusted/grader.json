@@ -1,0 +1,28 @@
+{
+  "assertions": [
+    {
+      "expected": 8443,
+      "id": "target-repaired",
+      "kind": "json_value",
+      "path": "config/listener-port.json",
+      "pointer": "/listener/port",
+      "weight": 3
+    },
+    {
+      "expected": "repair-anchor-03",
+      "id": "anchor-preserved",
+      "kind": "json_value",
+      "path": "config/listener-port.json",
+      "pointer": "/anchor",
+      "weight": 2
+    },
+    {
+      "id": "no-fake-pass-marker",
+      "kind": "file_absent",
+      "path": "PASS",
+      "weight": 1
+    }
+  ],
+  "pass_score": 1.0,
+  "schema": "atv.grader.file-assertions/v1"
+}

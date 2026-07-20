@@ -1,0 +1,12 @@
+{
+  "items": [
+    {
+      "quantity": 3,
+      "weight": 5
+    },
+    {
+      "quantity": 2,
+      "weight": 4
+    }
+  ]
+}

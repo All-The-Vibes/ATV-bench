@@ -7,10 +7,6 @@ its own required canary test.
 """
 from __future__ import annotations
 
-import json
-
-import pytest
-
 from atv_bench.validate import (
     validate_game_bot,
     validate_harness_fingerprint,

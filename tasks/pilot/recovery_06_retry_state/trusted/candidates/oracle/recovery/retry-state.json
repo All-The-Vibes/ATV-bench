@@ -1,0 +1,7 @@
+{
+  "checkpoint": 2,
+  "recovered": {
+    "attempt": 3,
+    "status": "retry"
+  }
+}

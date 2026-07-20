@@ -7,7 +7,6 @@ replay, with clear copy-paste commands.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from typer.testing import CliRunner
 
@@ -73,9 +72,11 @@ def test_play_with_bot_file(tmp_path):
 
 def test_play_bot_vs_bot(tmp_path):
     """Two harness-built bot files can face off head-to-head via --opponent-bot."""
-    a = tmp_path / "a.py"; b = tmp_path / "b.py"
+    a = tmp_path / "a.py"
+    b = tmp_path / "b.py"
     src = "import sys\nfor line in sys.stdin:\n    print('up'); sys.stdout.flush()\n"
-    a.write_text(src); b.write_text(src)
+    a.write_text(src)
+    b.write_text(src)
     out = tmp_path / "m"
     res = runner.invoke(app, [
         "play", "--player-bot", str(a), "--opponent-bot", str(b),

@@ -1,0 +1,5 @@
+{
+  "corrected_value": "v3",
+  "explanation": "derived from stale-cache trace",
+  "root_cause": "cache-generation-mismatch"
+}

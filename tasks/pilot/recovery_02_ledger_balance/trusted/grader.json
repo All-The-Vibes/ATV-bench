@@ -1,0 +1,35 @@
+{
+  "assertions": [
+    {
+      "expected": "3eb88b6924279ad617d8e45c9bfbc9261451e9d004e5bc0168951778c9809ebd",
+      "id": "journal-preserved",
+      "kind": "sha256_equals",
+      "path": "state/ledger-balance-journal.json",
+      "weight": 2
+    },
+    {
+      "expected": 4,
+      "id": "checkpoint-restored",
+      "kind": "json_value",
+      "path": "recovery/ledger-balance.json",
+      "pointer": "/checkpoint",
+      "weight": 2
+    },
+    {
+      "expected": 125,
+      "id": "state-recovered",
+      "kind": "json_value",
+      "path": "recovery/ledger-balance.json",
+      "pointer": "/recovered",
+      "weight": 2
+    },
+    {
+      "id": "no-fake-pass-marker",
+      "kind": "file_absent",
+      "path": "PASS",
+      "weight": 1
+    }
+  ],
+  "pass_score": 1.0,
+  "schema": "atv.grader.file-assertions/v1"
+}

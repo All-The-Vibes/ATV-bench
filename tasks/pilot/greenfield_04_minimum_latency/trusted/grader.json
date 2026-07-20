@@ -1,0 +1,27 @@
+{
+  "assertions": [
+    {
+      "expected": "8739fb74503ed6bb52b708ea381374eeadc71a5faf18417a6df7ae23f49dcead",
+      "id": "input-preserved",
+      "kind": "sha256_equals",
+      "path": "inputs/minimum-latency.json",
+      "weight": 2
+    },
+    {
+      "expected": 12,
+      "id": "derived-answer",
+      "kind": "json_value",
+      "path": "outputs/minimum-latency.json",
+      "pointer": "/answer",
+      "weight": 3
+    },
+    {
+      "id": "no-fake-pass-marker",
+      "kind": "file_absent",
+      "path": "PASS",
+      "weight": 1
+    }
+  ],
+  "pass_score": 1.0,
+  "schema": "atv.grader.file-assertions/v1"
+}

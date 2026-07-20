@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:atv-bench:schema:atv.harness:v1",
+  "title": "ATV-Bench harness manifest v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "id",
+    "version",
+    "runtime",
+    "protocol",
+    "capabilities",
+    "security",
+    "metadata"
+  ],
+  "properties": {
+    "schema": {
+      "const": "atv.harness/v1"
+    },
+    "id": {
+      "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/identifier"
+    },
+    "version": {
+      "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/semanticVersion"
+    },
+    "display_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "runtime": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "command",
+            "working_directory",
+            "executable_digest"
+          ],
+          "properties": {
+            "kind": {
+              "const": "process"
+            },
+            "command": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 128,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              }
+            },
+            "working_directory": {
+              "const": "/workspace"
+            },
+            "executable_digest": {
+              "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/sha256"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "image",
+            "entrypoint",
+            "working_directory"
+          ],
+          "properties": {
+            "kind": {
+              "const": "oci"
+            },
+            "image": {
+              "type": "string",
+              "minLength": 73,
+              "maxLength": 2048,
+              "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$"
+            },
+            "entrypoint": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 128,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              }
+            },
+            "working_directory": {
+              "const": "/workspace"
+            }
+          },
+          "unevaluatedProperties": false
+        }
+      ]
+    },
+    "protocol": {
+      "type": "object",
+      "required": [
+        "minimum_version",
+        "maximum_version",
+        "input",
+        "output"
+      ],
+      "properties": {
+        "minimum_version": {
+          "const": 1
+        },
+        "maximum_version": {
+          "const": 1
+        },
+        "input": {
+          "const": "stdin-json"
+        },
+        "output": {
+          "const": "stdout-jsonl"
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "capabilities": {
+      "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/capabilities"
+    },
+    "security": {
+      "type": "object",
+      "required": [
+        "env_allowlist",
+        "network_requirement",
+        "writable_paths",
+        "requires_tty"
+      ],
+      "properties": {
+        "env_allowlist": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/environmentName"
+          }
+        },
+        "network_requirement": {
+          "type": "string",
+          "enum": [
+            "none",
+            "model-gateway-only",
+            "task-policy"
+          ]
+        },
+        "writable_paths": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/absoluteGuestPath"
+          }
+        },
+        "requires_tty": {
+          "type": "boolean"
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "metadata": {
+      "type": "object",
+      "required": [
+        "source",
+        "license"
+      ],
+      "properties": {
+        "source": {
+          "$ref": "urn:atv-bench:schema:atv.common:v1#/$defs/sourceRevision"
+        },
+        "license": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "unevaluatedProperties": false
+    }
+  },
+  "unevaluatedProperties": false
+}

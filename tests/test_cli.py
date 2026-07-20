@@ -9,11 +9,25 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from atv_bench.cli import app
 
 runner = CliRunner()
+
+
+def _symlink_or_skip(link: Path, target: Path, *, directory: bool = False) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=directory)
+    except (OSError, NotImplementedError) as exc:
+        detail = (
+            f"{type(exc).__name__}(errno={getattr(exc, 'errno', None)}, "
+            f"winerror={getattr(exc, 'winerror', None)}): {exc}"
+        )
+        pytest.skip(
+            "symlink capability unavailable after attempted creation: " + detail
+        )
 
 
 def _fixture_home(tmp_path: Path) -> Path:
@@ -266,7 +280,7 @@ def test_dangling_symlink_primary_config_reports_unreadable_not_missing(tmp_path
     found' (missing) — since the file IS present as a symlink."""
     home = tmp_path / ".codex"
     home.mkdir()
-    (home / "config.toml").symlink_to(home / "missing-target.toml")  # dangling, within root
+    _symlink_or_skip(home / "config.toml", home / "missing-target.toml")
     result = runner.invoke(app, ["fingerprint", "--harness", "codex", "--home", str(home)])
     assert result.exit_code != 0, result.output
     low = result.output.lower()

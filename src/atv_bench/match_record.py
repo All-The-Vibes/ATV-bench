@@ -83,6 +83,12 @@ class MatchRecord:
     replay_path: str
     players: list[PlayerRecord] = dataclasses.field(default_factory=list)
     verified: bool | None = None
+    adaptation: str = "iterative"
+    trial_unit: str = "tournament"
+    rounds_nested: bool = True
+    round_evidence: list[dict[str, Any]] = dataclasses.field(default_factory=list)
+    rating_method: str = "bradley-terry-tournament-outcomes"
+    ranked: bool = False
 
     def is_verified(self) -> bool:
         """A match is verified only if EVERY player is publishable."""
@@ -96,7 +102,14 @@ class MatchRecord:
             "prompt_version": self.prompt_version,
             "codeclash_version": self.codeclash_version,
             "rounds": self.rounds,
+            "adaptation": self.adaptation,
+            "trial_unit": self.trial_unit,
+            "rounds_nested": self.rounds_nested,
+            "round_observation_unit": "nested-round",
             "outcome": self.outcome,
+            "round_evidence": self.round_evidence,
+            "rating_method": self.rating_method,
+            "ranked": self.ranked,
             "replay_path": self.replay_path,
             "players": [p.to_dict() for p in self.players],
             "verified": self.is_verified() if self.verified is None else self.verified,

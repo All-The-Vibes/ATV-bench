@@ -1,13 +1,14 @@
 <div align="center">
 
-# 🏁 ATV-bench — The Community League
+# 🏁 ATV-bench — League and Harness Evaluation
 
-### Everyone benchmarks the **model.** Nobody benchmarks the **harness.**
+### The League ranks submitted bots. The evaluation tracks measure harnesses.
 
 Your skills. Your MCP servers. Your plugins, custom agents, and config.
-**That's what actually ships code — so that's what we rank.**
+Those may affect what ships, but a credible harness claim requires fresh, controlled,
+attested trials—not a fingerprint attached to one frozen bot.
 
-[![hermetic tests](https://img.shields.io/badge/tests-397%20passing-6ce7be?style=flat-square)](#dev)
+[![hermetic tests](https://img.shields.io/badge/tests-hermetic%20suite-6ce7be?style=flat-square)](#dev)
 [![docker adjudication](https://img.shields.io/badge/arena-referee%20adjudicated-7aa2ff?style=flat-square)](#the-trust-boundary)
 [![leak-safe](https://img.shields.io/badge/fingerprint-leak--safe-ffc45c?style=flat-square)](#the-credibility-gate)
 [![license](https://img.shields.io/badge/license-MIT-e8ecf5?style=flat-square)](LICENSE)
@@ -18,19 +19,23 @@ https://github.com/user-attachments/assets/438771f0-4886-4185-9c75-85c8d9c35bd9
 
 ---
 
-## The pitch
+## What exists today
 
-SWE-bench and CodeClash measure the **model**. But you don't ship a raw model — you
-ship a *harness*: a model wrapped in skills, MCP servers, plugins, custom agents, and a
-pile of config. Two engineers on the same model get wildly different results because
-their harnesses differ.
+ATV-bench is intentionally split into separate products:
 
-**ATV-bench ranks the whole thing.** You submit a bot your harness built + a leak-safe
-fingerprint of that harness. A GitHub Action plays the matches in a sandboxed arena,
-a trusted referee adjudicates the outcome from *real gameplay* (not the bot's word for
-it), ELO is recomputed from scratch, and a static leaderboard ships to GitHub Pages.
+- **ATV League (shipping):** ranks frozen submitted bots in a trusted Lightcycles arena.
+  A leak-safe harness fingerprint is descriptive metadata, not proof of how the bot was
+  produced.
+- **ATV Controlled:** compares harness behavior while holding model, task, tools,
+  environment, budget, and schedule fixed.
+- **ATV Systems:** compares complete preferred stacks, including model and tools.
+- **ATV Resilience:** evaluates recovery under injected failures and pressure.
 
-No hosted server to run or trust. No self-reported scores. Just harnesses, head-to-head.
+Only the League currently publishes online Elo. Controlled, Systems, and Resilience
+results require fresh harness executions, hidden post-run grading, attested model and
+runner identity, and task-clustered uncertainty before they can be official. See
+[`docs/PRODUCTS_AND_TRACKS.md`](docs/PRODUCTS_AND_TRACKS.md) and the
+[`benchmark blueprint`](docs/HARNESS_BENCHMARKING_BLUEPRINT.md).
 
 ## How it works — Approach A (git + Action + static Pages)
 
@@ -73,7 +78,7 @@ The referee is baked into the image byte-identical to the tested `src/` package 
 tripwire), so no trusted code is ever read from the untrusted mount. Proof + a rendered
 match board: [`docs/proof/item1-adjudication/`](docs/proof/item1-adjudication/).
 
-## The credibility gate — leak-safe harness fingerprint
+## The privacy gate — leak-safe harness fingerprint
 
 A per-harness probe reads on-disk config and emits **one normalized, leak-safe** schema:
 
@@ -119,11 +124,28 @@ Verify your machine is ready:
 atv-bench doctor          # python / harness config / gh / docker / CodeClash readiness, with fixes
 ```
 
-### Real harness-vs-harness match (the spine)
+### Experimental local harness comparison
 
-The core loop: **fingerprint** each harness → the **real harness CLI** (`claude`,
-`copilot`) builds its own `main.py` headless → the two bots **compete in a CodeClash
-arena** (Docker) → **ELO + replay**. Nothing hand-written, no faked model string.
+The local `run` path invokes supported harness CLIs to build bots and then evaluates the
+artifacts in a CodeClash arena. It is a development and conformance surface, not an
+official scientific ranking.
+
+The zero-to-board tool install above intentionally omits the heavier CodeClash run
+dependency. For this experimental path, use a checkout so the immutable dependency and
+its arena Dockerfiles are both available:
+
+```bash
+git clone https://github.com/All-The-Vibes/ATV-bench.git
+cd ATV-bench
+uv sync --extra run
+uv run atv-bench doctor
+```
+
+`uv` retains the exact CodeClash source checkout needed for its non-wheel arena assets.
+An operator-managed checkout may instead be supplied through `ATV_CODECLASH_SOURCE`; it
+must resolve to the pinned commit reported by `doctor`. The first Lightcycles run builds
+`codeclash/lightcycles` from a packaged digest-pinned base definition and the frozen
+LightCycles revision, then verifies both image labels and the in-image Git commit.
 
 Start with the zero-setup real recording — no Docker, no auth, no network:
 
@@ -135,17 +157,59 @@ atv-bench run --demo --json          # same, as a stable machine-readable envelo
 Then run a live match (needs Docker + a real harness CLI authenticated — see `doctor`):
 
 ```bash
-atv-bench run --game lightcycles --a copilot-cli --b claude-code --model claude-opus-4.8
-atv-bench run --game battlesnake  --a claude-code --b claude-code --model claude-opus-4.8 --json
-atv-bench run --list-games --list-harnesses     # discover valid values
+uv run atv-bench run --game lightcycles --a copilot-cli --b claude-code --model claude-opus-4.8
+uv run atv-bench run --game battlesnake  --a claude-code --b claude-code --model claude-opus-4.8 --json
+uv run atv-bench run --list-games --list-harnesses     # discover valid values
 ```
 
-Both harnesses run on the **same model** for parity, so the result isolates the
-*harness*, not the model. Phase-1 results are labeled **unverified / local-debug** and
-do **not** publish a ranked number — that needs the Phase-2 gateway (a real match is
-non-deterministic; only the recorded replay is reproducible). Exit codes are stable and
-distinct per failure mode (`0` ok · `3` missing-cli · `5` docker · `9` codeclash-dep …)
-so an agent or CI can branch on them.
+Both harnesses receive the same **requested model label**, but that alone does not prove
+the same provider deployment, snapshot, parameters, retries, routing, or subagent
+models. Therefore this path does **not** isolate the harness effect. Results are labeled
+**unverified / local-debug** and do **not** publish a scientific rank. Official
+Controlled results require gateway-observed resolved-model evidence and equal enforced
+budgets. Exit codes remain stable and distinct per failure mode so agents and CI can
+branch on them.
+
+### Local benchmark workflow
+
+Harness benchmark execution is local-only. It is not triggered by GitHub Actions and
+does not upload or publish scores. The separate `league` Action may run a labeled
+submitted **bot** in the public ATV League arena; that is a League match, not a
+Controlled, Systems, or Resilience harness evaluation.
+
+```bash
+atv-bench benchmark schema check ./schemas
+atv-bench benchmark harness validate \
+  ./examples/harnesses/generic-command/harness.json
+atv-bench benchmark task validate ./tasks/smoke/repair_config
+
+atv-bench benchmark eval plan \
+  --task ./tasks/smoke/repair_config \
+  --harness ./path/to/your-oci-protocol-harness.json \
+  --out ./local-eval/plan.json
+
+atv-bench benchmark eval run ./local-eval/plan.json --out ./local-eval/results
+atv-bench benchmark eval verify ./local-eval/results
+atv-bench benchmark eval analyze ./local-eval/results \
+  --harness-a <id-a> --harness-b <id-b> --out ./local-eval/analysis
+atv-bench benchmark eval reproduce ./local-eval/results/<trial-directory>
+```
+
+Every command emits `trust_tier=local-self-attested` and `rankable=false`. Official
+status requires independently verifiable signatures, private-task operations, human
+task review, and the remaining release gates; local flags cannot promote a result.
+
+Protocol-v1 OCI manifests use a real attached
+`request → hello → accepted → result` exchange. The runner inspects the live container
+before exact removal, mounts hidden grader inputs only afterward, and can enforce one
+Docker-backed aggregate quota across `/workspace`, `/artifacts`, and `/tmp`. Strict
+evidence runs select `HARD_QUOTA`; `AUTO` may fall back to a clearly labeled bind
+monitor when the engine lacks the Linux Docker quota capability.
+
+`eval plan`, `eval run`, and `trial smoke` require digest-pinned OCI manifests.
+Process manifests such as the generic-command example remain supported for validation,
+adapter conformance, and `harness-run`, but are rejected before an isolated evaluation
+plan is created.
 
 ### See the rankings first
 
@@ -157,9 +221,10 @@ atv-bench board --demo    # builds a sample leaderboard and opens it in your bro
 ```
 
 The live community board is at
-**https://all-the-vibes.github.io/ATV-bench/** — that's where every submitted harness
-ranks. To render the *real* board locally from a checkout's store: `atv-bench board
---store league`.
+**https://all-the-vibes.github.io/ATV-bench/** — it ranks submitted **bots/identities**
+in ATV League. Fingerprint chips describe the submitter's self-attested configuration;
+they are not a harness score. To render the board locally from a checkout's store:
+`atv-bench board --store league`.
 
 ### Watch a real match locally (no submission, no mocks)
 
@@ -180,7 +245,7 @@ The opponent series (`atv-bench bots`):
 |-----|------------|
 | `greedy` | The trusted arena **anchor** — the yardstick every submission plays. |
 | `wall_hugger` | A more aggressive space-filling strategy. |
-| `bare` | The **no-harness baseline**: go straight, only turn to avoid crashing. Stands in for a raw model with no skills/MCP/agents. If your bot can't beat `bare`, your harness added nothing. |
+| `bare` | A deliberately minimal reference bot: go straight, turning only to avoid crashing. It is a gameplay baseline, not a raw-model or no-harness control. |
 
 **Watch YOUR harness-built bot play** — point `--player-bot` at the `main.py` your
 harness produced and pick any opponent:
@@ -195,17 +260,15 @@ Each run prints an ASCII board with the trusted outcome and writes a self-contai
 fully deterministic (same bots → same game every time); `--seed` only labels the replay.
 Use `--no-open` to skip launching the browser.
 
-### Run the benchmark on your harness (step by step)
+### Submit a bot to ATV League (step by step)
 
 1. **Pick a game.** See what's playable:
    ```bash
    atv-bench games        # lightcycles is live; battlesnake is planned
    ```
-2. **Have your harness build a bot.** Point your own harness (Claude Code, Copilot CLI,
-   your skills/MCP/agents — the thing being ranked) at the game and let it produce a
-   single-file bot named `main.py` that plays the arena (emits one move per turn). That
-   bot *is* your harness's entry — the whole thesis is that your harness, not a raw
-   model, wrote it.
+2. **Build a bot.** You may use any harness or workflow to produce a single-file
+   `main.py` that plays the arena. The League ranks the submitted bot/identity. It does
+   not verify or rank the harness that produced it.
 3. **Watch it play before you submit** (catch a broken bot in seconds):
    ```bash
    atv-bench play --player-bot ./main.py --opponent greedy
@@ -228,8 +291,9 @@ Use `--no-open` to skip launching the browser.
    ```
 
 A maintainer adds the `run-match` label, the sandboxed arena plays your bot, the trusted
-referee adjudicates from real gameplay, ELO is recomputed, and your row appears on the
-board. **That's how you see where your harness sits against everyone else's.**
+referee adjudicates from real gameplay, Elo is recomputed, and your League row appears
+on the board. **That result describes this bot's League history, not general harness
+quality.**
 
 `fingerprint --dry-run` prints a three-section consent view — **Will publish**,
 **Scrubbed** (values the scanner withheld, proving it ran), **Unknown** (surfaces it
@@ -238,12 +302,13 @@ Design + security model: [`docs/COMMUNITY_LEAGUE.md`](docs/COMMUNITY_LEAGUE.md).
 
 ## Scope of the claim (read this)
 
-v1 leaderboard rankings are **for entertainment and directional signal**, not an
-authoritative "which harness ingredients win" result. Fingerprints are **self-attested**
-(GitHub identity proves *who* submitted, not that the reported capabilities are honest),
-so correlations between fingerprint tags and ELO are suggestive only. Public match logs
-are the dispute mechanism. Treat the board as a leaderboard, not a study — until
-fingerprints are independently attestable.
+ATV League is a bot competition for entertainment and community signal. Its online Elo
+must not be used to declare a harness winner. Fingerprints are **self-attested**
+(GitHub identity proves *who* submitted, not what executed), and one frozen artifact
+cannot establish general harness quality. Official harness comparisons belong in ATV
+Controlled or ATV Systems and require fresh independent trials, enforced budgets,
+hidden grading, attestations, and task-clustered uncertainty. An inconclusive result is
+not converted into a winner.
 
 ## Dev
 
@@ -277,10 +342,12 @@ review models rejected the hosted approach 6/6 on strategy; it had no owner.
 
 ## Credits & license
 
-Built on [CodeClash](https://github.com/CodeClash-ai/CodeClash) (MIT) — arenas, Docker
-match engine, ELO/viewer. Paper: *CodeClash: Benchmarking Goal-Oriented Software
-Engineering* (arXiv [2511.00839](https://arxiv.org/abs/2511.00839)), John Yang, Kilian
-Lieret, et al. See [`NOTICE`](NOTICE).
+The experimental local harness runner integrates
+[CodeClash](https://github.com/CodeClash-ai/CodeClash) (MIT). The public ATV League uses
+ATV-bench's own trusted Lightcycles referee and viewer. CodeClash paper:
+*CodeClash: Benchmarking Goal-Oriented Software Engineering* (arXiv
+[2511.00839](https://arxiv.org/abs/2511.00839)), John Yang, Kilian Lieret, et al. See
+[`NOTICE`](NOTICE).
 
 The demo video's music is original, synthesized from pure numpy
 ([`scripts/make_demo_music.py`](scripts/make_demo_music.py)) — royalty-free, no samples.

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from atv_bench.config import GAME_SPECS, build_pvp_config, resolve_game
+from atv_bench.config import build_pvp_config, resolve_game
 
 
 def test_resolve_game_lightcycles():

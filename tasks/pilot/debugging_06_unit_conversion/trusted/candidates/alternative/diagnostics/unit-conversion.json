@@ -1,0 +1,5 @@
+{
+  "corrected_value": 2500,
+  "explanation": "derived from unit-conversion trace",
+  "root_cause": "milliseconds-treated-as-seconds"
+}

@@ -118,12 +118,13 @@ def test_publish_job_does_not_execute_bot(pub_wf):
     assert "require-spec" in body or "validate" in body or "schema" in body
 
 
-def test_publish_job_has_pages_write_but_match_does_not(wf, pub_wf):
+def test_publish_and_match_github_tokens_are_read_only(wf, pub_wf):
     publish = _publish_job(pub_wf)
     perms = publish.get("permissions", {})
-    # only the trusted job may write Pages
-    assert perms.get("pages") == "write" or perms.get("contents") == "write"
-    # and the untrusted match workflow must NOT hold pages/write scope anywhere
+    assert perms.get("contents") == "read"
+    assert "pages" not in perms
+    assert "LEAGUE_BOT_TOKEN" in yaml.safe_dump(publish)
+    # The untrusted match workflow must not hold Pages or repository-write scope.
     for name, job in _jobs(wf).items():
         jperms = job.get("permissions", {})
         assert "pages" not in jperms, f"{name} in league.yml must not have pages scope"

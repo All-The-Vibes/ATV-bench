@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from atv_bench.validate import validate_pr_paths
+from atv_bench.validate import validate_pr_changes, validate_pr_paths
 
 
 def test_own_submission_files_allowed():
@@ -57,9 +57,6 @@ def test_empty_or_invalid_author_rejected():
 #     PR as a "submission PR" (subject to confinement) iff it touches league/submissions/**.
 #     A submission PR that ALSO touches workflows / matches.jsonl / other dirs is the attack.
 
-from atv_bench.validate import validate_pr_changes
-
-
 def test_changes_add_modify_own_files_allowed():
     res = validate_pr_changes("octocat", [
         "A\tleague/submissions/octocat/main.py",
@@ -78,6 +75,29 @@ def test_changes_rename_rejected():
 
 def test_changes_delete_rejected():
     res = validate_pr_changes("octocat", ["D\tleague/matches.jsonl"])
+    assert res["ok"] is False
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        "T\tleague/submissions/octocat/main.py",
+        "U\tleague/submissions/octocat/main.py",
+        "M100\tleague/submissions/octocat/main.py",
+        "M",
+        "M\tleague/submissions/octocat/main.py\textra-path",
+        " M\tleague/submissions/octocat/main.py",
+        "M\t league/submissions/octocat/main.py",
+        "M\x00\tleague/submissions/octocat/main.py",
+    ],
+)
+def test_changes_reject_type_changes_unknown_statuses_and_malformed_records(record):
+    res = validate_pr_changes("octocat", [record])
+    assert res["ok"] is False
+
+
+def test_changes_reject_non_string_records():
+    res = validate_pr_changes("octocat", [None])  # type: ignore[list-item]
     assert res["ok"] is False
 
 
@@ -104,6 +124,15 @@ def test_changes_non_submission_pr_is_not_confined():
 def test_changes_submission_pr_flag_set():
     res = validate_pr_changes("octocat", ["A\tleague/submissions/octocat/main.py"])
     assert res["is_submission_pr"] is True
+
+
+def test_malformed_submission_record_cannot_downgrade_to_plumbing_pr():
+    res = validate_pr_changes(
+        "octocat",
+        ["M\tleague/submissions/octocat/main.py\textra-path"],
+    )
+    assert res["is_submission_pr"] is True
+    assert res["ok"] is False
 
 
 def test_submissions_root_scaffolding_is_not_a_submission():

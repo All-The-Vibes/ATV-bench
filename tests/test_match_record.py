@@ -7,8 +7,6 @@ records a live host-subprocess match with full provenance and honest verificatio
 """
 from __future__ import annotations
 
-import pytest
-
 from atv_bench.match_record import (
     MATCH_RECORD_SCHEMA_VERSION,
     PlayerRecord,

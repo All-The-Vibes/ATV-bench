@@ -7,7 +7,6 @@ referee as the sandboxed arena, so a local result is honest, not mocked.
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -59,7 +58,6 @@ def test_unknown_bot_rejected():
 
 def test_player_subprocess_closed_when_opponent_unknown(tmp_path: Path):
     """If the opponent key is bad AFTER the player subprocess spawned, it must be closed."""
-    import gc
     bot = tmp_path / "main.py"
     bot.write_text("import sys\nfor line in sys.stdin:\n    print('up'); sys.stdout.flush()\n")
     captured = {}
@@ -125,7 +123,8 @@ def test_build_replay_html_is_self_contained(tmp_path: Path):
                           opponent=Contestant(key="bare"), seed=0)
     out = build_replay_html(res, tmp_path)
     assert out.exists()
-    html = out.read_text()
+    html = out.read_text(encoding="utf-8")
+    assert b"\r\n" not in out.read_bytes()
     # frames embedded inline (no network fetch needed)
     assert "greedy" in html and "bare" in html
     assert "<canvas" in html.lower()
@@ -141,7 +140,7 @@ def test_build_replay_html_escapes_hostile_labels(tmp_path: Path):
     res["player_a"] = "</script><img src=x onerror=alert(1)>"
     res["match_id"] = "<b>oops</b>"
     out = build_replay_html(res, tmp_path)
-    html = out.read_text()
+    html = out.read_text(encoding="utf-8")
     # No raw breakout sequences survive into the document.
     assert "<img src=x onerror=alert(1)>" not in html
     assert "</script><img" not in html

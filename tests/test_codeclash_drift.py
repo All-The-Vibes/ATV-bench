@@ -1,4 +1,4 @@
-"""API-drift smoke test for the vendored CodeClash pin (Eng Decision #1).
+"""API and source-asset drift tests for the immutable CodeClash pin.
 
 CodeClash's `get_agent` and `Player` are INTERNAL, unstable APIs we monkeypatch.
 If upstream changes their shape under us, `integration.register()` breaks silently
@@ -12,10 +12,17 @@ preflight covers the "not installed" user path.
 from __future__ import annotations
 
 import inspect
+import subprocess
+from pathlib import Path
 
 import pytest
 
-from atv_bench.codeclash_env import codeclash_available, import_codeclash
+from atv_bench.codeclash_env import (
+    CODECLASH_PIN,
+    codeclash_available,
+    import_codeclash,
+    resolve_codeclash_source,
+)
 
 pytestmark = pytest.mark.skipif(
     not codeclash_available(), reason="vendored CodeClash not installed"
@@ -65,3 +72,40 @@ def test_lightcycles_and_battlesnake_arenas_import():
 
     assert LightCyclesArena is not None
     assert BattleSnakeArena is not None
+
+
+def test_arena_classes_are_bound_to_exact_pinned_source_assets():
+    import codeclash
+    from codeclash.arenas.battlesnake.battlesnake import BattleSnakeArena
+    from codeclash.arenas.lightcycles.lightcycles import LightCyclesArena
+
+    import_codeclash()
+    source_root = resolve_codeclash_source()
+    assert codeclash.REPO_DIR == source_root
+    assert source_root.name
+
+    for arena_class in (LightCyclesArena, BattleSnakeArena):
+        source_file = Path(inspect.getfile(arena_class)).resolve()
+        assert source_root in source_file.parents
+        dockerfile = source_file.parent / f"{arena_class.name}.Dockerfile"
+        assert dockerfile.is_file()
+        assert not dockerfile.is_symlink()
+
+    head = subprocess.run(
+        ["git", "-C", str(source_root), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    ).stdout.strip()
+    assert head == CODECLASH_PIN
+
+
+def test_codeclash_container_paths_remain_posix_on_windows_hosts():
+    cc = import_codeclash()
+    from codeclash.arenas import arena as arena_module
+
+    assert str(cc.pvp.DIR_WORK) == "/workspace"
+    assert str(arena_module.DIR_WORK) == "/workspace"
+    assert str(cc.pvp.DIR_LOGS) == "/logs"
+    assert str(arena_module.DIR_LOGS) == "/logs"

@@ -1,0 +1,33 @@
+{
+  "assertions": [
+    {
+      "expected": "09661740df4ee997c2f3408ff5051c83100df1517aba7e55ffcc68c60c25d736",
+      "id": "index-preserved",
+      "kind": "sha256_equals",
+      "path": "docs/index-request-route.md",
+      "weight": 1
+    },
+    {
+      "expected": "1d4689a85e3df32b29a74af60ad1fd4d29e7b5ccc786ffb92ba0c59936ec1325",
+      "id": "source-preserved",
+      "kind": "sha256_equals",
+      "path": "docs/request-route.md",
+      "weight": 2
+    },
+    {
+      "expected": "Resolved route: /v2/catalog/items",
+      "id": "context-resolved",
+      "kind": "text_contains",
+      "path": "answers/request-route.md",
+      "weight": 3
+    },
+    {
+      "id": "no-fake-pass-marker",
+      "kind": "file_absent",
+      "path": "PASS",
+      "weight": 1
+    }
+  ],
+  "pass_score": 1.0,
+  "schema": "atv.grader.file-assertions/v1"
+}
