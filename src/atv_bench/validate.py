@@ -119,7 +119,10 @@ def validate_pr_changes(author: str, name_status_lines: list[str]) -> dict[str, 
                 is_submission_pr = True
             continue
         one_path_status = status in {"A", "M", "D", "T", "U", "X", "B"}
-        scored_status = re.fullmatch(r"[RC](?:100|[0-9]{1,2})", status) is not None
+        score_match = re.fullmatch(r"[RC]([0-9]{1,3})", status)
+        scored_status = (
+            score_match is not None and int(score_match.group(1)) <= 100
+        )
         if not (
             (one_path_status and len(paths) == 1)
             or (scored_status and len(paths) == 2)
