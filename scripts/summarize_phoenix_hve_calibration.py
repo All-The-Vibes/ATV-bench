@@ -10,11 +10,18 @@ from pathlib import Path
 from typing import Any
 
 from atv_bench.comparison import write_exact_text
-from scripts.summarize_phoenix_hve_v2 import (
-    _reference,
-    exclusion_reasons,
-    load_trial,
-)
+try:
+    from .summarize_phoenix_hve_v2 import (
+        _reference,
+        exclusion_reasons,
+        load_trial,
+    )
+except ImportError:  # Direct ``python scripts/...py`` execution.
+    from summarize_phoenix_hve_v2 import (  # type: ignore[no-redef]
+        _reference,
+        exclusion_reasons,
+        load_trial,
+    )
 
 SCHEMA = "atv.phoenix-hve-calibration/v1"
 

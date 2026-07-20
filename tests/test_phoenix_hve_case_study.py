@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -247,6 +249,19 @@ def test_calibration_fails_when_no_budget_produces_paired_artifacts(tmp_path):
 
     assert output["decision"] == "failed"
     assert output["selected_max_ai_credits"] is None
+
+
+def test_calibration_summarizer_supports_direct_script_execution():
+    script = Path(calibration.__file__).resolve()
+    process = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        cwd=script.parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert process.returncode == 0, process.stderr
+    assert "--minimum-pass-rate" in process.stdout
 
 
 def test_forfeits_are_separate_from_completed_gameplay(tmp_path):
