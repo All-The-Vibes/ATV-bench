@@ -475,6 +475,86 @@ def validate_game_cmd(
         raise typer.Exit(1)
 
 
+@app.command(name="league-score")
+def league_score_cmd(
+    submitter: str = typer.Option(
+        ...,
+        "--submitter",
+        help="GitHub-login-shaped identity whose frozen bot is being scored.",
+    ),
+    bot: Path = typer.Option(
+        ...,
+        "--bot",
+        help="Path to the exact single-file League bot (staged as main.py).",
+    ),
+    match_id: str = typer.Option(
+        ...,
+        "--match-id",
+        help="Trusted unique match identifier used for result binding/deduplication.",
+    ),
+    game: str = typer.Option(
+        DEFAULT_GAME,
+        "--game",
+        help="Trusted League arena (currently lightcycles).",
+    ),
+    seed: int = typer.Option(
+        0,
+        "--seed",
+        help="Trusted match seed label (current Lightcycles gameplay is unseeded).",
+    ),
+    out: Path = typer.Option(
+        ...,
+        "--out",
+        help="Directory that receives the content-addressed evidence bundle.",
+    ),
+    store: Path = typer.Option(
+        None,
+        "--store",
+        help="Optional local League store to ingest the verified bound result into.",
+    ),
+    json_out: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the machine-readable execution receipt.",
+    ),
+) -> None:
+    """Score one frozen League bot locally in the locked-down trusted Docker arena.
+
+    This command refuses GitHub Actions. It emits local, self-attested evidence; a
+    reviewed result-data change is still required before anything reaches Pages.
+    """
+    from atv_bench.league_executor import LeagueExecutorError, execute_league_score
+
+    try:
+        receipt = execute_league_score(
+            submitter=submitter,
+            bot_path=bot,
+            match_id=match_id,
+            game=game,
+            seed=seed,
+            output_dir=out,
+            local_store=store,
+        )
+    except LeagueExecutorError as exc:
+        typer.echo(f"Cannot score League match: {exc}", err=True)
+        raise typer.Exit(1)
+
+    if json_out:
+        typer.echo(json.dumps(receipt.to_dict(), indent=2, sort_keys=True))
+        return
+    result = receipt.result
+    typer.echo("✓ League match adjudicated and MatchSpec-bound")
+    typer.echo(f"  result      : {result.get('outcome')}")
+    typer.echo(f"  bot sha256  : {receipt.bot_sha256}")
+    typer.echo(f"  bundle      : {receipt.bundle_dir}")
+    typer.echo(f"  bundle hash : {receipt.bundle_sha256}")
+    typer.echo(
+        "  local store : "
+        + ("ingested" if receipt.ingested else "not requested")
+    )
+    typer.echo("  publication : local evidence only; merge reviewed result data for Pages")
+
+
 @app.command(name="validate-pr-paths")
 def validate_pr_paths_cmd(
     author: str = typer.Option(..., "--author", help="PR author GitHub login."),

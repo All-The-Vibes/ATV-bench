@@ -126,6 +126,17 @@ PR opened → ordinary CI/security checks → reviewed submission merges
 ```
 
 Actions never execute submissions. A merged submission is not automatically scored.
+An approved operator can produce the local evidence with:
+
+```bash
+atv-bench league-score \
+  --submitter <github-login> --bot ./main.py --match-id <unique-id> \
+  --game lightcycles --seed 0 --out ./league-results
+```
+
+Add `--store ./league` only when intentionally ingesting the verified result into a
+local checkout. Review the content-addressed result, metadata, reproduction record,
+bounded logs, and checksums before proposing any store change.
 
 ## Seeing where you rank
 

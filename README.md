@@ -170,6 +170,33 @@ Harness benchmark execution is local-only. It is not triggered by GitHub Actions
 does not upload or publish scores. League bot execution is local or performed by a
 separately approved runner outside GitHub Actions.
 
+To adjudicate one frozen League bot with the packaged trusted arena, run:
+
+```bash
+atv-bench league-score \
+  --submitter <github-login> \
+  --bot ./main.py \
+  --match-id local-001 \
+  --game lightcycles \
+  --seed 0 \
+  --out ./league-results
+
+# Optional: also append the verified MatchSpec-bound result to a local store.
+atv-bench league-score \
+  --submitter <github-login> --bot ./main.py --match-id local-002 \
+  --game lightcycles --seed 0 --out ./league-results --store ./league
+```
+
+`league-score` refuses to run inside GitHub Actions. It generates its Docker context
+from the installed `atv_bench.arena` package, uses a digest-pinned base image, stages
+and hashes the exact bot bytes, and runs with no network, a read-only root, non-root
+identity, dropped capabilities, no-new-privileges, and fixed CPU, memory, PID, wall-time,
+temporary-filesystem, and captured-output limits. The output is a
+`sha256/<bundle-digest>/` directory containing the bound `result.json`, `meta.json`,
+`reproduction.json`, bounded logs, and `checksums.json`. It remains local evidence until
+the result data is separately reviewed and merged. In the current deterministic
+Lightcycles arena, `--seed` is a trusted result label; it does not alter gameplay.
+
 ```bash
 atv-bench benchmark schema check ./schemas
 atv-bench benchmark harness validate \
