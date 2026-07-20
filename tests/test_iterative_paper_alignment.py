@@ -324,7 +324,59 @@ def test_tournament_summary_is_tie_aware_bradley_terry_input_not_league_update()
     assert "elo" not in json.dumps(summary).lower()
 
 
-def test_summarize_tournament_emits_nested_round_evidence_and_unranked_metadata():
+def test_summarize_tournament_uses_last_decisive_round_to_break_equal_wins():
+    cfg = RunConfig(
+        game="lightcycles",
+        a="copilot-cli",
+        b="claude-code",
+        model="requested-model",
+        rounds=3,
+        adaptation="iterative",
+    )
+    raw = {
+        "pvp_config": {
+            "players": [
+                {"name": "copilot-cli", "agent": "copilot-cli"},
+                {"name": "claude-code", "agent": "claude-code"},
+            ]
+        },
+        "metadata": {
+            "round_stats": {
+                "0": {"winner": "Tie", "scores": {}},
+                "2": {"winner": "claude-code", "scores": {}},
+                "1": {"winner": "copilot-cli", "scores": {}},
+                "3": {"winner": "Tie", "scores": {}},
+            },
+            "agents": [
+                {
+                    "name": "copilot-cli",
+                    "atv": {
+                        "rounds": {
+                            "1": {
+                                "observation_unit": "nested-round",
+                                "status": "ok",
+                            }
+                        }
+                    },
+                }
+            ],
+        },
+    }
+    outcome, models = summarize_tournament(raw, cfg)
+    assert outcome["winner"] == "claude-code"
+    assert outcome["round_winners"] == ["copilot-cli", "claude-code"]
+    assert outcome["bradley_terry"]["win_matrix"]["claude-code::copilot-cli"] == [
+        1.0,
+        0.0,
+    ]
+    assert outcome["trial_unit"] == "tournament"
+    assert outcome["rounds_nested"] is True
+    assert outcome["ranking_published"] is False
+    assert outcome["round_evidence"][0]["observation_unit"] == "nested-round"
+    assert models["copilot-cli"] == ("requested-model", "recording")
+
+
+def test_summarize_tournament_ties_only_when_all_rounds_draw():
     cfg = RunConfig(
         game="lightcycles",
         a="copilot-cli",
@@ -343,31 +395,20 @@ def test_summarize_tournament_emits_nested_round_evidence_and_unranked_metadata(
         "metadata": {
             "round_stats": {
                 "0": {"winner": "Tie", "scores": {}},
-                "1": {"winner": "copilot-cli", "scores": {}},
-                "2": {"winner": "claude-code", "scores": {}},
-            },
-            "agents": [
-                {
-                    "name": "copilot-cli",
-                    "atv": {
-                        "rounds": {
-                            "1": {
-                                "observation_unit": "nested-round",
-                                "status": "ok",
-                            }
-                        }
-                    },
-                }
-            ],
+                "1": {"winner": "Tie", "scores": {}},
+                "2": {"winner": "Tie", "scores": {}},
+            }
         },
     }
-    outcome, models = summarize_tournament(raw, cfg)
+
+    outcome, _ = summarize_tournament(raw, cfg)
+
     assert outcome["winner"] == "tie"
-    assert outcome["trial_unit"] == "tournament"
-    assert outcome["rounds_nested"] is True
-    assert outcome["ranking_published"] is False
-    assert outcome["round_evidence"][0]["observation_unit"] == "nested-round"
-    assert models["copilot-cli"] == ("requested-model", "recording")
+    assert outcome["round_winners"] == []
+    assert outcome["bradley_terry"]["win_matrix"]["claude-code::copilot-cli"] == [
+        0.5,
+        0.5,
+    ]
 
 
 def test_match_record_never_promotes_nested_rounds_to_trials():

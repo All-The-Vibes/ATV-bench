@@ -163,7 +163,10 @@ def summarize_tournament(raw: dict, cfg: RunConfig) -> tuple[dict, dict]:
     }
     decisive: list[str] = []
     if isinstance(round_stats, dict):
-        for rnum, rs in round_stats.items():
+        for rnum, rs in sorted(
+            round_stats.items(),
+            key=lambda item: _round_order_key(item[0]),
+        ):
             if str(rnum) == "0":
                 continue  # identical-seed control round
             w = rs.get("winner")
@@ -206,13 +209,22 @@ def _compact_round_stats(round_stats: dict) -> dict:
     return out
 
 
+def _round_order_key(round_number: object) -> tuple[int, int | str]:
+    """Sort numeric round identifiers chronologically, with stable text fallback."""
+    try:
+        return (0, int(str(round_number)))
+    except ValueError:
+        return (1, str(round_number))
+
+
 def _majority_winner(decisive: list[str]) -> str:
+    """Apply CodeClash's round-win rule, including its last-win tie-break."""
     if not decisive:
         return "tie"
     counts = {player: decisive.count(player) for player in set(decisive)}
     best = max(counts.values())
     winners = sorted(player for player, count in counts.items() if count == best)
-    return winners[0] if len(winners) == 1 else "tie"
+    return winners[0] if len(winners) == 1 else decisive[-1]
 
 
 def build_bradley_terry_summary(
