@@ -1,4 +1,5 @@
 """Hermetic end-to-end tests for the local model-backed operator."""
+
 from __future__ import annotations
 
 import http.client
@@ -14,6 +15,7 @@ import pytest
 
 import atv_bench.control_plane.trial_controller as controller_module
 from atv_bench.operator import (
+    GatewayEndpointContract,
     ModelBackedEvalPlan,
     ModelBackedEvalPolicy,
     ModelBackedOperator,
@@ -99,10 +101,12 @@ class FakeOciRunner:
         server,
         *,
         forbidden_then_allowed: bool = False,
+        skip_gateway: bool = False,
     ):
         self.server = server
         self.port = server.port
         self.forbidden_then_allowed = forbidden_then_allowed
+        self.skip_gateway = skip_gateway
         self.requests: list[Any] = []
         self.http_statuses: list[int] = []
         self.response_headers: list[dict[str, str]] = []
@@ -167,12 +171,13 @@ class FakeOciRunner:
         self.requests.append(request)
         assert request.gateway_handle is not None
         self.handle_values.append(request.gateway_handle.value)
-        if self.forbidden_then_allowed:
-            assert self._call(request, "forbidden-subagent-model") == 403
-        expected = 200
-        observed = self._call(request, PUBLIC_MODEL)
-        if observed not in {expected, 502}:
-            raise AssertionError(f"unexpected gateway status: {observed}")
+        if not self.skip_gateway:
+            if self.forbidden_then_allowed:
+                assert self._call(request, "forbidden-subagent-model") == 403
+            expected = 200
+            observed = self._call(request, PUBLIC_MODEL)
+            if observed not in {expected, 502}:
+                raise AssertionError(f"unexpected gateway status: {observed}")
 
         oracle = next(
             path
@@ -234,9 +239,9 @@ class FakeOciRunner:
 
 
 def _task_image() -> str:
-    return json.loads((TASK / "task.json").read_text(encoding="utf-8"))[
-        "environment"
-    ]["image"]
+    return json.loads((TASK / "task.json").read_text(encoding="utf-8"))["environment"][
+        "image"
+    ]
 
 
 def _write_harness(path: Path, *, harness_id: str, subagents: bool) -> Path:
@@ -376,14 +381,32 @@ def _operator(
     runners: list[FakeOciRunner],
     *,
     forbidden_then_allowed: bool = False,
+    skip_gateway: bool = False,
 ) -> ModelBackedOperator:
     def factory(_work_root, server):
         runner = FakeOciRunner(
             server,
             forbidden_then_allowed=forbidden_then_allowed,
+            skip_gateway=skip_gateway,
         )
         runners.append(runner)
         return runner
+
+    def endpoint_factory(server, policy):
+        def healthcheck(_handle, _request):
+            with socket.create_connection(
+                (server.host, server.port),
+                timeout=2.0,
+            ):
+                pass
+
+        return GatewayEndpointContract(
+            network_name=policy.network_name,
+            host=policy.gateway_identity,
+            port=server.port,
+            tls=True,
+            healthcheck=healthcheck,
+        )
 
     return ModelBackedOperator(
         providers=ProviderBindings(
@@ -391,6 +414,7 @@ def _operator(
             credentials={PROVIDER_ID: PROVIDER_SECRET},
         ),
         oci_runner_factory=factory,
+        gateway_endpoint_factory=endpoint_factory,
         signer=AttestationSigner.create(
             key_id="operator-test-key",
             secret_factory=lambda: b"O" * 32,
@@ -399,11 +423,30 @@ def _operator(
     )
 
 
+def _rewrite_json(path: Path, document: dict[str, Any]) -> None:
+    os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+    path.write_bytes(canonical_json_bytes(document) + b"\n")
+
+
+def _refresh_manifest_for_file(output: Path, relative: str) -> None:
+    manifest_path = output / "manifest.json"
+    digest_path = output / "manifest.sha256"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    data = (output / relative).read_bytes()
+    record = next(item for item in manifest["files"] if item["path"] == relative)
+    record["sha256"] = sha256_bytes(data)
+    record["size"] = len(data)
+    _rewrite_json(manifest_path, manifest)
+    os.chmod(digest_path, stat.S_IREAD | stat.S_IWRITE)
+    digest_path.write_text(
+        sha256_bytes(manifest_path.read_bytes()) + "\n",
+        encoding="ascii",
+    )
+
+
 def _all_output_bytes(root: Path) -> bytes:
     return b"".join(
-        path.read_bytes()
-        for path in sorted(root.rglob("*"))
-        if path.is_file()
+        path.read_bytes() for path in sorted(root.rglob("*")) if path.is_file()
     )
 
 
@@ -450,9 +493,7 @@ def test_runs_paired_schedule_through_controller_and_writes_immutable_evidence(
         assert all(handle.encode() not in serialized for handle in runner.handle_values)
         assert request.provider_model == PROVIDER_MODEL
 
-    fingerprints = {
-        item["opaque_handle_sha256"] for item in result.attempts
-    }
+    fingerprints = {item["opaque_handle_sha256"] for item in result.attempts}
     assert len(fingerprints) == 2
     assert all(item["gateway"]["receipt_count"] == 1 for item in result.attempts)
     assert all(item["gateway"]["usage"]["model_calls"] == 1 for item in result.attempts)
@@ -492,6 +533,25 @@ def test_forbidden_subagent_model_is_fatal_even_if_allowed_call_succeeds(tmp_pat
     assert result.verify()["status"] == "failed"
 
 
+def test_empty_receipt_set_is_not_reported_as_all_signed(tmp_path):
+    plan = _plan(tmp_path)
+    backend = FakeResponsesBackend()
+    runners: list[FakeOciRunner] = []
+
+    result = _operator(
+        backend,
+        runners,
+        skip_gateway=True,
+    ).run(plan, tmp_path / "no-receipt-output")
+
+    assert result.succeeded is False
+    assert result.attempts[0]["gateway"]["receipt_count"] == 0
+    assert result.attempts[0]["gateway"]["all_receipts_signed"] is False
+    assert {item["code"] for item in result.attempts[0]["violations"]} >= {
+        "completed_model_trial_without_receipt"
+    }
+
+
 def test_backend_resolving_wrong_provider_model_fails_closed(tmp_path):
     plan = _plan(tmp_path)
     backend = FakeResponsesBackend(resolved_model="unregistered-provider-model")
@@ -526,6 +586,86 @@ def test_policy_digest_and_plan_identity_bind_seed_and_routes(tmp_path):
     assert caught.value.code == "policy_digest_mismatch"
 
 
+def test_default_model_is_first_in_controller_allowed_models(tmp_path):
+    document = _policy_document()
+    document["routes"].insert(
+        0,
+        {
+            "route_id": "secondary-route",
+            "public_model": "secondary-model",
+            "provider_id": PROVIDER_ID,
+            "provider_model": "secondary-provider-model",
+            "input_microusd_per_million": 0,
+            "output_microusd_per_million": 0,
+        },
+    )
+    document["policy_digest"] = canonical_digest(
+        {key: value for key, value in document.items() if key != "policy_digest"}
+    )["value"]
+    path = tmp_path / "policy-default-second.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    policy = ModelBackedEvalPolicy.load(path)
+
+    assert policy.default_model == PUBLIC_MODEL
+    assert policy.allowed_models == (PUBLIC_MODEL, "secondary-model")
+    assert policy.controller_policy(gateway_port=443).allowed_models == (
+        PUBLIC_MODEL,
+        "secondary-model",
+    )
+
+
+def test_operator_rejects_default_loopback_gateway_without_explicit_contract(
+    tmp_path,
+):
+    plan = _plan(tmp_path)
+    backend = FakeResponsesBackend()
+    operator = ModelBackedOperator(
+        providers=ProviderBindings(
+            backends={PROVIDER_ID: backend},
+            credentials={PROVIDER_ID: PROVIDER_SECRET},
+        ),
+        oci_runner_factory=lambda _work, _server: pytest.fail(
+            "runner must not start without a container endpoint contract"
+        ),
+    )
+
+    with pytest.raises(ModelBackedOperatorError) as caught:
+        operator.run(plan, tmp_path / "loopback-output")
+
+    assert caught.value.code == "gateway_endpoint_contract_required"
+
+
+def test_operator_rejects_loopback_host_in_explicit_container_contract(tmp_path):
+    plan = _plan(tmp_path)
+    backend = FakeResponsesBackend()
+
+    def endpoint_factory(server, policy):
+        return GatewayEndpointContract(
+            network_name=policy.network_name,
+            host=server.host,
+            port=server.port,
+            tls=True,
+            healthcheck=lambda _handle, _request: None,
+        )
+
+    operator = ModelBackedOperator(
+        providers=ProviderBindings(
+            backends={PROVIDER_ID: backend},
+            credentials={PROVIDER_ID: PROVIDER_SECRET},
+        ),
+        oci_runner_factory=lambda _work, _server: pytest.fail(
+            "runner must not start with a loopback endpoint"
+        ),
+        gateway_endpoint_factory=endpoint_factory,
+    )
+
+    with pytest.raises(ModelBackedOperatorError) as caught:
+        operator.run(plan, tmp_path / "explicit-loopback-output")
+
+    assert caught.value.code == "gateway_endpoint_unreachable"
+
+
 def test_output_is_never_overwritten_and_tampering_is_detected(tmp_path):
     plan = _plan(tmp_path)
     backend = FakeResponsesBackend()
@@ -546,6 +686,72 @@ def test_output_is_never_overwritten_and_tampering_is_detected(tmp_path):
     assert tampered.value.code == "output_file_tampered"
 
 
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("plan_digest", "f" * 64),
+        ("schedule_id", "different-schedule"),
+        ("status", "failed"),
+        ("attempts", []),
+    ],
+)
+def test_verify_binds_run_identity_and_attempts_to_result(
+    tmp_path,
+    field,
+    replacement,
+):
+    plan = _plan(tmp_path)
+    backend = FakeResponsesBackend()
+    runners: list[FakeOciRunner] = []
+    output = tmp_path / f"tampered-run-{field}"
+    result = _operator(backend, runners).run(plan, output)
+    run_path = output / "run.json"
+    run = json.loads(run_path.read_text(encoding="utf-8"))
+    run[field] = replacement
+    _rewrite_json(run_path, run)
+    _refresh_manifest_for_file(output, "run.json")
+
+    with pytest.raises(ModelBackedOperatorError) as caught:
+        result.verify()
+
+    assert caught.value.code == "run_record_mismatch"
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("plan_digest", "f" * 64),
+        ("schedule_id", "different-schedule"),
+        ("status", "failed"),
+    ],
+)
+def test_verify_binds_output_manifest_identity_to_result(
+    tmp_path,
+    field,
+    replacement,
+):
+    plan = _plan(tmp_path)
+    backend = FakeResponsesBackend()
+    runners: list[FakeOciRunner] = []
+    output = tmp_path / f"tampered-manifest-{field}"
+    result = _operator(backend, runners).run(plan, output)
+    manifest_path = output / "manifest.json"
+    digest_path = output / "manifest.sha256"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest[field] = replacement
+    _rewrite_json(manifest_path, manifest)
+    os.chmod(digest_path, stat.S_IREAD | stat.S_IWRITE)
+    digest_path.write_text(
+        sha256_bytes(manifest_path.read_bytes()) + "\n",
+        encoding="ascii",
+    )
+
+    with pytest.raises(ModelBackedOperatorError) as caught:
+        result.verify()
+
+    assert caught.value.code == "output_identity_mismatch"
+
+
 def test_provider_bindings_must_match_preregistered_providers(tmp_path):
     plan = _plan(tmp_path)
     backend = FakeResponsesBackend()
@@ -554,9 +760,7 @@ def test_provider_bindings_must_match_preregistered_providers(tmp_path):
             backends={"wrong-provider": backend},
             credentials={"wrong-provider": PROVIDER_SECRET},
         ),
-        oci_runner_factory=lambda _work, _server: pytest.fail(
-            "runner must not start"
-        ),
+        oci_runner_factory=lambda _work, _server: pytest.fail("runner must not start"),
     )
     with pytest.raises(ModelBackedOperatorError) as caught:
         operator.run(plan, tmp_path / "provider-mismatch")

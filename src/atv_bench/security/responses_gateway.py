@@ -31,6 +31,7 @@ explicit seam is intentional: the text-only ``ModelProvider`` contract cannot
 faithfully carry Responses tool events and must not be presented as if it
 could.
 """
+
 from __future__ import annotations
 
 import base64
@@ -143,6 +144,8 @@ _REQUEST_FIELDS = frozenset(
         "previous_response_id",
         "prompt",
         "prompt_cache_key",
+        "prompt_cache_options",
+        "prompt_cache_retention",
         "reasoning",
         "safety_identifier",
         "service_tier",
@@ -164,6 +167,7 @@ _RESPONSE_FIELDS = frozenset(
         "id",
         "object",
         "created_at",
+        "completed_at",
         "status",
         "background",
         "error",
@@ -176,6 +180,9 @@ _RESPONSE_FIELDS = frozenset(
         "parallel_tool_calls",
         "previous_response_id",
         "prompt",
+        "prompt_cache_key",
+        "prompt_cache_options",
+        "prompt_cache_retention",
         "reasoning",
         "safety_identifier",
         "service_tier",
@@ -348,18 +355,15 @@ class ResponsesBackend(Protocol):
         self,
         credential: str | bytes,
         request: ResponsesBackendRequest,
-    ) -> ResponsesBackendResponse:
-        ...
+    ) -> ResponsesBackendResponse: ...
 
     def stream(
         self,
         credential: str | bytes,
         request: ResponsesBackendRequest,
-    ) -> Iterable[ResponsesStreamChunk]:
-        ...
+    ) -> Iterable[ResponsesStreamChunk]: ...
 
-    def cancel(self, provider_request_id: str) -> None:
-        ...
+    def cancel(self, provider_request_id: str) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -473,9 +477,7 @@ class ResponsesBudgetLedger:
         with self._lock:
             ledger = self._ledgers.setdefault(identity, _Ledger())
             combined = (
-                ledger.committed.usage()
-                .plus(ledger.reserved.usage())
-                .plus(planned)
+                ledger.committed.usage().plus(ledger.reserved.usage()).plus(planned)
             )
             _raise_if_budget_exceeded(combined, budget)
             ledger.reserved.add(planned)
@@ -713,7 +715,9 @@ def _require_text(
     nonempty: bool = True,
 ) -> str:
     if not isinstance(value, str) or (nonempty and not value):
-        _invalid("field must be non-empty text" if nonempty else "field must be text", path)
+        _invalid(
+            "field must be non-empty text" if nonempty else "field must be text", path
+        )
     return value
 
 
@@ -809,7 +813,9 @@ def _validate_input_item(item: Any, *, path: str) -> None:
         if isinstance(output, str):
             return
         if not isinstance(output, list):
-            _invalid("function_call_output output must be text or an array", f"{path}.output")
+            _invalid(
+                "function_call_output output must be text or an array", f"{path}.output"
+            )
         for index, part in enumerate(output):
             _validate_content_part(part, path=f"{path}.output[{index}]")
         return
@@ -846,7 +852,10 @@ def _validate_tools(value: Any, *, path: str) -> None:
                 nonempty=False,
             )
         if "parameters" in tool and not isinstance(tool["parameters"], Mapping):
-            _invalid("function parameters must be a JSON Schema object", f"{item_path}.parameters")
+            _invalid(
+                "function parameters must be a JSON Schema object",
+                f"{item_path}.parameters",
+            )
         if "strict" in tool:
             _require_bool(tool["strict"], path=f"{item_path}.strict")
 
@@ -904,6 +913,25 @@ def _validate_response_request(
             _require_bool(payload[name], path=f"$.{name}")
     if payload.get("background") is True:
         _invalid("background Responses are not supported", "$.background")
+    if payload.get("store") is True:
+        _invalid(
+            "benchmark Responses must not be stored by the provider",
+            "$.store",
+        )
+    for name in (
+        "conversation",
+        "previous_response_id",
+        "prompt",
+        "prompt_cache_key",
+        "prompt_cache_options",
+        "prompt_cache_retention",
+    ):
+        if payload.get(name) is not None:
+            _invalid(
+                "provider-side response, conversation, prompt, and cache state "
+                "is not allowed in benchmark requests",
+                f"$.{name}",
+            )
     if "temperature" in payload:
         value = payload["temperature"]
         if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -996,7 +1024,10 @@ def _validate_response_request(
                 )
                 _require_text(fmt.get("name"), path="$.text.format.name")
                 if not isinstance(fmt.get("schema"), Mapping):
-                    _invalid("json_schema format requires a schema object", "$.text.format.schema")
+                    _invalid(
+                        "json_schema format requires a schema object",
+                        "$.text.format.schema",
+                    )
             else:
                 _invalid("unsupported text format", "$.text.format.type")
     for name in (
@@ -1010,7 +1041,7 @@ def _validate_response_request(
     ):
         if name in payload and payload[name] is not None:
             _require_text(payload[name], path=f"$.{name}")
-    if "prompt" in payload:
+    if "prompt" in payload and payload["prompt"] is not None:
         prompt = payload["prompt"]
         if not isinstance(prompt, Mapping):
             _invalid("prompt must be an object", "$.prompt")
@@ -1023,7 +1054,37 @@ def _validate_response_request(
     normalized = copy.deepcopy(dict(payload))
     normalized.setdefault("max_output_tokens", max_output)
     normalized.setdefault("stream", False)
+    normalized.setdefault("store", False)
+    for name in (
+        "conversation",
+        "previous_response_id",
+        "prompt",
+        "prompt_cache_key",
+        "prompt_cache_options",
+        "prompt_cache_retention",
+    ):
+        if normalized.get(name) is None:
+            normalized.pop(name, None)
     return normalized
+
+
+def _validate_function_caller(value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, Mapping):
+        raise ResponsesBackendError()
+    caller_type = value.get("type")
+    if caller_type == "direct":
+        if set(value) != {"type"}:
+            raise ResponsesBackendError()
+        return
+    if caller_type == "program":
+        if set(value) != {"type", "caller_id"}:
+            raise ResponsesBackendError()
+        if not isinstance(value.get("caller_id"), str) or not value["caller_id"]:
+            raise ResponsesBackendError()
+        return
+    raise ResponsesBackendError()
 
 
 def _validate_output_item(item: Any, *, path: str) -> None:
@@ -1034,7 +1095,15 @@ def _validate_output_item(item: Any, *, path: str) -> None:
         raise ResponsesBackendError()
     fields = {
         "message": {"id", "type", "status", "role", "content"},
-        "function_call": {"id", "type", "status", "arguments", "call_id", "name"},
+        "function_call": {
+            "id",
+            "type",
+            "status",
+            "arguments",
+            "call_id",
+            "name",
+            "caller",
+        },
         "reasoning": {
             "id",
             "type",
@@ -1062,6 +1131,8 @@ def _validate_output_item(item: Any, *, path: str) -> None:
         for name in ("arguments", "call_id", "name"):
             if not isinstance(item.get(name), str):
                 raise ResponsesBackendError()
+        if "caller" in item:
+            _validate_function_caller(item["caller"])
 
 
 def _validate_backend_response(
@@ -1100,6 +1171,33 @@ def _validate_backend_response(
     if isinstance(response["created_at"], float) and not math.isfinite(
         response["created_at"]
     ):
+        raise ResponsesBackendError(request_id=result.request_id)
+    completed_at = response.get("completed_at")
+    if completed_at is not None:
+        if isinstance(completed_at, bool) or not isinstance(
+            completed_at,
+            (int, float),
+        ):
+            raise ResponsesBackendError(request_id=result.request_id)
+        if isinstance(completed_at, float) and not math.isfinite(completed_at):
+            raise ResponsesBackendError(request_id=result.request_id)
+    prompt_cache_key = response.get("prompt_cache_key")
+    if prompt_cache_key is not None and not isinstance(prompt_cache_key, str):
+        raise ResponsesBackendError(request_id=result.request_id)
+    prompt_cache_options = response.get("prompt_cache_options")
+    if prompt_cache_options is not None:
+        if (
+            not isinstance(prompt_cache_options, Mapping)
+            or set(prompt_cache_options) != {"mode", "ttl"}
+            or prompt_cache_options.get("mode") not in {"implicit", "explicit"}
+            or prompt_cache_options.get("ttl") != "30m"
+        ):
+            raise ResponsesBackendError(request_id=result.request_id)
+    if response.get("prompt_cache_retention") not in {
+        None,
+        "in_memory",
+        "24h",
+    }:
         raise ResponsesBackendError(request_id=result.request_id)
     output = response["output"]
     if not isinstance(output, list):
@@ -1157,9 +1255,7 @@ def _contains_secret(
     seen.add(object_id)
     secret_bytes = secret if isinstance(secret, bytes) else secret.encode("utf-8")
     secret_text = (
-        secret.decode("utf-8", errors="ignore")
-        if isinstance(secret, bytes)
-        else secret
+        secret.decode("utf-8", errors="ignore") if isinstance(secret, bytes) else secret
     )
     if isinstance(value, str):
         return bool(secret_text) and secret_text in value
@@ -1172,8 +1268,7 @@ def _contains_secret(
         )
     if isinstance(value, Mapping):
         return any(
-            _contains_secret(key, secret, seen)
-            or _contains_secret(item, secret, seen)
+            _contains_secret(key, secret, seen) or _contains_secret(item, secret, seen)
             for key, item in value.items()
         )
     if isinstance(value, Sequence) and not isinstance(
@@ -1254,8 +1349,10 @@ def _safe_status_message(status: ResponsesGatewayStatus) -> str:
 
 
 def _receipt_header(receipt: Mapping[str, Any]) -> str:
-    return base64.urlsafe_b64encode(canonical_json_bytes(receipt)).rstrip(b"=").decode(
-        "ascii"
+    return (
+        base64.urlsafe_b64encode(canonical_json_bytes(receipt))
+        .rstrip(b"=")
+        .decode("ascii")
     )
 
 
@@ -1605,6 +1702,18 @@ class ResponsesGateway:
         backend = self._backends[prepared.route.provider_id]
         backend_request = self._backend_request(prepared, cancel_event)
         finalized = False
+        provider_started = False
+
+        def invoke(
+            credential: str | bytes,
+            request: ResponsesBackendRequest,
+        ) -> ResponsesBackendResponse:
+            nonlocal provider_started
+            if cancel_event.is_set():
+                raise ResponsesCancelled()
+            provider_started = True
+            return backend.create(credential, request)
+
         try:
             if cancel_event.is_set():
                 raise ResponsesCancelled()
@@ -1613,7 +1722,7 @@ class ResponsesGateway:
                 trial_id=prepared.authorization.trial_id,
                 route_id=prepared.route.route_id,
                 provider_id=prepared.route.provider_id,
-                invoker=backend.create,
+                invoker=invoke,
                 request=backend_request,
             )
             if cancel_event.is_set():
@@ -1699,17 +1808,22 @@ class ResponsesGateway:
                 body=body,
             )
         except ResponsesCancelled:
-            self._cancel_backend(backend, prepared.provider_request_id)
+            usage = prepared.planned if provider_started else UsageSummary()
+            if provider_started:
+                self._cancel_backend(backend, prepared.provider_request_id)
             if not finalized:
-                self._ledger.finalize(
-                    prepared.reservation,
-                    prepared.authorization.policy.budget,
-                    prepared.planned,
-                )
+                if provider_started:
+                    self._ledger.finalize(
+                        prepared.reservation,
+                        prepared.authorization.policy.budget,
+                        usage,
+                    )
+                else:
+                    self._ledger.cancel(prepared.reservation)
             return self._terminal_error(
                 prepared,
                 ResponsesGatewayStatus.CANCELLED,
-                prepared.planned,
+                usage,
                 provider_request_id=prepared.provider_request_id,
             )
         except BrokerError as exc:
@@ -1753,21 +1867,32 @@ class ResponsesGateway:
         cancel_event: threading.Event,
     ) -> ResponsesHttpResponse:
         backend = self._backends[prepared.route.provider_id]
+        provider_started = threading.Event()
         events: queue.Queue[bytes | _StreamTerminal] = queue.Queue(
             maxsize=self._config.max_stream_queue_events
         )
         body = ResponsesStreamBody(
             events=events,
             cancel_event=cancel_event,
-            cancel_backend=lambda: self._cancel_backend(
-                backend,
-                prepared.provider_request_id,
+            cancel_backend=lambda: (
+                self._cancel_backend(
+                    backend,
+                    prepared.provider_request_id,
+                )
+                if provider_started.is_set()
+                else None
             ),
             poll_seconds=self._config.queue_poll_seconds,
         )
         thread = threading.Thread(
             target=self._run_stream_worker,
-            args=(prepared, backend, cancel_event, events),
+            args=(
+                prepared,
+                backend,
+                cancel_event,
+                provider_started,
+                events,
+            ),
             name=f"atv-responses-{prepared.request_id[:12]}",
             daemon=True,
         )
@@ -1788,6 +1913,7 @@ class ResponsesGateway:
         prepared: _PreparedRequest,
         backend: ResponsesBackend,
         cancel_event: threading.Event,
+        provider_started: threading.Event,
         events: "queue.Queue[bytes | _StreamTerminal]",
     ) -> None:
         backend_request = self._backend_request(prepared, cancel_event)
@@ -1821,6 +1947,9 @@ class ResponsesGateway:
         ) -> ResponsesBackendResponse:
             nonlocal finalized, observed_stream_output
             nonlocal streamed_events, result_request_id
+            if cancel_event.is_set():
+                raise ResponsesCancelled()
+            provider_started.set()
             final_result: ResponsesBackendResponse | None = None
             terminal_seen = False
             for raw_chunk in backend.stream(credential, request):
@@ -1931,9 +2060,10 @@ class ResponsesGateway:
                     if not isinstance(delta, str):
                         raise ResponsesBackendError()
                     candidate = observed_stream_output + delta
-                    if self._count_tokens(candidate) > prepared.public_payload[
-                        "max_output_tokens"
-                    ]:
+                    if (
+                        self._count_tokens(candidate)
+                        > prepared.public_payload["max_output_tokens"]
+                    ):
                         raise _StreamOutputLimitExceeded()
                     observed_stream_output = candidate
                 encoded = _sse_event(event)
@@ -1989,18 +2119,23 @@ class ResponsesGateway:
             except ResponsesCancelled:
                 pass
         except ResponsesCancelled:
-            self._cancel_backend(backend, prepared.provider_request_id)
+            usage = prepared.planned if provider_started.is_set() else UsageSummary()
+            if provider_started.is_set():
+                self._cancel_backend(backend, prepared.provider_request_id)
             if not finalized:
-                self._ledger.finalize(
-                    prepared.reservation,
-                    prepared.authorization.policy.budget,
-                    prepared.planned,
-                )
+                if provider_started.is_set():
+                    self._ledger.finalize(
+                        prepared.reservation,
+                        prepared.authorization.policy.budget,
+                        usage,
+                    )
+                else:
+                    self._ledger.cancel(prepared.reservation)
                 finalized = True
                 self._finish_log(
                     prepared,
                     status=ResponsesGatewayStatus.CANCELLED,
-                    usage=prepared.planned,
+                    usage=usage,
                     provider_request_id=result_request_id,
                     streamed_events=streamed_events,
                 )
@@ -2272,9 +2407,7 @@ class ResponsesGateway:
                     prepared.authorization.policy.underreport_policy.value
                 ),
                 "trial_policy_digest": prepared.authorization.policy_digest,
-                "budget_identity": (
-                    prepared.authorization.budget_identity.to_dict()
-                ),
+                "budget_identity": (prepared.authorization.budget_identity.to_dict()),
                 "handle_issuance": prepared.authorization.issuance.to_dict(),
                 "started_at_ms": prepared.started_at_ms,
                 "completed_at_ms": completed_at_ms,
@@ -2373,9 +2506,7 @@ class ResponsesGateway:
             ("X-ATV-Model-Receipt", _receipt_header(prepared.model_receipt)),
         ]
         if terminal_receipt is not None:
-            headers.append(
-                ("X-ATV-Usage-Receipt", _receipt_header(terminal_receipt))
-            )
+            headers.append(("X-ATV-Usage-Receipt", _receipt_header(terminal_receipt)))
         if content_length is not None:
             headers.append(("Content-Length", str(content_length)))
         return tuple(headers)

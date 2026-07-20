@@ -8,15 +8,16 @@ policy without changing their trust claims.
 The operator is provider-neutral. A caller must inject ``ResponsesBackend``
 implementations and the corresponding broker-held provider credentials.
 """
+
 from __future__ import annotations
 
 import dataclasses
 import hashlib
+import ipaddress
 import json
 import math
 import os
 import shutil
-import socket
 import stat
 import threading
 import uuid
@@ -96,9 +97,13 @@ class ModelBackedOperatorError(RuntimeError):
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
-        "+00:00",
-        "Z",
+    return (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="seconds")
+        .replace(
+            "+00:00",
+            "Z",
+        )
     )
 
 
@@ -180,7 +185,9 @@ def _canonical_safe(value: Any) -> Any:
     return value
 
 
-def _strict_json_file(path: Path, *, max_bytes: int = 4 * 1024 * 1024) -> dict[str, Any]:
+def _strict_json_file(
+    path: Path, *, max_bytes: int = 4 * 1024 * 1024
+) -> dict[str, Any]:
     source = Path(os.path.abspath(os.fspath(path)))
     if source.is_symlink() or not source.is_file():
         raise ModelBackedOperatorError(
@@ -237,6 +244,98 @@ class ProviderBindings:
                 )
         object.__setattr__(self, "backends", backends)
         object.__setattr__(self, "credentials", credentials)
+
+
+@dataclass(frozen=True, slots=True)
+class GatewayEndpointContract:
+    """Explicit container-network contract for the brokered Responses endpoint."""
+
+    network_name: str
+    host: str
+    port: int
+    tls: bool
+    healthcheck: Callable[
+        [OpaqueTrialHandle, ControllerRunRequest],
+        None,
+    ] = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        for name in ("network_name", "host"):
+            value = getattr(self, name)
+            if (
+                not isinstance(value, str)
+                or not value
+                or value != value.strip()
+                or any(character in value for character in "\x00\r\n")
+            ):
+                raise ModelBackedOperatorError(
+                    "gateway_endpoint_invalid",
+                    f"{name} must be non-empty trimmed text",
+                )
+        if (
+            isinstance(self.port, bool)
+            or not isinstance(self.port, int)
+            or not 1 <= self.port <= 65_535
+        ):
+            raise ModelBackedOperatorError(
+                "gateway_endpoint_invalid",
+                "port must be an integer from 1 through 65535",
+            )
+        if self.tls is not True:
+            raise ModelBackedOperatorError(
+                "gateway_endpoint_tls_required",
+                "the container endpoint contract must require TLS",
+            )
+        if not callable(self.healthcheck):
+            raise ModelBackedOperatorError(
+                "gateway_endpoint_invalid",
+                "healthcheck must be callable",
+            )
+        normalized_host = self.host.rstrip(".").lower()
+        if (
+            normalized_host == "localhost"
+            or normalized_host.endswith(".localhost")
+            or ":" in normalized_host
+        ):
+            raise ModelBackedOperatorError(
+                "gateway_endpoint_unreachable",
+                "the advertised endpoint is not a container-reachable DNS or IPv4 host",
+            )
+        try:
+            address = ipaddress.ip_address(normalized_host)
+        except ValueError:
+            address = None
+        if address is not None and (
+            address.is_loopback
+            or address.is_unspecified
+            or address.is_link_local
+            or address.is_multicast
+        ):
+            raise ModelBackedOperatorError(
+                "gateway_endpoint_unreachable",
+                "the advertised endpoint is not reachable from the OCI network",
+            )
+
+    def validate_for(self, policy: "ModelBackedEvalPolicy") -> None:
+        if self.network_name != policy.network_name:
+            raise ModelBackedOperatorError(
+                "gateway_endpoint_network_mismatch",
+                "the endpoint contract names a different OCI network",
+            )
+        if self.host != policy.gateway_identity:
+            raise ModelBackedOperatorError(
+                "gateway_endpoint_identity_mismatch",
+                "the endpoint host must equal the preregistered gateway identity",
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "network_name": self.network_name,
+            "host": self.host,
+            "port": self.port,
+            "tls": self.tls,
+            "healthcheck_required": True,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -384,15 +483,11 @@ class ModelBackedEvalPolicy:
                     ),
                     input_microusd_per_million=_require_int(
                         raw_route["input_microusd_per_million"],
-                        field_name=(
-                            f"routes[{index}].input_microusd_per_million"
-                        ),
+                        field_name=(f"routes[{index}].input_microusd_per_million"),
                     ),
                     output_microusd_per_million=_require_int(
                         raw_route["output_microusd_per_million"],
-                        field_name=(
-                            f"routes[{index}].output_microusd_per_million"
-                        ),
+                        field_name=(f"routes[{index}].output_microusd_per_million"),
                     ),
                 )
             )
@@ -567,7 +662,14 @@ class ModelBackedEvalPolicy:
 
     @property
     def allowed_models(self) -> tuple[str, ...]:
-        return tuple(item.public_model for item in self.routes)
+        return (
+            self.default_model,
+            *(
+                item.public_model
+                for item in self.routes
+                if item.public_model != self.default_model
+            ),
+        )
 
     @property
     def provider_ids(self) -> tuple[str, ...]:
@@ -585,14 +687,19 @@ class ModelBackedEvalPolicy:
             ),
         )
 
-    def controller_policy(self, *, gateway_port: int) -> ControllerModelPolicy:
+    def controller_policy(
+        self,
+        *,
+        gateway_port: int,
+        gateway_host: str | None = None,
+    ) -> ControllerModelPolicy:
         return ControllerModelPolicy(
             id=self.id,
             version=self.version,
             model_required=True,
             allowed_models=self.allowed_models,
             allowed_route_ids=tuple(item.route_id for item in self.routes),
-            gateway=f"{self.gateway_identity}:{gateway_port}",
+            gateway=f"{gateway_host or self.gateway_identity}:{gateway_port}",
             budget=self.budget,
             max_retries=self.max_retries,
             underreport_policy=self.underreport_policy,
@@ -696,9 +803,7 @@ class ModelBackedEvalPlan:
             harnesses.append(harness)
 
         if policy.track is OciTrack.CONTROLLED:
-            task_images = {
-                str(task.manifest["environment"]["image"]) for task in tasks
-            }
+            task_images = {str(task.manifest["environment"]["image"]) for task in tasks}
             harness_images = {
                 str(harness.as_dict()["runtime"]["image"]) for harness in harnesses
             }
@@ -1110,9 +1215,7 @@ def _attempt_evidence(
             }
         )
     if controller_handoff and (
-        result.internal_bundle is None
-        or result.outcome is None
-        or result.grade is None
+        result.internal_bundle is None or result.outcome is None or result.grade is None
     ):
         violations.append(
             {
@@ -1154,9 +1257,9 @@ def _attempt_evidence(
             "request_count": len(audits),
             "receipt_count": len(records),
             "usage": usage.to_dict(),
-            "all_receipts_signed": all(
-                signer.verify(record.attestation).integrity_valid
-                for record in records
+            "all_receipts_signed": bool(records)
+            and all(
+                signer.verify(record.attestation).integrity_valid for record in records
             ),
         },
         "violations": violations,
@@ -1194,7 +1297,9 @@ def _write_json(path: Path, value: Mapping[str, Any]) -> None:
 
 
 def _write_jsonl(path: Path, values: Sequence[Mapping[str, Any]]) -> None:
-    _write_exclusive(path, canonical_jsonl([_canonical_safe(value) for value in values]))
+    _write_exclusive(
+        path, canonical_jsonl([_canonical_safe(value) for value in values])
+    )
 
 
 def _file_manifest(root: Path) -> list[dict[str, Any]]:
@@ -1307,6 +1412,16 @@ class ModelBackedRunResult:
                 "output_trust_claim_invalid",
                 "local output changed its trust or rankability claim",
             )
+        expected_status = "completed" if self.succeeded else "failed"
+        if (
+            manifest.get("plan_digest") != self.plan_digest
+            or manifest.get("schedule_id") != self.schedule_id
+            or manifest.get("status") != expected_status
+        ):
+            raise ModelBackedOperatorError(
+                "output_identity_mismatch",
+                "manifest identity does not match the completed run result",
+            )
         listed: set[str] = set()
         for record in manifest.get("files", []):
             if not isinstance(record, dict) or set(record) != {
@@ -1333,10 +1448,7 @@ class ModelBackedRunResult:
                     value,
                 )
             data = path.read_bytes()
-            if (
-                len(data) != record["size"]
-                or sha256_bytes(data) != record["sha256"]
-            ):
+            if len(data) != record["size"] or sha256_bytes(data) != record["sha256"]:
                 raise ModelBackedOperatorError(
                     "output_file_tampered",
                     value,
@@ -1364,11 +1476,29 @@ class ModelBackedRunResult:
                 "run_record_invalid",
                 "run.json contains an invalid trust claim",
             )
+        expected_attempts = json.loads(
+            canonical_json_bytes(_canonical_safe(list(self.attempts)))
+        )
+        if (
+            run.get("plan_digest") != self.plan_digest
+            or run.get("schedule_id") != self.schedule_id
+            or run.get("status") != expected_status
+            or run.get("attempts") != expected_attempts
+            or run.get("executed_trials") != len(expected_attempts)
+        ):
+            raise ModelBackedOperatorError(
+                "run_record_mismatch",
+                "run.json identity, status, or attempts do not match the result",
+            )
         return manifest
 
 
 RunnerFactory = Callable[[Path, ResponsesHttpServer], Any]
 ServerFactory = Callable[[ResponsesGateway], ResponsesHttpServer]
+GatewayEndpointFactory = Callable[
+    [ResponsesHttpServer, ModelBackedEvalPolicy],
+    GatewayEndpointContract,
+]
 
 
 class ModelBackedOperator:
@@ -1382,6 +1512,7 @@ class ModelBackedOperator:
         signer: AttestationSigner | None = None,
         broker_factory: Callable[[], CredentialBroker] = CredentialBroker,
         server_factory: ServerFactory = ResponsesHttpServer,
+        gateway_endpoint_factory: GatewayEndpointFactory | None = None,
         clock: Callable[[], str] = _utc_now,
     ) -> None:
         self.providers = providers
@@ -1391,6 +1522,7 @@ class ModelBackedOperator:
         )
         self.broker_factory = broker_factory
         self.server_factory = server_factory
+        self.gateway_endpoint_factory = gateway_endpoint_factory
         self.clock = clock
 
     def run(
@@ -1442,13 +1574,26 @@ class ModelBackedOperator:
             server = self.server_factory(gateway)
             server.start()
             active_server = server
+            if self.gateway_endpoint_factory is None:
+                raise ModelBackedOperatorError(
+                    "gateway_endpoint_contract_required",
+                    "the default host-loopback Responses server is not reachable "
+                    "from a real OCI network; supply an explicit container endpoint "
+                    "contract",
+                )
+            endpoint = self.gateway_endpoint_factory(active_server, plan.policy)
+            if not isinstance(endpoint, GatewayEndpointContract):
+                raise ModelBackedOperatorError(
+                    "gateway_endpoint_invalid",
+                    "gateway_endpoint_factory must return GatewayEndpointContract",
+                )
+            endpoint.validate_for(plan.policy)
             controller_policy = plan.policy.controller_policy(
-                gateway_port=active_server.port,
+                gateway_host=endpoint.host,
+                gateway_port=endpoint.port,
             )
             schedule_policy_digest = (
-                plan.schedule[0].spec.model_policy.digest
-                if plan.schedule
-                else None
+                plan.schedule[0].spec.model_policy.digest if plan.schedule else None
             )
             if schedule_policy_digest != controller_policy.digest:
                 raise ModelBackedOperatorError(
@@ -1468,11 +1613,7 @@ class ModelBackedOperator:
                 request: ControllerRunRequest,
             ) -> None:
                 handles.register(handle, request)
-                with socket.create_connection(
-                    (active_server.host, active_server.port),
-                    timeout=2.0,
-                ):
-                    pass
+                endpoint.healthcheck(handle, request)
 
             controller = TrialController(
                 oci_runner=runner,
@@ -1548,13 +1689,10 @@ class ModelBackedOperator:
             if lock_path.exists():
                 lock_path.unlink()
 
-            succeeded = (
-                not all_violations
-                and len(attempt_summaries) == len(plan.schedule)
+            succeeded = not all_violations and len(attempt_summaries) == len(
+                plan.schedule
             )
-            schedule_id = (
-                plan.schedule[0].spec.schedule_id if plan.schedule else ""
-            )
+            schedule_id = plan.schedule[0].spec.schedule_id if plan.schedule else ""
             run_document = {
                 "schema": RUN_SCHEMA,
                 "run_id": run_id,
@@ -1563,6 +1701,7 @@ class ModelBackedOperator:
                 "plan_digest": plan.digest,
                 "complete_preregistered_policy_digest": plan.policy.digest,
                 "schedule_id": schedule_id,
+                "gateway_endpoint": endpoint.to_dict(),
                 "scheduled_trials": len(plan.schedule),
                 "executed_trials": len(attempt_summaries),
                 "attempts": list(attempt_summaries),
@@ -1584,11 +1723,12 @@ class ModelBackedOperator:
                         ),
                     },
                     {
-                        "code": "localhost_sidecar_topology_unverified",
+                        "code": "container_endpoint_contract_self_attested",
                         "detail": (
-                            "Loopback sidecar reachability does not prove that a "
-                            "real OCI gateway peer is attached to the declared "
-                            "private network."
+                            "The explicit endpoint contract and healthcheck are "
+                            "operator supplied; this local run has no independent "
+                            "proof that the endpoint was attached to the declared "
+                            "private OCI network."
                         ),
                     },
                 ],
@@ -1641,6 +1781,7 @@ class ModelBackedOperator:
 
 
 __all__ = [
+    "GatewayEndpointContract",
     "ModelBackedEvalPlan",
     "ModelBackedEvalPolicy",
     "ModelBackedOperator",

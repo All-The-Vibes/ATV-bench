@@ -1,4 +1,5 @@
 """Hermetic tests for the strict Responses HTTP credential gateway."""
+
 from __future__ import annotations
 
 import base64
@@ -9,6 +10,8 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
+
+import pytest
 
 from atv_bench.security import (
     AttestationSigner,
@@ -428,8 +431,7 @@ def test_nonstream_tool_call_uses_bearer_handle_without_exposing_provider_secret
     assert system.signer.verify(usage_receipt).integrity_valid is True
     assert model_receipt["payload"]["requested_model"] == PUBLIC_MODEL
     assert (
-        model_receipt["payload"]["resolved_route"]["provider_model"]
-        == PROVIDER_MODEL
+        model_receipt["payload"]["resolved_route"]["provider_model"] == PROVIDER_MODEL
     )
     assert usage_receipt["payload"]["budget_identity"]["trial_id"] == (
         system.policy.trial_id
@@ -467,6 +469,174 @@ def test_valid_finite_float_request_and_response_values_round_trip():
     assert backend.requests[0].payload["top_p"] == 0.95
 
 
+def test_current_response_completion_cache_and_function_caller_fields_round_trip():
+    provider_result = function_call_response()
+    provider_response = dict(provider_result.response)
+    provider_response.update(
+        {
+            "completed_at": 1_721_500_001.5,
+            "prompt_cache_key": "benchmark-cache-bucket",
+            "prompt_cache_options": {"mode": "implicit", "ttl": "30m"},
+            "prompt_cache_retention": "24h",
+        }
+    )
+    output = [dict(provider_response["output"][0])]
+    output[0]["caller"] = {
+        "type": "program",
+        "caller_id": "program-call-1",
+    }
+    provider_response["output"] = output
+    backend = FakeResponsesBackend(
+        create_outcomes=[
+            ResponsesBackendResponse(
+                provider_id=provider_result.provider_id,
+                model=provider_result.model,
+                request_id=provider_result.request_id,
+                response=provider_response,
+                usage=provider_result.usage,
+            )
+        ]
+    )
+    system = make_system(backend)
+
+    response = call(system, request_payload())
+
+    assert response.status_code == 200
+    document = json.loads(response.body)
+    assert document["completed_at"] == 1_721_500_001.5
+    assert document["prompt_cache_key"] == "benchmark-cache-bucket"
+    assert document["prompt_cache_options"] == {
+        "mode": "implicit",
+        "ttl": "30m",
+    }
+    assert document["prompt_cache_retention"] == "24h"
+    assert document["output"][0]["caller"] == {
+        "type": "program",
+        "caller_id": "program-call-1",
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("store", True),
+        ("previous_response_id", "resp-prior"),
+        ("conversation", "conversation-1"),
+        (
+            "prompt",
+            {
+                "id": "pmpt-hosted",
+                "version": "1",
+                "variables": {},
+            },
+        ),
+        ("prompt_cache_key", "stable-cache-key"),
+        (
+            "prompt_cache_options",
+            {"mode": "explicit", "ttl": "30m"},
+        ),
+        ("prompt_cache_retention", "24h"),
+    ],
+)
+def test_benchmark_requests_reject_provider_side_external_state(field, value):
+    backend = FakeResponsesBackend(create_outcomes=[function_call_response()])
+    system = make_system(backend)
+    payload = request_payload()
+    payload[field] = value
+
+    response = call(system, payload)
+
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"]["code"] == "invalid_request"
+    assert backend.create_count == 0
+
+
+def test_omitted_store_is_normalized_to_false_before_provider_call():
+    backend = FakeResponsesBackend(create_outcomes=[function_call_response()])
+    system = make_system(backend)
+    payload = request_payload()
+    del payload["store"]
+
+    response = call(system, payload)
+
+    assert response.status_code == 200
+    assert backend.requests[0].payload["store"] is False
+
+
+def test_precancelled_nonstream_request_commits_zero_usage_and_truthful_receipt():
+    backend = FakeResponsesBackend(create_outcomes=[function_call_response()])
+    system = make_system(backend)
+    cancelled = threading.Event()
+    cancelled.set()
+
+    response = call(
+        system,
+        request_payload(),
+        cancel_event=cancelled,
+    )
+
+    assert response.status_code == 499
+    assert backend.create_count == 0
+    assert backend.cancelled_ids == []
+    assert system.gateway.cumulative_usage(system.handle.value).to_dict() == {
+        "model_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "cost_microusd": 0,
+    }
+    usage_receipt = decode_receipt(header_map(response)["x-atv-usage-receipt"])
+    assert usage_receipt["payload"]["status"] == "cancelled"
+    assert usage_receipt["payload"]["usage"] == {
+        "model_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "cost_microusd": 0,
+    }
+    assert usage_receipt["payload"]["cumulative_usage"] == {
+        "model_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "cost_microusd": 0,
+    }
+    assert system.signer.verify(usage_receipt).integrity_valid is True
+
+
+def test_precancelled_stream_request_never_starts_provider_and_commits_zero_usage():
+    backend = FakeResponsesBackend(
+        stream_factory=lambda _request: pytest.fail("provider must not start")
+    )
+    system = make_system(backend)
+    cancelled = threading.Event()
+    cancelled.set()
+
+    response = call(
+        system,
+        request_payload(stream=True),
+        cancel_event=cancelled,
+    )
+
+    assert isinstance(response.body, ResponsesStreamBody)
+    assert list(response.body) == []
+    wait_for(lambda: len(system.gateway.logs()) == 1)
+    assert backend.stream_count == 0
+    assert backend.cancelled_ids == []
+    log = system.gateway.logs()[0]
+    assert log.status is ResponsesGatewayStatus.CANCELLED
+    assert log.usage.to_dict() == {
+        "model_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "cost_microusd": 0,
+    }
+    assert system.signer.verify(log.attestation).integrity_valid is True
+    assert log.attestation["payload"]["usage"] == log.usage.to_dict()
+    assert system.gateway.cumulative_usage(system.handle.value) == log.usage
+
+
 def test_nonstream_provider_secret_echo_is_replaced_with_safe_failure():
     backend = FakeResponsesBackend(
         create_outcomes=[
@@ -478,9 +648,10 @@ def test_nonstream_provider_secret_echo_is_replaced_with_safe_failure():
     response = call(system, request_payload())
 
     assert response.status_code == 502
-    visible = response.body + json.dumps(
-        [record.to_dict() for record in system.gateway.logs()]
-    ).encode()
+    visible = (
+        response.body
+        + json.dumps([record.to_dict() for record in system.gateway.logs()]).encode()
+    )
     assert CANARY_SECRET.encode() not in visible
     assert json.loads(response.body)["error"]["code"] == "provider_failure"
 
@@ -610,9 +781,7 @@ def test_streaming_tool_call_events_are_wire_compatible_and_attested():
     assert log.status is ResponsesGatewayStatus.SUCCESS
     assert log.streamed_events == 4
     assert system.signer.verify(log.attestation).integrity_valid is True
-    model_receipt = decode_receipt(
-        header_map(response)["x-atv-model-receipt"]
-    )
+    model_receipt = decode_receipt(header_map(response)["x-atv-model-receipt"])
     assert system.signer.verify(model_receipt).integrity_valid is True
 
 
@@ -677,10 +846,7 @@ def test_unknown_stream_event_fails_closed_without_forwarding_provider_content()
     assert b"provider-only detail" not in serialized
     assert b'"type":"error"' in serialized
     wait_for(lambda: len(system.gateway.logs()) == 1)
-    assert (
-        system.gateway.logs()[0].status
-        is ResponsesGatewayStatus.PROVIDER_FAILURE
-    )
+    assert system.gateway.logs()[0].status is ResponsesGatewayStatus.PROVIDER_FAILURE
 
 
 def test_supported_stream_event_cannot_echo_broker_credential():
@@ -814,10 +980,7 @@ def test_stream_output_limit_cancels_before_forwarding_excess_delta():
     assert events[0]["delta"] == "one"
     assert "two" not in json.dumps(events)
     assert backend.cancelled_ids == ["provider-request-0000"]
-    assert (
-        system.gateway.logs()[0].status
-        is ResponsesGatewayStatus.PROVIDER_FAILURE
-    )
+    assert system.gateway.logs()[0].status is ResponsesGatewayStatus.PROVIDER_FAILURE
 
 
 def test_provider_response_unknown_fields_and_model_mismatch_fail_closed():
@@ -870,8 +1033,7 @@ def test_underreported_usage_rejects_and_accounts_observed_usage():
 def test_logs_are_bounded_and_never_store_request_content():
     backend = FakeResponsesBackend(
         create_outcomes=[
-            function_call_response(request_id=f"provider-{index}")
-            for index in range(3)
+            function_call_response(request_id=f"provider-{index}") for index in range(3)
         ]
     )
     system = make_system(
