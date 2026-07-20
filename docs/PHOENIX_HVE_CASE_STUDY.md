@@ -119,3 +119,46 @@ Therefore:
 The next cell must run non-scored completion calibration first. Its primary
 end-to-end estimand must count one-sided invalid artifacts as task failures, while
 conditional bot quality remains a separately reported secondary estimand.
+
+## Calibrated bounded v5 result
+
+V5 passed two complete non-scored calibrations before evaluation:
+
+- 60 AI credits;
+- compact boards;
+- 40-turn cap;
+- 3-second per-turn timeout;
+- 60-second per-match timeout;
+- no calibration forfeits or match timeouts.
+
+All five hidden-seed evaluation attempts were both-valid, model-attested, and
+evaluator-valid.
+
+| Trial | Phoenix wins | hve-core wins | Draws | Trial outcome |
+|---|---:|---:|---:|---|
+| primary-1 | 5 | 0 | 5 | Phoenix |
+| primary-2 | 2 | 2 | 6 | Tie |
+| primary-3 | 1 | 2 | 7 | hve-core |
+| primary-4 | 2 | 3 | 5 | hve-core |
+| primary-5 | 0 | 0 | 10 | Tie |
+| **Total** | **10** | **7** | **33** | hve-core 2 trials, Phoenix 1, ties 2 |
+
+Primary end-to-end and secondary conditional-quality results are identical because
+both harnesses produced valid artifacts in all five trials:
+
+- mean Phoenix-minus-hve score difference: **+0.06**;
+- trial-bootstrap 95% interval: **[-0.08, +0.28]**;
+- exact two-sided sign-test p-value: **1.0**;
+- artifact validity: Phoenix **5/5**, hve-core **5/5**;
+- forfeits: **0**;
+- evaluator match timeouts: **0**.
+
+### Final v5 conclusion
+
+> **Inconclusive.** hve-core won more independent trials (2 versus 1), while Phoenix
+> won more nested games (10 versus 7) and had a small positive mean score difference.
+> The uncertainty interval crosses zero and both practical-margin boundaries.
+
+There is no statistically supported task-contract winner. If a descriptive
+trial-count leader must be named, it is **hve-core**; that is not the formal benchmark
+decision and is not an overall harness ranking.

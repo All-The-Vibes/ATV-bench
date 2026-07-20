@@ -1,0 +1,75 @@
+{
+  "schema": "atv.phoenix-hve-proof-index/v1",
+  "generated_date": "2026-07-20",
+  "rankable": false,
+  "official": false,
+  "decision": "inconclusive",
+  "seed_plan_canonical_commitment": "63b828639791cf920072346388c290513be02dcdef1a1b6f4432556f8f34ae7b",
+  "files": [
+    {
+      "path": "primary-1/comparison.json",
+      "sha256": "e7a5672a7988fd120b158da173bc897924704660d8a1186124cd51ce2dac7aa3",
+      "size_bytes": 24876
+    },
+    {
+      "path": "primary-1/checksums.json",
+      "sha256": "3a5380dde109e582d9bffd45a552c6274f5da247ffbb75731db95dce87dcb368",
+      "size_bytes": 2765
+    },
+    {
+      "path": "primary-2/comparison.json",
+      "sha256": "74b6256d88dde2c46ae26f3e6080964c7f7cd4e6d021c46eb3e417692bf496cc",
+      "size_bytes": 25127
+    },
+    {
+      "path": "primary-2/checksums.json",
+      "sha256": "526335d9b629b90fdfe05d9a8708f5f79a163bac7781578ff2568f26e1bf1231",
+      "size_bytes": 2765
+    },
+    {
+      "path": "primary-3/comparison.json",
+      "sha256": "b84714077091585d241ea485767b5aa40966c4579a9e147202d9c530c546e117",
+      "size_bytes": 25117
+    },
+    {
+      "path": "primary-3/checksums.json",
+      "sha256": "e88e5acf4f0275706b40e7a501a4e2fcd0b23c7fb74ce2d67c26a10a1d2a11f6",
+      "size_bytes": 2764
+    },
+    {
+      "path": "primary-4/comparison.json",
+      "sha256": "1382b87d0edb17b715c0acc320e3130be6dcaf320991e72476543e9ac03d39b0",
+      "size_bytes": 24797
+    },
+    {
+      "path": "primary-4/checksums.json",
+      "sha256": "174f8f454cdf38bc80dce77458f60fd3a76d58a234a5c757f8dec212b644b3b1",
+      "size_bytes": 2764
+    },
+    {
+      "path": "primary-5/comparison.json",
+      "sha256": "db0976b8cd08063c056a5537530c2ea0db80eab753a7f28fa97f4b9ad7d3219e",
+      "size_bytes": 24486
+    },
+    {
+      "path": "primary-5/checksums.json",
+      "sha256": "b84a576908db8375af4c0064e7d602bf88c5a61804c6780fdb098706e523af48",
+      "size_bytes": 2766
+    },
+    {
+      "path": "aggregate-v2.json",
+      "sha256": "88a33e3d88ffe4f650668eea101f0f72bc0ed82eded282af30351a201d6422bb",
+      "size_bytes": 31411
+    },
+    {
+      "path": "SUMMARY-v2.md",
+      "sha256": "439e9072149d02bcb8ed56fa990073df1eafa678515ac54d95d6f5059351b18c",
+      "size_bytes": 1391
+    },
+    {
+      "path": "seed-plan.sealed.json",
+      "sha256": "0db6c90b7fc182bc1d5f1c16e41bd16df60e96a419e9d43bbb747e0fe937420d",
+      "size_bytes": 578
+    }
+  ]
+}
