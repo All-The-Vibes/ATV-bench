@@ -19,17 +19,22 @@ _ENTRANTS: list[dict[str, Any]] = [
     {
         "identity": "ada-demo", "harness": "claude-code", "model": "claude-opus-4-8",
         "gstack": True, "skills": ["gstack", "office-hours", "tdd"],
+        "nested_skills": ["gstack:land", "gstack:plan"],
+        "tools": ["Bash", "Edit", "WebFetch"],
         "mcps": ["github", "grafana"], "plugins": ["compound-engineering"],
         "custom_agents_count": 7,
     },
     {
         "identity": "grace-demo", "harness": "claude-code", "model": "claude-sonnet-4-6",
         "gstack": True, "skills": ["gstack", "systematic-debugging"],
+        "nested_skills": ["gstack:debug"],
+        "tools": ["Bash", "Edit"],
         "mcps": ["github"], "plugins": [], "custom_agents_count": 4,
     },
     {
         "identity": "linus-demo", "harness": "copilot-cli", "model": "gpt-5",
-        "gstack": False, "skills": [], "mcps": [], "plugins": [],
+        "gstack": False, "skills": [], "nested_skills": [], "tools": ["Bash"],
+        "mcps": [], "plugins": [],
         "custom_agents_count": 0,
     },
 ]
@@ -69,6 +74,7 @@ def build_demo_store(store_dir: str) -> None:
                 "fingerprint": {
                     "harness": e["harness"], "model": e["model"], "gstack": e["gstack"],
                     "skills": e["skills"], "mcps": e["mcps"], "plugins": e["plugins"],
+                    "nested_skills": e.get("nested_skills", []), "tools": e.get("tools", []),
                     "custom_agents_count": e["custom_agents_count"],
                     "probe_version": "1.0.0", "unknown": [],
                 },

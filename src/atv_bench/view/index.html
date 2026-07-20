@@ -60,6 +60,18 @@
   .chip { font-family: var(--mono); font-size: .74rem; padding: .2rem .55rem; border-radius: 8px; background: var(--chip); color: var(--text); border: 1px solid var(--line); }
   .chip.on { color: var(--accent); border-color: oklch(78% 0.16 155 / .5); }
 
+  .lift-line { display: flex; align-items: baseline; flex-wrap: wrap; gap: .4rem; width: 100%; }
+  .lift { font-family: var(--mono); font-size: 1.7rem; font-weight: 800; color: var(--accent); letter-spacing: -0.01em; }
+  .lift small { font-size: .78rem; color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: .08em; }
+  .lift-ci { font-family: var(--mono); font-size: .8rem; color: var(--muted); }
+  .theta { font-family: var(--mono); font-size: .8rem; color: var(--muted); margin-left: .3rem; }
+  .budget { grid-column: 2 / -1; margin-top: .5rem; font-family: var(--mono); font-size: .76rem; color: var(--muted); }
+  .ledger { grid-column: 2 / -1; margin-top: .45rem; font-family: var(--mono); font-size: .76rem; color: var(--muted); }
+  .ledger-label { color: var(--warn-text); text-transform: uppercase; letter-spacing: .08em; font-size: .72rem; }
+  .verified-banner { display: flex; align-items: center; gap: .6rem; margin-top: 1.5rem; padding: .8rem 1.1rem; border-radius: var(--radius); background: oklch(78% 0.16 155 / .1); border: 1px solid oklch(78% 0.16 155 / .45); color: var(--text); font-size: .9rem; }
+  .verified-banner .vb-check { color: var(--accent); font-weight: 800; font-size: 1.1rem; }
+  .verified-banner strong { color: var(--accent); text-transform: uppercase; letter-spacing: .08em; font-family: var(--mono); font-size: .82rem; }
+
   details.drawer { grid-column: 1 / -1; margin-top: .75rem; }
   details.drawer > summary { cursor: pointer; font-size: .8rem; color: var(--muted); font-family: var(--mono); list-style: none; display: inline-flex; gap: .35rem; align-items: center; padding: .25rem .1rem; }
   details.drawer > summary::-webkit-details-marker { display: none; }
@@ -122,6 +134,8 @@ function safeHref(u){
 }
 
 function chip(label, on){ return `<span class="chip${on?" on":""}">${esc(label)}</span>`; }
+// Signed 2-decimal formatter for LIFT / theta (the Section-5.5 headline metric).
+function fmtSigned(x){ const n = Number(x); return (n >= 0 ? "+" : "") + n.toFixed(2); }
 
 function renderRow(r) {
   const low = r.rated && (r.low_confidence === true || (r.match_count > 0 && r.match_count < 5));
@@ -130,13 +144,38 @@ function renderRow(r) {
   if (!r.rated) badge = `<span class="badge unrated">waiting for opponent</span>`;
   else if (low) badge = `<span class="badge low">⚠ low confidence</span>`;
   const d = r.details || {skills:[],mcps:[],plugins:[],unknown:[]};
+  const tools = d.tools || [];
+  const nested = d.nested_skills || [];
   const chips = [
     chip("gstack " + (r.details && r.fingerprint_gstack ? "on":""), r.fingerprint_gstack),
     chip(`${d.skills.length} skills`),
+    chip(`${tools.length} tools`),
+    chip(`${nested.length} nested`),
     chip(`${d.mcps.length} MCPs`),
     chip(`${d.plugins.length} plugins`),
   ].join("");
-  const unknownHtml = d.unknown.length
+  // Section-5.5 headline: LIFT over the bare model + its CI, leading the row.
+  // theta (secondary bundle metric) renders AFTER lift, never before it.
+  let liftHtml = "";
+  if (r.lift != null) {
+    const ci = r.lift_ci ? ` <span class="lift-ci">[${fmtSigned(r.lift_ci.lo)}, ${fmtSigned(r.lift_ci.hi)}]</span>` : "";
+    const theta = r.theta != null ? ` <span class="theta">theta ${r.theta.toFixed(2)}</span>` : "";
+    liftHtml = `<div class="lift-line"><span class="lift">${fmtSigned(r.lift)}<small> lift</small></span>${ci}${theta}</div>`;
+  }
+  // Section-4 BudgetVector: tokens / tool-calls / wall-time, visible per row.
+  let budgetHtml = "";
+  if (r.budget) {
+    const b = r.budget;
+    const tok = Number(b.tokens).toLocaleString("en-US");
+    const wt = Math.round(Number(b.wall_time_s));
+    budgetHtml = `<div class="budget"><span>${tok} tokens</span> · <span>${b.tool_calls} tool calls</span> · <span>${wt}s wall-time</span></div>`;
+  }
+  // unknown[] ledger — an honesty affordance rendered in the visible DOM, not buried
+  // in the collapsed drawer.
+  const ledgerHtml = d.unknown && d.unknown.length
+    ? `<div class="ledger"><span class="ledger-label">unknown</span> ${d.unknown.map(u=>`<span class="unknown-item">${esc(u.field)}: ${esc(u.reason)}</span>`).join(", ")}</div>`
+    : `<div class="ledger"><span class="ledger-label">unknown</span> none — all surfaces read cleanly</div>`;
+  const unknownHtml = d.unknown && d.unknown.length
     ? `<dt>unknown</dt><dd>${d.unknown.map(u=>`<span class="unknown-item">${esc(u.field)}: ${esc(u.reason)}</span>`).join(", ")}</dd>`
     : `<dt>unknown</dt><dd>none — all surfaces read cleanly</dd>`;
   const initials = esc((r.identity||"?").slice(0,2).toUpperCase());
@@ -145,6 +184,7 @@ function renderRow(r) {
     <div class="row-head">
       <div class="rank" aria-label="rank ${r.rank}">#${r.rank}</div>
       <div class="elo-line">
+        ${liftHtml}
         <span class="elo">${Math.round(r.elo)}<small> ELO</small></span>
         ${badge}
         <span class="ci">${r.rated ? `${r.match_count} matches · ${ciTxt}` : ""}</span>
@@ -155,11 +195,15 @@ function renderRow(r) {
         <span class="harness">· ${esc(r.harness_name)}</span>
       </div>
       <div class="chips">${chips}</div>
+      ${budgetHtml}
+      ${ledgerHtml}
       <details class="drawer">
         <summary aria-label="Show full fingerprint for ${esc(r.identity)}">full fingerprint</summary>
         <div class="drawer-body">
           <dl>
             <dt>skills</dt><dd>${d.skills.length?d.skills.map(esc).join(", "):"none"}</dd>
+            <dt>tools</dt><dd>${tools.length?tools.map(esc).join(", "):"none"}</dd>
+            <dt>nested skills</dt><dd>${nested.length?nested.map(esc).join(", "):"none"}</dd>
             <dt>MCP servers</dt><dd>${d.mcps.length?d.mcps.map(esc).join(", "):"none"}</dd>
             <dt>plugins</dt><dd>${d.plugins.length?d.plugins.map(esc).join(", "):"none"}</dd>
             ${unknownHtml}
@@ -197,19 +241,29 @@ function renderUnranked() {
   </div>`;
 }
 
+// Positive integrity banner for a VERIFIED board — the counterpart to the Section-6
+// unranked gate. Never emits the "not a ranked number" reframe.
+function renderVerifiedBanner() {
+  return `<div class="verified-banner">
+    <span class="vb-check" aria-hidden="true">✓</span>
+    <span><strong>verified</strong> · every surface passed the integrity check — ranks below are earned</span>
+  </div>`;
+}
+
 function render(doc) {
   staleEl.innerHTML = `<span class="dot"></span> Last updated ${esc(fmtTs(doc.updated_at))} · rebuilt after each match`;
   // Section 6 typed-rank guard AT THE DOM BOUNDARY: verified===false -> no rank ever.
   if (doc.verified === false) { root.innerHTML = renderUnranked(); return; }
   const rows = (doc.rows || []).slice().sort((a, b) => a.rank - b.rank);
   if (rows.length === 0) { root.innerHTML = renderEmpty(); return; }
+  const banner = doc.verified === true ? renderVerifiedBanner() : "";
   // The builder already ranks stable rows above low-confidence/unrated ones, so we
   // render strictly in rank order (no re-sort) — JSON rank always == visual row.
   // We only insert a visual divider where the provisional tier begins.
   const isShaky = r => !r.rated || r.low_confidence === true || (r.match_count > 0 && r.match_count < 5);
   const stable = rows.filter(r => !isShaky(r));
   const shaky  = rows.filter(isShaky);
-  let html = `<ol class="board">${stable.map(renderRow).join("")}</ol>`;
+  let html = banner + `<ol class="board">${stable.map(renderRow).join("")}</ol>`;
   if (shaky.length) {
     html += `<div class="divider">provisional · not yet rated</div>`;
     html += `<ol class="board">${shaky.map(renderRow).join("")}</ol>`;
