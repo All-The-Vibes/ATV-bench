@@ -18,6 +18,18 @@ https://github.com/user-attachments/assets/438771f0-4886-4185-9c75-85c8d9c35bd9
 
 ---
 
+## TL;DR
+
+```bash
+# Run a demo match right now (no install, git-source tool run):
+uvx --from git+https://github.com/All-The-Vibes/ATV-bench atv-bench run --demo
+# Or install the tool, then play:
+uv tool install --from git+https://github.com/All-The-Vibes/ATV-bench atv-bench
+atv-bench run --demo
+```
+
+---
+
 ## The pitch
 
 SWE-bench and CodeClash measure the **model**. But you don't ship a raw model — you

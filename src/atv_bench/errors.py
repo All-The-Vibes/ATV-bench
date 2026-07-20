@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import enum
 
-_DOCS_BASE = "https://github.com/All-The-Vibes/ATV-bench/blob/main/docs"
+# Base points at the repo tree root; each spec carries a repo-relative path so
+# root-level docs (CONTRIBUTING.md) and docs/ files (docs/COMMUNITY_LEAGUE.md)
+# both resolve to a real file on GitHub.
+_DOCS_BASE = "https://github.com/All-The-Vibes/ATV-bench/blob/main"
 
 
 class ErrorCode(str, enum.Enum):
@@ -53,7 +56,7 @@ _SPECS: dict[ErrorCode, tuple[str, str, str]] = {
     ErrorCode.LEAK_DETECTED: (
         "The pre-submit leak scan found a secret-shaped value in your bot or fingerprint.",
         "Run `atv-bench fingerprint --dry-run` to see what was flagged; remove the secret and retry.",
-        "COMMUNITY_LEAGUE.md#harness-fingerprint-the-credibility-gate",
+        "docs/COMMUNITY_LEAGUE.md#harness-fingerprint-the-credibility-gate",
     ),
     ErrorCode.BOT_SHAPE_INVALID: (
         "The bot file failed shape/size validation (wrong entrypoint, too large, or non-text).",
@@ -63,7 +66,7 @@ _SPECS: dict[ErrorCode, tuple[str, str, str]] = {
     ErrorCode.FINGERPRINT_LEAK: (
         "A fingerprint value passed to submit still looks like a secret; refusing to publish it.",
         "This is a bug guard — re-run the probe via `atv-bench fingerprint`; do not hand-edit the manifest.",
-        "COMMUNITY_LEAGUE.md#harness-fingerprint-the-credibility-gate",
+        "docs/COMMUNITY_LEAGUE.md#harness-fingerprint-the-credibility-gate",
     ),
     ErrorCode.SUBMIT_PR_FAILED: (
         "A step of the live submission (fork / branch / commit / push / PR create) failed.",
@@ -95,3 +98,39 @@ class AtvError(Exception):
 
     def __str__(self) -> str:  # noqa: D401
         return self._render()
+
+
+def render_error(err: object) -> str:
+    """One shared render shape for AtvError and RunError (DX-3).
+
+    Both subsystems surface the same structure: Problem / Cause? / Fix / exit N,
+    so a user sees a consistent error regardless of which raised it.
+    """
+    # Local import to avoid a module cycle (run_envelope imports nothing here).
+    from atv_bench.run_envelope import EXIT_CODES, RunError
+
+    if isinstance(err, AtvError):
+        problem = err.problem
+        cause = err.cause
+        fix = err.fix
+        docs = err.docs_url
+        # AtvError codes are not in the run exit-code map; they exit as usage (2).
+        exit_code = EXIT_CODES["usage"]
+    elif isinstance(err, RunError):
+        problem = err.message
+        cause = ""
+        fix = err.fix
+        docs = ""
+        exit_code = err.exit_code
+    else:  # pragma: no cover - defensive
+        raise TypeError(f"render_error: unsupported error type {type(err)!r}")
+
+    lines = [f"Problem: {problem}"]
+    if cause:
+        lines.append(f"Cause: {cause}")
+    if fix:
+        lines.append(f"Fix: {fix}")
+    if docs:
+        lines.append(f"Docs: {docs}")
+    lines.append(f"exit {exit_code}")
+    return "\n".join(lines)

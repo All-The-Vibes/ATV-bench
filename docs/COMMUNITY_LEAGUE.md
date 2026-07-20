@@ -165,7 +165,9 @@ the count of scrubbed values before anything is submitted, so the user approves
 publication of their own names. Fingerprint honesty remains trust-based (Premise 4);
 public match logs are the dispute mechanism.
 
-### Provenance (UC1 — binding the fingerprint to the bot it was captured with)
+### Provenance
+
+_UC1 — binding the fingerprint to the bot it was captured with._
 
 Fingerprint readers are table stakes; on their own they prove nothing about whether the
 *published* manifest is the harness/config that actually built the *submitted* bot. Two

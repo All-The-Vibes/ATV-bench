@@ -817,7 +817,13 @@ def demo_match_cmd(
                                help="Terminal mode: after the match, build the leaderboard + insights."),
     seed: int = typer.Option(0, "--seed", help="Trusted engine seed (reproducible match)."),
 ) -> None:
-    """Play two harness bots head-to-head in Tron with a live feed, then show the board.
+    """Full head-to-head demo experience (prefer `run --demo` for a quick look).
+
+    Use `run --demo` for the fast, agent-friendly one-shot demo envelope. Use this
+    `demo-match` when you want the rich three-act experience with a live feed;
+    use `play` to pit your own two bots, and `board` to view the leaderboard alone.
+
+    Play two harness bots head-to-head in Tron with a live feed, then show the board.
 
     The demo in three acts: (1) two named harnesses enter, (2) a live turn-by-turn Tron
     feed, (3) the leaderboard + gstack insights. With no bot paths it uses two distinct
