@@ -7,6 +7,7 @@ import json
 import os
 import socket
 import stat
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -382,6 +383,7 @@ def _operator(
     *,
     forbidden_then_allowed: bool = False,
     skip_gateway: bool = False,
+    endpoint_cleanup: Callable[[], None] | None = None,
 ) -> ModelBackedOperator:
     def factory(_work_root, server):
         runner = FakeOciRunner(
@@ -406,6 +408,7 @@ def _operator(
             port=server.port,
             tls=True,
             healthcheck=healthcheck,
+            cleanup=endpoint_cleanup,
         )
 
     return ModelBackedOperator(
@@ -664,6 +667,75 @@ def test_operator_rejects_loopback_host_in_explicit_container_contract(tmp_path)
         operator.run(plan, tmp_path / "explicit-loopback-output")
 
     assert caught.value.code == "gateway_endpoint_unreachable"
+
+
+def test_operator_cleans_up_injected_gateway_endpoint_after_success(tmp_path):
+    plan = _plan(tmp_path)
+    backend = FakeResponsesBackend()
+    runners: list[FakeOciRunner] = []
+    cleanup_calls: list[str] = []
+
+    result = _operator(
+        backend,
+        runners,
+        endpoint_cleanup=lambda: cleanup_calls.append("cleanup"),
+    ).run(plan, tmp_path / "cleanup-output")
+
+    assert result.succeeded is True
+    assert cleanup_calls == ["cleanup"]
+
+
+def test_operator_cleans_up_endpoint_when_contract_validation_fails(tmp_path):
+    plan = _plan(tmp_path)
+    backend = FakeResponsesBackend()
+    cleanup_calls: list[str] = []
+
+    def endpoint_factory(server, policy):
+        return GatewayEndpointContract(
+            network_name="wrong-network",
+            host=policy.gateway_identity,
+            port=server.port,
+            tls=True,
+            healthcheck=lambda _handle, _request: None,
+            cleanup=lambda: cleanup_calls.append("cleanup"),
+        )
+
+    operator = ModelBackedOperator(
+        providers=ProviderBindings(
+            backends={PROVIDER_ID: backend},
+            credentials={PROVIDER_ID: PROVIDER_SECRET},
+        ),
+        oci_runner_factory=lambda _work, _server: pytest.fail(
+            "runner must not start with an invalid endpoint contract"
+        ),
+        gateway_endpoint_factory=endpoint_factory,
+    )
+
+    with pytest.raises(ModelBackedOperatorError) as caught:
+        operator.run(plan, tmp_path / "invalid-endpoint-output")
+
+    assert caught.value.code == "gateway_endpoint_network_mismatch"
+    assert cleanup_calls == ["cleanup"]
+
+
+def test_gateway_endpoint_cleanup_failure_is_fail_closed():
+    def fail_cleanup():
+        raise RuntimeError("sensitive relay detail")
+
+    endpoint = GatewayEndpointContract(
+        network_name="atv-private",
+        host="gateway.internal",
+        port=443,
+        tls=True,
+        healthcheck=lambda _handle, _request: None,
+        cleanup=fail_cleanup,
+    )
+
+    with pytest.raises(ModelBackedOperatorError) as caught:
+        endpoint.close()
+
+    assert caught.value.code == "gateway_endpoint_cleanup_failed"
+    assert "sensitive relay detail" not in caught.value.safe_message
 
 
 def test_output_is_never_overwritten_and_tampering_is_detected(tmp_path):

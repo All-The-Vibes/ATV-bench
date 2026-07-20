@@ -42,6 +42,8 @@ separately. Its current verdict is **inconclusive**: Phoenix showed stronger
 end-to-end reliability, while the finalized evidence and statistical winner gates
 were not met. See
 [`docs/PHOENIX_HVE_CASE_STUDY.md`](docs/PHOENIX_HVE_CASE_STUDY.md).
+The replacement v4 workflow begins with the frozen
+[`completion-calibration plan`](docs/PHOENIX_HVE_V4_CALIBRATION_PLAN.md).
 
 ## How it works — reviewed data + static Pages
 

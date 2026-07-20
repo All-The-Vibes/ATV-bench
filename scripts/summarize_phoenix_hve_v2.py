@@ -82,6 +82,57 @@ def _two_sided_sign_test(phoenix_wins: int, hve_wins: int) -> dict[str, Any] | N
     }
 
 
+def _winner_label(score_difference: float | None) -> str | None:
+    if score_difference is None:
+        return None
+    if score_difference > 0:
+        return "phoenix"
+    if score_difference < 0:
+        return "hve"
+    return "tie"
+
+
+def _decision_from_bootstrap(
+    bootstrap: dict[str, Any] | None,
+    *,
+    observed_trials: int,
+    minimum_trials: int,
+    estimand: str,
+) -> tuple[str, str]:
+    estimand_id = estimand.replace("-", "_")
+    if observed_trials < minimum_trials or bootstrap is None:
+        return (
+            "inconclusive",
+            f"requires at least {minimum_trials} {estimand} fresh paired trials; "
+            f"observed {observed_trials}",
+        )
+    low = bootstrap["ci95"]["lo"]
+    high = bootstrap["ci95"]["hi"]
+    mean = bootstrap["mean"]
+    if mean > PRACTICAL_MARGIN and low > PRACTICAL_MARGIN:
+        return (
+            f"phoenix_better_{estimand_id}_on_this_task_contract",
+            f"{estimand} trial interval clears the +{PRACTICAL_MARGIN:.2f} "
+            "practical margin",
+        )
+    if mean < -PRACTICAL_MARGIN and high < -PRACTICAL_MARGIN:
+        return (
+            f"hve_better_{estimand_id}_on_this_task_contract",
+            f"{estimand} trial interval clears the -{PRACTICAL_MARGIN:.2f} "
+            "practical margin",
+        )
+    if low >= -PRACTICAL_MARGIN and high <= PRACTICAL_MARGIN:
+        return (
+            f"practically_equivalent_{estimand_id}_on_this_task_contract",
+            f"{estimand} trial interval is inside the configured equivalence region",
+        )
+    return (
+        "inconclusive",
+        f"{estimand} trial interval does not clear the configured practical "
+        "superiority margin or equivalence gate",
+    )
+
+
 def _invalid_trial(directory: Path, reason: str) -> dict[str, Any]:
     return {
         "directory": directory.name,
@@ -93,6 +144,7 @@ def _invalid_trial(directory: Path, reason: str) -> dict[str, Any]:
         "rankable": None,
         "official": None,
         "trust_tier": None,
+        "phase": None,
         "independent_unit": None,
         "runner_script_sha256": None,
         "comparison_module_sha256": None,
@@ -118,6 +170,9 @@ def _invalid_trial(directory: Path, reason: str) -> dict[str, Any]:
         "source_git_trees": {"phoenix": None, "hve": None},
         "source_tree_listing_sha256": {"phoenix": None, "hve": None},
         "artifact_validity": {"phoenix": False, "hve": False},
+        "execution_validity": {"phoenix": False, "hve": False},
+        "calibration_pass": False,
+        "eligible_for_scoring": False,
         "build_status": {"phoenix": None, "hve": None},
         "bot_sha256": {"phoenix": None, "hve": None},
         "nested_games": {
@@ -129,6 +184,8 @@ def _invalid_trial(directory: Path, reason: str) -> dict[str, Any]:
         "task_contract_winner": None,
         "quality_winner": None,
         "trial_score_difference": None,
+        "end_to_end_score_difference": None,
+        "end_to_end_winner": None,
         "completed_games": {
             "games": 0,
             "phoenix_wins": 0,
@@ -235,18 +292,14 @@ def load_trial(directory: str | Path) -> dict[str, Any]:
         phoenix_points = int(summary["harness_a_wins"]) + 0.5 * int(summary["draws"])
         hve_points = int(summary["harness_b_wins"]) + 0.5 * int(summary["draws"])
         score_difference = (phoenix_points - hve_points) / games
-        if score_difference > 0:
-            task_contract_winner = "phoenix"
-        elif score_difference < 0:
-            task_contract_winner = "hve"
-        else:
-            task_contract_winner = "tie"
+        task_contract_winner = _winner_label(score_difference)
     game_rows = series.get("games", [])
     if not isinstance(game_rows, list):
         game_rows = []
     completed_games, forfeit_decomposition = _decompose_games(game_rows)
 
     methodology = document.get("methodology", {})
+    trial_outcome = document.get("trial_outcome", {})
     runner = methodology.get("runner", {})
     requested_model = methodology.get("model")
     model_selection_source = methodology.get("model_selection_source")
@@ -297,6 +350,20 @@ def load_trial(directory: str | Path) -> dict[str, Any]:
         name: receipt_attestation[name].get("status") == "pass"
         for name in ("phoenix", "hve")
     }
+    execution_validity = {
+        "phoenix": bool(builds["phoenix"].get("execution_valid")),
+        "hve": bool(builds["hve"].get("execution_valid")),
+    }
+    end_to_end_score_difference: float | None = None
+    if all(model_matches_request.values()) and all(execution_validity.values()):
+        if phoenix_valid and hve_valid:
+            end_to_end_score_difference = score_difference
+        elif phoenix_valid:
+            end_to_end_score_difference = 1.0
+        elif hve_valid:
+            end_to_end_score_difference = -1.0
+        else:
+            end_to_end_score_difference = 0.0
     sources = document.get("sources", {})
     phoenix_source = sources.get("atv_phoenix", {})
     hve_source = sources.get("hve_core", {})
@@ -310,6 +377,7 @@ def load_trial(directory: str | Path) -> dict[str, Any]:
         "rankable": document.get("rankable"),
         "official": document.get("official"),
         "trust_tier": document.get("trust_tier"),
+        "phase": methodology.get("phase"),
         "independent_unit": methodology.get("independent_unit"),
         "runner_script_sha256": runner.get("script_sha256"),
         "comparison_module_sha256": runner.get("comparison_module_sha256"),
@@ -346,6 +414,9 @@ def load_trial(directory: str | Path) -> dict[str, Any]:
             "phoenix": phoenix_valid,
             "hve": hve_valid,
         },
+        "execution_validity": execution_validity,
+        "calibration_pass": bool(trial_outcome.get("calibration_pass")),
+        "eligible_for_scoring": bool(trial_outcome.get("eligible_for_scoring")),
         "build_status": {
             "phoenix": builds["phoenix"].get("status"),
             "hve": builds["hve"].get("status"),
@@ -362,13 +433,23 @@ def load_trial(directory: str | Path) -> dict[str, Any]:
         "trial_score_difference": (
             round(score_difference, 6) if score_difference is not None else None
         ),
+        "end_to_end_score_difference": (
+            round(end_to_end_score_difference, 6)
+            if end_to_end_score_difference is not None
+            else None
+        ),
+        "end_to_end_winner": _winner_label(end_to_end_score_difference),
         "completed_games": completed_games,
         "forfeit_decomposition": forfeit_decomposition,
     }
 
 
 def exclusion_reasons(
-    row: dict[str, Any], reference: dict[str, Any]
+    row: dict[str, Any],
+    reference: dict[str, Any],
+    *,
+    expected_phase: str = "evaluation",
+    compare_budget: bool = True,
 ) -> list[str]:
     reasons: list[str] = []
     if row["load_error"]:
@@ -383,6 +464,8 @@ def exclusion_reasons(
         reasons.append("run is not explicitly unofficial")
     if row["trust_tier"] != "local-self-attested":
         reasons.append("trust tier differs")
+    if row["phase"] != expected_phase:
+        reasons.append(f"run is not a {expected_phase}-phase trial")
     if row["independent_unit"] != "fresh_paired_harness_trial":
         reasons.append("fresh paired trial unit is missing")
     if row["runner_script_sha256"] != reference["runner_script_sha256"]:
@@ -402,10 +485,14 @@ def exclusion_reasons(
         ("held_out_seed_count", "held-out seed count"),
         ("per_turn_timeout_seconds", "per-turn timeout"),
         ("harness_timeout_seconds", "harness timeout"),
-        ("max_ai_credits", "AI credit budget"),
     ):
         if row[field] != reference[field] or row[field] is None:
             reasons.append(f"{label} differs or is missing")
+    if compare_budget and (
+        row["max_ai_credits"] != reference["max_ai_credits"]
+        or row["max_ai_credits"] is None
+    ):
+        reasons.append("AI credit budget differs or is missing")
     if not all(row["model_matches_request"].values()):
         reasons.append("reported model does not exactly match requested model")
     for name, receipt in row["model_receipt_attestation"].items():
@@ -460,9 +547,15 @@ def summarize_rows(
     *,
     runner_sha: str | None = None,
     minimum_trials: int = 5,
+    primary_estimand: str = "conditional-quality",
+    maximum_attempts: int | None = None,
 ) -> dict[str, Any]:
     if minimum_trials < 5:
         raise ValueError("minimum_trials cannot be less than the credibility gate of 5")
+    if primary_estimand not in {"conditional-quality", "end-to-end"}:
+        raise ValueError("primary_estimand must be conditional-quality or end-to-end")
+    if maximum_attempts is not None and maximum_attempts < minimum_trials:
+        raise ValueError("maximum_attempts cannot be less than minimum_trials")
     reference = _reference(rows, runner_sha)
 
     provisionally_included: list[dict[str, Any]] = []
@@ -491,6 +584,8 @@ def summarize_rows(
         row
         for row in included
         if all(row["artifact_validity"].values())
+        and all(row["execution_validity"].values())
+        and row["eligible_for_scoring"]
         and row["trial_score_difference"] is not None
     ]
     differences = [
@@ -503,6 +598,18 @@ def summarize_rows(
     sign_test = _two_sided_sign_test(
         trial_wins["phoenix"],
         trial_wins["hve"],
+    )
+    end_to_end_trials = [
+        row for row in included if row["end_to_end_score_difference"] is not None
+    ]
+    end_to_end_differences = [
+        float(row["end_to_end_score_difference"]) for row in end_to_end_trials
+    ]
+    end_to_end_bootstrap = _bootstrap(end_to_end_differences)
+    end_to_end_wins = Counter(row["end_to_end_winner"] for row in end_to_end_trials)
+    end_to_end_sign_test = _two_sided_sign_test(
+        end_to_end_wins["phoenix"],
+        end_to_end_wins["hve"],
     )
 
     validity: dict[str, dict[str, Any]] = {
@@ -517,6 +624,22 @@ def summarize_rows(
             round(value["valid"] / value["trials"], 4) if value["trials"] else None
         )
         value["ci95"] = _wilson(value["valid"], value["trials"])
+    reliability_pairs: Counter[str] = Counter()
+    for row in included:
+        phoenix_valid = bool(row["artifact_validity"]["phoenix"])
+        hve_valid = bool(row["artifact_validity"]["hve"])
+        if phoenix_valid and hve_valid:
+            reliability_pairs["both_valid"] += 1
+        elif phoenix_valid:
+            reliability_pairs["phoenix_only_valid"] += 1
+        elif hve_valid:
+            reliability_pairs["hve_only_valid"] += 1
+        else:
+            reliability_pairs["neither_valid"] += 1
+    reliability_sign_test = _two_sided_sign_test(
+        reliability_pairs["phoenix_only_valid"],
+        reliability_pairs["hve_only_valid"],
+    )
 
     nested: Counter[str] = Counter()
     completed_nested: Counter[str] = Counter()
@@ -547,35 +670,33 @@ def summarize_rows(
             for reason_name, count in reason_counts.items():
                 forfeit_reasons.setdefault(harness, Counter())[reason_name] += int(count)
 
-    decision = "inconclusive"
-    reason = (
-        f"requires at least {minimum_trials} comparable both-valid fresh paired trials; "
-        f"observed {len(task_contract_trials)}"
+    conditional_decision, conditional_reason = _decision_from_bootstrap(
+        bootstrap,
+        observed_trials=len(task_contract_trials),
+        minimum_trials=minimum_trials,
+        estimand="conditional-quality",
     )
-    if len(task_contract_trials) >= minimum_trials and bootstrap is not None:
-        low = bootstrap["ci95"]["lo"]
-        high = bootstrap["ci95"]["hi"]
-        mean = bootstrap["mean"]
-        if mean > PRACTICAL_MARGIN and low > PRACTICAL_MARGIN:
-            decision = "phoenix_better_on_this_task_contract"
-            reason = (
-                "fresh end-to-end trial interval, including forfeits, clears the "
-                f"{PRACTICAL_MARGIN:.2f} practical margin"
-            )
-        elif mean < -PRACTICAL_MARGIN and high < -PRACTICAL_MARGIN:
-            decision = "hve_better_on_this_task_contract"
-            reason = (
-                "fresh end-to-end trial interval, including forfeits, clears the "
-                f"{PRACTICAL_MARGIN:.2f} practical margin in hve-core's direction"
-            )
-        elif low >= -PRACTICAL_MARGIN and high <= PRACTICAL_MARGIN:
-            decision = "practically_equivalent_on_this_task_contract"
-            reason = "fresh-trial interval is inside the configured equivalence region"
-        else:
-            reason = (
-                "fresh-trial interval does not clear the configured practical "
-                "superiority margin or equivalence gate"
-            )
+    end_to_end_decision, end_to_end_reason = _decision_from_bootstrap(
+        end_to_end_bootstrap,
+        observed_trials=len(end_to_end_trials),
+        minimum_trials=minimum_trials,
+        estimand="end-to-end",
+    )
+    if primary_estimand == "end-to-end":
+        decision, reason = end_to_end_decision, end_to_end_reason
+        observed_primary = len(end_to_end_trials)
+    else:
+        decision, reason = conditional_decision, conditional_reason
+        observed_primary = len(task_contract_trials)
+    remaining_attempts = (
+        max(0, maximum_attempts - len(included))
+        if maximum_attempts is not None
+        else None
+    )
+    futility_stop = bool(
+        remaining_attempts is not None
+        and observed_primary + remaining_attempts < minimum_trials
+    )
 
     return {
         "schema": SCHEMA,
@@ -607,10 +728,19 @@ def summarize_rows(
         "trial_counts": {
             "included": len(included),
             "both_valid": len(task_contract_trials),
+            "end_to_end": len(end_to_end_trials),
             "minimum_for_task_contract_decision": minimum_trials,
         },
         "artifact_validity": validity,
-        "decision_basis": "end_to_end_task_contract_including_forfeits",
+        "artifact_reliability": {
+            "paired_outcomes": dict(reliability_pairs),
+            "exact_two_sided_sign_test": reliability_sign_test,
+        },
+        "primary_estimand": primary_estimand,
+        "maximum_attempts": maximum_attempts,
+        "remaining_attempts": remaining_attempts,
+        "futility_stop": futility_stop,
+        "decision_basis": primary_estimand,
         "trial_level_task_contract": {
             "wins": dict(trial_wins),
             "score_difference_bootstrap": bootstrap,
@@ -621,6 +751,22 @@ def summarize_rows(
             "includes_forfeits": True,
             "wins": dict(trial_wins),
             "score_difference_bootstrap": bootstrap,
+        },
+        "conditional_quality_decision": {
+            "decision": conditional_decision,
+            "decision_reason": conditional_reason,
+        },
+        "trial_level_end_to_end": {
+            "invalid_artifact_scoring": {
+                "phoenix_valid_hve_invalid": 1.0,
+                "phoenix_invalid_hve_valid": -1.0,
+                "both_invalid": 0.0,
+            },
+            "wins": dict(end_to_end_wins),
+            "score_difference_bootstrap": end_to_end_bootstrap,
+            "exact_two_sided_sign_test": end_to_end_sign_test,
+            "decision": end_to_end_decision,
+            "decision_reason": end_to_end_reason,
         },
         "nested_game_totals_descriptive_only": dict(nested),
         "completed_game_totals_descriptive_only": dict(completed_nested),
@@ -640,7 +786,7 @@ def summarize_rows(
             "Provider credentials entered the harness process.",
             "Network isolation was not technically enforced.",
             "Games are nested under generated artifacts and never counted as trials.",
-            "The formal task-contract decision includes timeout/crash forfeits; completed-game tactical results are reported separately.",
+            "End-to-end and conditional-quality estimands are reported separately; neither is a global harness ranking.",
             "Historical CRASH labels may conflate timeout, EOF, and invalid response in the pre-fix referee.",
             "This is not protocol-v1 OCI evidence or an overall harness-richness ranking.",
         ],
@@ -652,6 +798,8 @@ def summarize_root(
     *,
     runner_sha: str | None = None,
     minimum_trials: int = 5,
+    primary_estimand: str = "conditional-quality",
+    maximum_attempts: int | None = None,
 ) -> dict[str, Any]:
     directory = Path(root).resolve()
     rows = [
@@ -662,7 +810,11 @@ def summarize_root(
     if not rows:
         raise ValueError("no comparison trial directories found")
     return summarize_rows(
-        rows, runner_sha=runner_sha, minimum_trials=minimum_trials
+        rows,
+        runner_sha=runner_sha,
+        minimum_trials=minimum_trials,
+        primary_estimand=primary_estimand,
+        maximum_attempts=maximum_attempts,
     )
 
 
@@ -673,6 +825,8 @@ def render_markdown(output: dict[str, Any]) -> str:
         f"Decision: **{output['decision']}**.",
         "",
         output["decision_reason"] + ".",
+        "",
+        f"Primary estimand: **{output['primary_estimand']}**.",
         "",
         "**This is unofficial local evidence. No global harness winner is claimed.**",
         "",
@@ -689,7 +843,7 @@ def render_markdown(output: dict[str, Any]) -> str:
             f"{'valid' if row['artifact_validity']['hve'] else 'invalid'} | "
             f"{summary['harness_a_wins']} | {summary['harness_b_wins']} | "
             f"{summary['draws']} | {row['forfeit_decomposition']['total']} | "
-            f"{row['task_contract_winner'] or 'reliability-only'} |"
+            f"{row['end_to_end_winner'] or 'not-eligible'} |"
         )
     counts = output["trial_counts"]
     validity = output["artifact_validity"]
@@ -702,8 +856,17 @@ def render_markdown(output: dict[str, Any]) -> str:
             f"{validity['phoenix']['trials']}**.",
             f"hve-core valid-artifact rate: **{validity['hve']['valid']}/"
             f"{validity['hve']['trials']}**.",
+            (
+                "Conditional-quality decision: **"
+                f"{output['conditional_quality_decision']['decision']}**."
+            ),
+            (
+                "End-to-end decision: **"
+                f"{output['trial_level_end_to_end']['decision']}**."
+            ),
+            f"Futility stop: **{str(output['futility_stop']).lower()}**.",
             "",
-            "The formal decision includes forfeits because deadline compliance is part of the task contract.",
+            "End-to-end scoring treats a one-sided invalid artifact as task failure; conditional quality uses only both-valid trials.",
             (
                 "Completed games only: Phoenix "
                 f"**{output['completed_game_totals_descriptive_only'].get('phoenix_wins', 0)}**, "
@@ -731,6 +894,12 @@ def main() -> None:
     parser.add_argument("root")
     parser.add_argument("--runner-sha")
     parser.add_argument("--minimum-trials", type=int, default=5)
+    parser.add_argument(
+        "--primary-estimand",
+        choices=("conditional-quality", "end-to-end"),
+        default="conditional-quality",
+    )
+    parser.add_argument("--maximum-attempts", type=int)
     args = parser.parse_args()
     root = Path(args.root).resolve()
     try:
@@ -738,6 +907,8 @@ def main() -> None:
             root,
             runner_sha=args.runner_sha,
             minimum_trials=args.minimum_trials,
+            primary_estimand=args.primary_estimand,
+            maximum_attempts=args.maximum_attempts,
         )
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc

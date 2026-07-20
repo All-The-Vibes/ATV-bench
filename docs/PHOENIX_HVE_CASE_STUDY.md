@@ -89,3 +89,33 @@ it is an analysis rule rather than a prospectively preregistered rule.
 Five new fresh trials under the hardened explicit-model, complete-receipt runner are
 required before reconsidering a task-contract-specific winner.
 
+## Hardened v3 replication outcome
+
+A hardened replication cell was launched later on July 20, 2026. The first attempt
+was prospectively excluded when unrelated local test load was discovered before
+result inspection. The next three uncontaminated attempts produced:
+
+| Attempt | Phoenix artifact | hve-core artifact | Quality game |
+|---|---:|---:|---:|
+| primary-2 | valid | invalid | not run |
+| primary-3 | valid | invalid | not run |
+| primary-4 | invalid | invalid | not run |
+
+Both harnesses had complete `gpt-5.4` JSONL receipts and successful terminal
+executions. Invalid artifacts occurred because sessions ended during destructive
+replacement of `main.py`; hve-core failed to leave an artifact in all three clean
+attempts, while Phoenix succeeded in two.
+
+The remaining attempts were stopped because the frozen 30-credit cell could no
+longer reach five paired-valid trials and was repeatedly terminating mid-edit.
+
+Therefore:
+
+- Phoenix completion reliability: **2/3** clean attempts;
+- hve-core completion reliability: **0/3** clean attempts;
+- paired-valid quality trials: **0**;
+- v3 verdict: **calibration failure**.
+
+The next cell must run non-scored completion calibration first. Its primary
+end-to-end estimand must count one-sided invalid artifacts as task failures, while
+conditional bot quality remains a separately reported secondary estimand.

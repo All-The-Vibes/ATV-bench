@@ -258,6 +258,11 @@ class GatewayEndpointContract:
         [OpaqueTrialHandle, ControllerRunRequest],
         None,
     ] = field(repr=False, compare=False)
+    cleanup: Callable[[], None] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         for name in ("network_name", "host"):
@@ -290,6 +295,11 @@ class GatewayEndpointContract:
             raise ModelBackedOperatorError(
                 "gateway_endpoint_invalid",
                 "healthcheck must be callable",
+            )
+        if self.cleanup is not None and not callable(self.cleanup):
+            raise ModelBackedOperatorError(
+                "gateway_endpoint_invalid",
+                "cleanup must be callable when provided",
             )
         normalized_host = self.host.rstrip(".").lower()
         if (
@@ -327,6 +337,21 @@ class GatewayEndpointContract:
                 "gateway_endpoint_identity_mismatch",
                 "the endpoint host must equal the preregistered gateway identity",
             )
+
+    def close(self) -> None:
+        """Release resources provisioned by the injected endpoint factory."""
+
+        if self.cleanup is None:
+            return
+        try:
+            self.cleanup()
+        except ModelBackedOperatorError:
+            raise
+        except Exception as exc:
+            raise ModelBackedOperatorError(
+                "gateway_endpoint_cleanup_failed",
+                "gateway endpoint cleanup failed",
+            ) from exc
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1548,6 +1573,15 @@ class ModelBackedOperator:
         )
         temporary.mkdir(parents=True, exist_ok=False)
         server: ResponsesHttpServer | None = None
+        endpoint: GatewayEndpointContract | None = None
+
+        def close_endpoint() -> None:
+            nonlocal endpoint
+            active_endpoint = endpoint
+            endpoint = None
+            if active_endpoint is not None:
+                active_endpoint.close()
+
         try:
             _write_json(temporary / "plan.json", plan.document)
             broker = self.broker_factory()
@@ -1581,13 +1615,18 @@ class ModelBackedOperator:
                     "from a real OCI network; supply an explicit container endpoint "
                     "contract",
                 )
-            endpoint = self.gateway_endpoint_factory(active_server, plan.policy)
-            if not isinstance(endpoint, GatewayEndpointContract):
+            candidate_endpoint = self.gateway_endpoint_factory(
+                active_server,
+                plan.policy,
+            )
+            if not isinstance(candidate_endpoint, GatewayEndpointContract):
                 raise ModelBackedOperatorError(
                     "gateway_endpoint_invalid",
                     "gateway_endpoint_factory must return GatewayEndpointContract",
                 )
+            endpoint = candidate_endpoint
             endpoint.validate_for(plan.policy)
+            endpoint_document = endpoint.to_dict()
             controller_policy = plan.policy.controller_policy(
                 gateway_host=endpoint.host,
                 gateway_port=endpoint.port,
@@ -1682,6 +1721,7 @@ class ModelBackedOperator:
                 if violations:
                     break
 
+            close_endpoint()
             server.stop()
             server = None
             shutil.rmtree(work_root, ignore_errors=True)
@@ -1701,7 +1741,7 @@ class ModelBackedOperator:
                 "plan_digest": plan.digest,
                 "complete_preregistered_policy_digest": plan.policy.digest,
                 "schedule_id": schedule_id,
-                "gateway_endpoint": endpoint.to_dict(),
+                "gateway_endpoint": endpoint_document,
                 "scheduled_trials": len(plan.schedule),
                 "executed_trials": len(attempt_summaries),
                 "attempts": list(attempt_summaries),
@@ -1773,7 +1813,11 @@ class ModelBackedOperator:
             )
             completed.verify()
             return completed
-        except Exception:
+        except Exception as exc:
+            try:
+                close_endpoint()
+            except Exception:
+                exc.add_note("gateway endpoint cleanup also failed")
             if server is not None:
                 server.stop()
             shutil.rmtree(temporary, ignore_errors=True)

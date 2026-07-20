@@ -7,6 +7,7 @@ import pytest
 
 from atv_bench.comparison import sha256_bytes, write_checksums, write_exact_bytes
 from scripts import compare_phoenix_hve
+from scripts import summarize_phoenix_hve_calibration as calibration
 from scripts import summarize_phoenix_hve_v2 as summarizer
 
 
@@ -20,6 +21,8 @@ def _trial_document(
     hve_wins: int = 0,
     draws: int = 0,
     shim_equal: bool = True,
+    phase: str = "evaluation",
+    max_ai_credits: int = 30,
 ) -> dict:
     games = phoenix_wins + hve_wins + draws if phoenix_valid and hve_valid else 0
     summary = {
@@ -44,11 +47,12 @@ def _trial_document(
             },
             "model": "model-fixed",
             "model_selection_source": "explicit_cli",
+            "phase": phase,
             "copilot_cli": "GitHub Copilot CLI fixed",
             "held_out_seeds": 5,
             "per_turn_timeout_seconds": 3.0,
             "harness_timeout_seconds": 900,
-            "max_ai_credits": 30,
+            "max_ai_credits": max_ai_credits,
             "prompt_sha256": "prompt-fixed",
             "independent_unit": "fresh_paired_harness_trial",
             "nested_games_are_not_independent_trials": True,
@@ -71,6 +75,7 @@ def _trial_document(
             "phoenix": {
                 "status": "ok" if phoenix_valid else "error",
                 "valid_artifact": phoenix_valid,
+                "execution_valid": True,
                 "bot_sha256": "7" * 64,
                 "reported_model": "model-fixed",
                 "model_matches_request": True,
@@ -78,18 +83,24 @@ def _trial_document(
             "hve": {
                 "status": "ok" if hve_valid else "error",
                 "valid_artifact": hve_valid,
+                "execution_valid": True,
                 "bot_sha256": "8" * 64,
                 "reported_model": "model-fixed",
                 "model_matches_request": True,
             },
         },
         "trial_outcome": {
+            "phase": phase,
             "independent_unit": "fresh_paired_harness_trial",
             "artifact_validity": {
                 "phoenix": phoenix_valid,
                 "hve": hve_valid,
             },
             "quality_winner_claimed": False,
+            "calibration_pass": phoenix_valid and hve_valid,
+            "eligible_for_scoring": (
+                phase == "evaluation" and phoenix_valid and hve_valid
+            ),
         },
         "series": {
             "phoenix_vs_hve": {
@@ -115,6 +126,8 @@ def _write_trial(
     hve_wins: int = 0,
     draws: int = 0,
     shim_equal: bool = True,
+    phase: str = "evaluation",
+    max_ai_credits: int = 30,
 ) -> Path:
     directory = root / name
     directory.mkdir(parents=True)
@@ -127,6 +140,8 @@ def _write_trial(
         hve_wins=hve_wins,
         draws=draws,
         shim_equal=shim_equal,
+        phase=phase,
+        max_ai_credits=max_ai_credits,
     )
     write_exact_bytes(
         directory / "comparison.json",
@@ -183,6 +198,57 @@ def test_games_are_not_inflated_into_independent_trials(tmp_path):
     assert output["decision"] == "inconclusive"
 
 
+def test_calibration_selects_smallest_budget_where_both_finish_reliably(tmp_path):
+    for index in range(2):
+        _write_trial(
+            tmp_path,
+            f"calibration-30-{index}",
+            phase="calibration",
+            max_ai_credits=30,
+            phoenix_valid=True,
+            hve_valid=False,
+            phoenix_wins=0,
+            hve_wins=0,
+        )
+        _write_trial(
+            tmp_path,
+            f"calibration-60-{index}",
+            phase="calibration",
+            max_ai_credits=60,
+            phoenix_valid=True,
+            hve_valid=True,
+            phoenix_wins=0,
+            hve_wins=0,
+        )
+
+    output = calibration.summarize_calibration_root(tmp_path)
+
+    assert output["decision"] == "calibrated"
+    assert output["selected_max_ai_credits"] == 60
+    assert output["scored"] is False
+    assert output["budgets"][0]["passed"] is False
+    assert output["budgets"][1]["passed"] is True
+
+
+def test_calibration_fails_when_no_budget_produces_paired_artifacts(tmp_path):
+    for index in range(2):
+        _write_trial(
+            tmp_path,
+            f"calibration-{index}",
+            phase="calibration",
+            max_ai_credits=90,
+            phoenix_valid=True,
+            hve_valid=False,
+            phoenix_wins=0,
+            hve_wins=0,
+        )
+
+    output = calibration.summarize_calibration_root(tmp_path)
+
+    assert output["decision"] == "failed"
+    assert output["selected_max_ai_credits"] is None
+
+
 def test_forfeits_are_separate_from_completed_gameplay(tmp_path):
     trial = _write_trial(
         tmp_path,
@@ -236,7 +302,7 @@ def test_forfeits_are_separate_from_completed_gameplay(tmp_path):
         "unknown_forfeits": 0,
         "reasons": {"hve": {"TIMEOUT": 1}},
     }
-    assert output["decision_basis"] == "end_to_end_task_contract_including_forfeits"
+    assert output["decision_basis"] == "conditional-quality"
     assert output["trial_level_task_contract"]["wins"] == {"phoenix": 1}
 
 
@@ -344,6 +410,7 @@ def test_invalid_build_is_persisted_and_counted_as_reliability_only(tmp_path):
     assert output["trial_counts"] == {
         "included": 1,
         "both_valid": 0,
+        "end_to_end": 1,
         "minimum_for_task_contract_decision": 5,
     }
     assert output["artifact_validity"]["phoenix"]["valid"] == 1
@@ -370,7 +437,10 @@ def test_winner_gate_can_only_make_a_task_contract_decision_at_five(tmp_path):
         _write_trial(tmp_path, f"trial-{index}", phoenix_wins=10, hve_wins=0)
     output = summarizer.summarize_root(tmp_path)
     assert output["trial_counts"]["both_valid"] == 5
-    assert output["decision"] == "phoenix_better_on_this_task_contract"
+    assert (
+        output["decision"]
+        == "phoenix_better_conditional_quality_on_this_task_contract"
+    )
     assert output["global_harness_winner"] is None
 
 
@@ -398,6 +468,54 @@ def test_winner_gate_requires_interval_to_clear_the_practical_margin(tmp_path):
     assert output["trial_level_task_contract"][
         "exact_two_sided_sign_test"
     ]["p_value"] == 0.25
+
+
+def test_end_to_end_estimand_counts_invalid_artifact_as_task_failure(tmp_path):
+    for index in range(5):
+        _write_trial(
+            tmp_path,
+            f"trial-{index}",
+            phoenix_valid=True,
+            hve_valid=False,
+            phoenix_wins=0,
+            hve_wins=0,
+        )
+
+    output = summarizer.summarize_root(
+        tmp_path,
+        primary_estimand="end-to-end",
+        maximum_attempts=5,
+    )
+
+    assert output["artifact_reliability"]["paired_outcomes"] == {
+        "phoenix_only_valid": 5
+    }
+    assert output["trial_counts"]["both_valid"] == 0
+    assert output["trial_counts"]["end_to_end"] == 5
+    assert output["decision"] == "phoenix_better_end_to_end_on_this_task_contract"
+    assert output["conditional_quality_decision"]["decision"] == "inconclusive"
+    assert output["futility_stop"] is False
+
+
+def test_futility_stop_when_conditional_quality_minimum_is_unreachable(tmp_path):
+    for index in range(4):
+        _write_trial(
+            tmp_path,
+            f"trial-{index}",
+            phoenix_valid=True,
+            hve_valid=False,
+            phoenix_wins=0,
+            hve_wins=0,
+        )
+
+    output = summarizer.summarize_root(
+        tmp_path,
+        primary_estimand="conditional-quality",
+        maximum_attempts=5,
+    )
+
+    assert output["remaining_attempts"] == 1
+    assert output["futility_stop"] is True
 
 
 def test_unequal_tool_shim_is_excluded(tmp_path):
@@ -472,6 +590,21 @@ def test_comparison_accepts_a_unique_explicit_balanced_seed_set():
         ]
     )
     assert parsed.held_out_seed == [10000, 10006]
+    assert parsed.phase == "evaluation"
+
+    calibration = parser.parse_args(
+        [
+            "--phoenix-repo",
+            "phoenix",
+            "--hve-repo",
+            "hve",
+            "--model",
+            "explicit-model-id",
+            "--phase",
+            "calibration",
+        ]
+    )
+    assert calibration.phase == "calibration"
 
 
 @pytest.mark.parametrize(
@@ -549,7 +682,10 @@ def test_model_attestation_requires_complete_single_exact_successful_receipt():
 def test_readme_does_not_claim_requested_model_when_attestation_failed():
     document = {
         "run_id": "trial",
-        "methodology": {"requested_model": "requested-model"},
+        "methodology": {
+            "requested_model": "requested-model",
+            "phase": "evaluation",
+        },
         "builds": {
             "phoenix": {
                 "model_attestation": {
@@ -585,3 +721,41 @@ def test_readme_does_not_claim_requested_model_when_attestation_failed():
     assert "This trial is noncomparable" in rendered
     assert "different-model" in rendered
     assert "Both Copilot JSONL receipts consistently reported" not in rendered
+
+
+def test_calibration_readme_never_claims_held_out_games_ran():
+    document = {
+        "run_id": "calibration",
+        "methodology": {
+            "requested_model": "model-a",
+            "phase": "calibration",
+        },
+        "builds": {
+            name: {
+                "model_attestation": {
+                    "status": "pass",
+                    "observed_models": ["model-a"],
+                }
+            }
+            for name in ("phoenix", "hve")
+        },
+        "trial_outcome": {
+            "classification": "calibration-pass",
+            "comparable": False,
+        },
+        "series": {
+            "phoenix_vs_hve": {
+                "summary": {
+                    "games": 0,
+                    "harness_a_wins": 0,
+                    "harness_b_wins": 0,
+                    "draws": 0,
+                }
+            }
+        },
+    }
+
+    rendered = compare_phoenix_hve._render_readme(document)
+
+    assert "non-scored completion-feasibility calibration" in rendered
+    assert "Held-out games were intentionally not run" in rendered

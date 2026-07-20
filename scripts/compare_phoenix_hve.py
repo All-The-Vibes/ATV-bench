@@ -537,6 +537,7 @@ def _render_readme(document: dict[str, Any]) -> str:
     summary = document["series"]["phoenix_vs_hve"]["summary"]
     classification = document["trial_outcome"]["classification"]
     requested_model = document["methodology"]["requested_model"]
+    phase = document["methodology"]["phase"]
     phoenix_attestation = document["builds"]["phoenix"]["model_attestation"]
     hve_attestation = document["builds"]["hve"]["model_attestation"]
     if document["trial_outcome"]["comparable"]:
@@ -553,6 +554,17 @@ def _render_readme(document: dict[str, Any]) -> str:
             f"`{hve_attestation['observed_models']}` with attestation "
             f"`{hve_attestation['status']}`. This trial is noncomparable."
         )
+    if phase == "calibration":
+        game_statement = (
+            "This is a non-scored completion-feasibility calibration. Held-out games "
+            "were intentionally not run."
+        )
+    else:
+        game_statement = (
+            "Every held-out seed was played twice with sides swapped, but those "
+            f"{summary['games']} games are nested descriptive measurements—not "
+            f"{summary['games']} independent harness trials."
+        )
     return f"""# NON-RANKABLE local case study: ATV-Phoenix vs hve-core
 
 Run: `{document["run_id"]}`
@@ -564,9 +576,7 @@ harness trial on a synthetic Lightcycles task.
 {model_statement}
 
 Both harnesses were assigned the same Copilot CLI, goal, seed repository, budget, and
-compatibility-shim policy. Every held-out seed was played twice with sides swapped,
-but those {summary["games"]} games are nested descriptive measurements—not
-{summary["games"]} independent harness trials.
+compatibility-shim policy. {game_statement}
 
 Artifact classification: **{classification}**.
 
@@ -630,6 +640,15 @@ def _argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--phoenix-repo", required=True)
     parser.add_argument("--hve-repo", required=True)
     parser.add_argument("--out")
+    parser.add_argument(
+        "--phase",
+        choices=("calibration", "evaluation"),
+        default="evaluation",
+        help=(
+            "Calibration validates completion feasibility and never runs or scores "
+            "held-out games. Evaluation uses the frozen held-out task contract."
+        ),
+    )
     parser.add_argument(
         "--model",
         required=True,
@@ -857,45 +876,57 @@ def main() -> None:
             )
             for name in ("phoenix", "hve")
         }
-        trial_comparable = all(build_comparability.values())
-        series = {
-            "phoenix_vs_hve": (
-                play_series(
-                    phoenix_bot,
-                    hve_bot,
-                    seeds=held_out,
-                    per_turn_timeout=args.per_turn_timeout,
+        calibration_pass = all(build_comparability.values())
+        trial_comparable = args.phase == "evaluation" and calibration_pass
+        if args.phase == "calibration":
+            series = {
+                name: _empty_series("not_run_calibration_phase")
+                for name in (
+                    "phoenix_vs_hve",
+                    "phoenix_vs_baseline",
+                    "hve_vs_baseline",
+                    "baseline_control",
                 )
-                if trial_comparable
-                else _empty_series("not_run_noncomparable_trial")
-            ),
-            "phoenix_vs_baseline": (
-                play_series(
-                    phoenix_bot,
+            }
+        else:
+            series = {
+                "phoenix_vs_hve": (
+                    play_series(
+                        phoenix_bot,
+                        hve_bot,
+                        seeds=held_out,
+                        per_turn_timeout=args.per_turn_timeout,
+                    )
+                    if trial_comparable
+                    else _empty_series("not_run_noncomparable_trial")
+                ),
+                "phoenix_vs_baseline": (
+                    play_series(
+                        phoenix_bot,
+                        baseline,
+                        seeds=held_out,
+                        per_turn_timeout=args.per_turn_timeout,
+                    )
+                    if build_comparability["phoenix"]
+                    else _empty_series("not_run_noncomparable_phoenix_build")
+                ),
+                "hve_vs_baseline": (
+                    play_series(
+                        hve_bot,
+                        baseline,
+                        seeds=held_out,
+                        per_turn_timeout=args.per_turn_timeout,
+                    )
+                    if build_comparability["hve"]
+                    else _empty_series("not_run_noncomparable_hve_build")
+                ),
+                "baseline_control": play_series(
+                    baseline,
                     baseline,
                     seeds=held_out,
                     per_turn_timeout=args.per_turn_timeout,
-                )
-                if build_comparability["phoenix"]
-                else _empty_series("not_run_noncomparable_phoenix_build")
-            ),
-            "hve_vs_baseline": (
-                play_series(
-                    hve_bot,
-                    baseline,
-                    seeds=held_out,
-                    per_turn_timeout=args.per_turn_timeout,
-                )
-                if build_comparability["hve"]
-                else _empty_series("not_run_noncomparable_hve_build")
-            ),
-            "baseline_control": play_series(
-                baseline,
-                baseline,
-                seeds=held_out,
-                per_turn_timeout=args.per_turn_timeout,
-            ),
-        }
+                ),
+            }
 
         artifact_validity = {
             "phoenix": bool(builds["phoenix"]["valid_artifact"]),
@@ -909,7 +940,11 @@ def main() -> None:
             "phoenix": builds["phoenix"]["model_attestation"]["status"] == "pass",
             "hve": builds["hve"]["model_attestation"]["status"] == "pass",
         }
-        if not all(attestation_validity.values()):
+        if args.phase == "calibration" and calibration_pass:
+            classification = "calibration-pass"
+        elif args.phase == "calibration":
+            classification = "calibration-fail"
+        elif not all(attestation_validity.values()):
             classification = "model-attestation-failed"
         elif not all(execution_validity.values()):
             classification = "harness-execution-invalid"
@@ -942,6 +977,7 @@ def main() -> None:
                         REPO_ROOT / "src" / "atv_bench" / "arena" / "referee.py"
                     ),
                 },
+                "phase": args.phase,
                 "game": "lightcycles",
                 "model": args.model,
                 "requested_model": args.model,
@@ -1007,12 +1043,15 @@ def main() -> None:
             },
             "builds": builds,
             "trial_outcome": {
+                "phase": args.phase,
                 "independent_unit": "fresh_paired_harness_trial",
                 "artifact_validity": artifact_validity,
                 "execution_validity": execution_validity,
                 "model_attestation_validity": attestation_validity,
                 "build_comparability": build_comparability,
                 "comparable": trial_comparable,
+                "calibration_pass": calibration_pass,
+                "eligible_for_scoring": trial_comparable,
                 "classification": classification,
                 "quality_winner_claimed": False,
                 "invalid_artifacts_persisted": True,
@@ -1042,12 +1081,17 @@ def main() -> None:
                     "official": False,
                     "classification": classification,
                     "comparable": trial_comparable,
+                    "calibration_pass": calibration_pass,
+                    "phase": args.phase,
                     "nested_result": series["phoenix_vs_hve"]["summary"],
                 },
                 indent=2,
             )
         )
-        if not trial_comparable:
+        run_succeeded = (
+            calibration_pass if args.phase == "calibration" else trial_comparable
+        )
+        if not run_succeeded:
             raise SystemExit(2)
     finally:
         shutil.rmtree(work, ignore_errors=True)
