@@ -23,6 +23,7 @@ from typing import Any, Optional
 
 from atv_bench.adapters.snapshot import capture_diff
 from atv_bench.containment import ContainmentError, contained_run
+from atv_bench.logscan import scrub_log
 
 
 class AdapterStatus(str, enum.Enum):
@@ -116,7 +117,7 @@ class AdapterResult:
         return {
             "status": self.status.value,
             "diff": self.diff,
-            "log": self.log,
+            "log": scrub_log(self.log),
             "usage": self.usage.to_dict(),
             "model": self.model,
         }
