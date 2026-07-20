@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+from typer.main import get_command
 from typer.testing import CliRunner
 
 from atv_bench.adapters.contract import (
@@ -411,10 +412,21 @@ def test_cli_run_help_and_invalid_mode_are_explicit():
         color=False,
     )
     assert help_result.exit_code == 0
-    assert "--adaptation" in help_result.stdout
-    assert "iterative" in help_result.stdout
-    assert "frozen-artifact" in help_result.stdout
-    assert "Nested rounds" in help_result.stdout
+    root_command = get_command(app)
+    run_command = root_command.commands["run"]
+    adaptation = next(
+        parameter
+        for parameter in run_command.params
+        if "--adaptation" in getattr(parameter, "opts", ())
+    )
+    assert adaptation.default == "iterative"
+    assert "frozen-artifact" in adaptation.help
+    rounds = next(
+        parameter
+        for parameter in run_command.params
+        if "--rounds" in getattr(parameter, "opts", ())
+    )
+    assert "Nested rounds" in rounds.help
 
     invalid = runner.invoke(
         app,
