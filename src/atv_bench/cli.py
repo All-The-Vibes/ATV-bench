@@ -1177,5 +1177,83 @@ def _summarize_tournament(raw, cfg):  # pragma: no cover - shape depends on live
     return summarize_tournament(raw, cfg)
 
 
+@app.command()
+def rate(
+    store: Path = typer.Option(..., "--store", help="Corpus dir containing matches.jsonl."),
+    out: Path = typer.Option(None, "--out", help="Write ratings.json here (default: <store>/ratings.json)."),
+    json_out: bool = typer.Option(False, "--json", help="Also print the ratings doc to stdout."),
+) -> None:
+    """Fit Tier-1 harness ratings from a match corpus and emit ratings.json.
+
+    Loads the corpus, fits the penalized hierarchical Bradley-Terry model (base model
+    factored out where the design identifies it, an honest harness+model BUNDLE where it
+    is model-locked), and writes theta, theta_model_adjusted (or bundle_unit), clustered +
+    FDR-corrected pairwise CIs, data_sufficiency, attributed, verified, and the unknown[]
+    list of non-publishable model tags.
+    """
+    from atv_bench.rating import build_ratings_doc
+
+    matches_file = store / "matches.jsonl"
+    if not matches_file.exists():
+        typer.echo(f"Cannot rate: no matches.jsonl in {store}")
+        raise typer.Exit(2)
+
+    rows = []
+    for line in matches_file.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            m = json.loads(line)
+        except json.JSONDecodeError as e:
+            typer.echo(f"Cannot rate: malformed matches.jsonl line: {e}")
+            raise typer.Exit(2)
+        row = _rating_row_from_match(m)
+        if row is not None:
+            rows.append(row)
+
+    if not rows:
+        typer.echo("No rateable matches in corpus (need >=1 scored head-to-head record).")
+        raise typer.Exit(2)
+
+    doc = build_ratings_doc(rows, verified=True, model_overdispersion=True)
+    out_path = out or (store / "ratings.json")
+    out_path.write_text(json.dumps(doc, indent=2))
+    typer.echo(f"Wrote {out_path} — {len(doc['harnesses'])} harnesses, "
+               f"attributed={doc['attributed']}, model_locked={doc.get('model_locked')}, "
+               f"unknown={doc['unknown']}")
+    if json_out:
+        typer.echo(json.dumps(doc, indent=2))
+
+
+def _rating_row_from_match(m: dict) -> dict | None:
+    """Extract (harness_a, harness_b, model_a, model_b, score_a) from a match record.
+
+    Returns None when the record cannot supply a two-player scored head-to-head. Supports
+    both the flat rating-row shape and the schema-v2 match record (players[] + outcome).
+    """
+    if all(k in m for k in ("harness_a", "harness_b", "model_a", "model_b", "score_a")):
+        return m
+    players = m.get("players")
+    if not players or len(players) < 2:
+        return None
+    pa, pb = players[0], players[1]
+    outcome = m.get("outcome") or {}
+    winner = outcome.get("winner")
+    if winner in ("a", "A", 0, pa.get("harness")):
+        score_a = 1.0
+    elif winner in ("b", "B", 1, pb.get("harness")):
+        score_a = 0.0
+    elif winner in ("draw", "tie", None):
+        score_a = 0.5
+    else:
+        return None
+    return {
+        "harness_a": pa.get("harness"), "harness_b": pb.get("harness"),
+        "model_a": pa.get("model", "unknown"), "model_b": pb.get("model", "unknown"),
+        "score_a": score_a,
+    }
+
+
 if __name__ == "__main__":
     app()
