@@ -17,7 +17,7 @@ from typing import Any
 
 from atv_bench import preflight as pf
 from atv_bench.config import GAME_SPECS, build_pvp_config, resolve_game
-from atv_bench.match_record import MatchRecord, PlayerRecord
+from atv_bench.match_record import BudgetVector, MatchRecord, PlayerRecord
 from atv_bench.run_envelope import RunError
 
 ADAPTER_VERSION = "1.0.0"
@@ -75,29 +75,74 @@ def preflight_or_raise(cfg: RunConfig, *, require_docker: bool = True,
                    fix="run `atv-bench doctor` for a full prerequisite report")
 
 
+def _manifest_tool_names(manifest: dict[str, Any]) -> list[str]:
+    """Extract tool NAMES from a fingerprint manifest's `tools` list.
+
+    The manifest emits tools as {name, source, enabled} dicts (probe._tool_entries);
+    the row records the ordered, de-duplicated names. Tolerates a plain list of str
+    for forward-compat. Never fabricates — missing/malformed → [].
+    """
+    raw = manifest.get("tools") or []
+    names: list[str] = []
+    seen: set[str] = set()
+    for t in raw:
+        name = t.get("name") if isinstance(t, dict) else t
+        if isinstance(name, str) and name and name not in seen:
+            seen.add(name)
+            names.append(name)
+    return names
+
+
+def _budget_for(player_budgets: dict[str, Any] | None, harness: str) -> BudgetVector:
+    """Build a BudgetVector from a per-harness budget dict (best-effort, no fabrication)."""
+    if not player_budgets:
+        return BudgetVector()
+    b = player_budgets.get(harness)
+    if isinstance(b, BudgetVector):
+        return b
+    if not isinstance(b, dict):
+        return BudgetVector()
+    return BudgetVector(
+        tokens=b.get("tokens"),
+        tool_calls=b.get("tool_calls"),
+        wall_time_s=b.get("wall_time_s"),
+    )
+
+
 def build_match_record(
     cfg: RunConfig, *, outcome: dict[str, Any],
     player_models: dict[str, tuple[str, str]],
     player_fingerprints: dict[str, str],
     replay_path: str,
+    player_manifests: dict[str, dict[str, Any]] | None = None,
+    player_budgets: dict[str, Any] | None = None,
     verified: bool = False,
 ) -> MatchRecord:
-    """Assemble the schema-v2 record. Phase 1 is verified=False → never publishes."""
+    """Assemble the schema-v2 record. Phase 1 is verified=False → never publishes.
+
+    `player_manifests` carries each harness's leak-safe fingerprint manifest so the
+    moat surface (tools + nested_skills) is PERSISTED into the row (ENG-F) instead of
+    dropped to []. `player_budgets` carries the per-harness budget vector (G10:
+    tokens/tool_calls/wall_time_s) so outspending is disclosed.
+    """
     from atv_bench.codeclash_env import CODECLASH_VERSION
 
     spec = resolve_game(cfg.game)
+    manifests = player_manifests or {}
     players = []
     for h in (cfg.a, cfg.b):
         model, source = player_models.get(h, ("unknown", "parsed"))
+        manifest = manifests.get(h) or {}
         players.append(PlayerRecord(
             harness=h,
             model=model,
             model_source=source,
             verified=verified,
-            tools=[],
-            nested_skills=[],
+            tools=_manifest_tool_names(manifest),
+            nested_skills=list(manifest.get("nested_skills") or []),
             fingerprint_sha256=player_fingerprints.get(h, "0" * 64),
             adapter_version=ADAPTER_VERSION,
+            budget=_budget_for(player_budgets, h),
         ))
     return MatchRecord(
         game=cfg.game,
@@ -152,6 +197,62 @@ def summarize_tournament(raw: dict, cfg: RunConfig) -> tuple[dict, dict]:
                "round_stats": _compact_round_stats(round_stats)}
     models = {cfg.a: (cfg.model, "parsed"), cfg.b: (cfg.model, "parsed")}
     return outcome, models
+
+
+def budget_from_usage(usage: Any | None) -> BudgetVector:
+    """Map an adapter's measured ``Usage`` to a G10 ``BudgetVector`` (no fabrication).
+
+    ``wall_time_s`` comes from ``Usage.seconds`` — the wall clock each adapter measures
+    around its CLI subprocess (``elapsed = time.time() - start``), so in a real run it is
+    a real number, not None. ``tokens`` is recorded only when the CLI actually reported it
+    (Claude's ``modelUsage`` sum); a harness that emits no token payload leaves it 0, which
+    we honestly surface as None. ``tool_calls`` is not measured by either adapter today, so
+    it stays None rather than being faked from the build's turn count.
+    """
+    if usage is None:
+        return BudgetVector()
+    tokens = getattr(usage, "tokens", 0) or None
+    seconds = getattr(usage, "seconds", None)
+    wall = float(seconds) if seconds else None
+    return BudgetVector(tokens=tokens, tool_calls=None, wall_time_s=wall)
+
+
+def collect_player_budgets(cfg: RunConfig) -> dict[str, BudgetVector]:
+    """Source each player's budget from the REAL adapter run, not from dead metadata.
+
+    The build-once cache (``players._ARTIFACT_CACHE``) holds the authoritative
+    ``AdapterResult`` from the ONE model-driven build per player, keyed by player name.
+    Its ``.usage`` (tokens/seconds measured inside the adapter) IS the budget for that
+    player in the match. We map cfg.a/cfg.b → their distinct player names → cached result
+    → BudgetVector. A player with no cached build (never ran) yields an all-None vector.
+    """
+    from atv_bench.config import _distinct_names
+    from atv_bench.players import _ARTIFACT_CACHE
+
+    names = _distinct_names(cfg.a, cfg.b)
+    # Index the build-once cache by player name (id), taking the first build per player.
+    by_name: dict[str, Any] = {}
+    for (player_id, _game, _pv), (_tree, result, _diff) in _ARTIFACT_CACHE.items():
+        by_name.setdefault(player_id, result)
+    out: dict[str, BudgetVector] = {}
+    for harness, name in zip((cfg.a, cfg.b), names):
+        result = by_name.get(name)
+        usage = getattr(result, "usage", None) if result is not None else None
+        out[harness] = budget_from_usage(usage)
+    return out
+
+
+def summarize_budgets(raw: dict, cfg: RunConfig) -> dict[str, BudgetVector]:
+    """Per-harness budget vector (G10) sourced from the REAL adapter Usage.
+
+    Previously this read ``metadata.budgets[harness]`` — a key NO producer (atv_bench or
+    vendored CodeClash) ever writes, so every match recorded an all-None vector and G10
+    was non-functional. The authoritative source is the build-once artifact cache: each
+    player's single ``AdapterResult.usage`` carries the tokens/wall-clock the adapter
+    measured. ``raw`` is accepted for call-site compatibility but no longer read.
+    """
+    return collect_player_budgets(cfg)
+
 
 
 def _compact_round_stats(round_stats: dict) -> dict:

@@ -93,3 +93,119 @@ def test_run_config_rejects_unknown_harness():
     with pytest.raises(RunError) as exc:
         _cfg(a="not-a-harness").validate()
     assert exc.value.code == "usage"
+
+
+def test_match_row_populates_tools_nested_skills():
+    # ENG-F: the fingerprint manifest already captures tools + nested_skills; the record
+    # must PERSIST them, not drop them to []. `tools` in the manifest is a list of
+    # {name, source, enabled} dicts; the row records the tool names.
+    manifests = {
+        "copilot-cli": {
+            "tools": [
+                {"name": "read", "source": "permission", "enabled": True},
+                {"name": "write", "source": "permission", "enabled": True},
+            ],
+            "nested_skills": ["gstack/plan", "office-hours"],
+        },
+        "claude-code": {
+            "tools": [{"name": "bash", "source": "builtin", "enabled": True}],
+            "nested_skills": ["compound-engineering/ce-work"],
+        },
+    }
+    rec = build_match_record(
+        _cfg(),
+        outcome={"winner": "copilot-cli"},
+        player_models={"copilot-cli": ("claude-opus-4.8", "parsed"),
+                       "claude-code": ("claude-opus-4.8", "parsed")},
+        player_fingerprints={"copilot-cli": "a" * 64, "claude-code": "b" * 64},
+        player_manifests=manifests,
+        replay_path="_replay/index.html",
+    )
+    by_h = {p.harness: p for p in rec.players}
+    assert by_h["copilot-cli"].tools == ["read", "write"]
+    assert by_h["copilot-cli"].nested_skills == ["gstack/plan", "office-hours"]
+    assert by_h["claude-code"].tools == ["bash"]
+    assert by_h["claude-code"].nested_skills == ["compound-engineering/ce-work"]
+    # explicit non-regression: NOT the hardcoded empty lists
+    assert by_h["copilot-cli"].tools != []
+
+
+def test_budget_recorded_per_match():
+    # G10: each player row carries a budget vector (tokens, tool_calls, wall_time_s)
+    # sourced from the adapter result / run timing, so outspending is disclosed.
+    budgets = {
+        "copilot-cli": {"tokens": 50000, "tool_calls": 12, "wall_time_s": 120.0},
+        "claude-code": {"tokens": None, "tool_calls": None, "wall_time_s": 88.5},
+    }
+    rec = build_match_record(
+        _cfg(),
+        outcome={"winner": "copilot-cli"},
+        player_models={"copilot-cli": ("claude-opus-4.8", "parsed"),
+                       "claude-code": ("claude-opus-4.8", "parsed")},
+        player_fingerprints={"copilot-cli": "a" * 64, "claude-code": "b" * 64},
+        player_budgets=budgets,
+        replay_path="_replay/index.html",
+    )
+    by_h = {p.harness: p for p in rec.players}
+    assert by_h["copilot-cli"].budget.tokens == 50000
+    assert by_h["copilot-cli"].budget.tool_calls == 12
+    assert by_h["copilot-cli"].budget.wall_time_s == 120.0
+    # unreported tokens/tool-calls recorded as None (no fabrication), wall-time present
+    assert by_h["claude-code"].budget.tokens is None
+    assert by_h["claude-code"].budget.wall_time_s == 88.5
+    # serialized into the row
+    d = rec.to_dict()
+    row = next(p for p in d["players"] if p["harness"] == "copilot-cli")
+    assert row["budget"] == {"tokens": 50000, "tool_calls": 12, "wall_time_s": 120.0}
+
+
+def test_budget_sourced_from_adapter_usage():
+    # G10 REAL PATH: the per-player budget must be sourced from the adapter's measured
+    # Usage (tokens + wall clock) that flows through HarnessPlayerCore.edit_turn into the
+    # build-once artifact cache — NOT from metadata.budgets, a key no producer ever writes.
+    # This fails when summarize_budgets reads the empty metadata: budget would be all-None.
+    from atv_bench.adapters.contract import (
+        AdapterRequest, AdapterResult, AdapterStatus, HarnessAdapter, Usage,
+    )
+    from atv_bench.config import _distinct_names
+    from atv_bench.players import HarnessPlayerCore, clear_artifact_cache
+    from atv_bench.runner import summarize_budgets
+
+    class _FakeAdapter(HarnessAdapter):
+        name = "fake"
+
+        def run(self, req: AdapterRequest) -> AdapterResult:
+            # A real adapter measures Usage(tokens, seconds) around its CLI subprocess.
+            return AdapterResult(
+                status=AdapterStatus.NO_EDIT, diff="", log="",
+                usage=Usage(tokens=1234, seconds=5.0, turns=1),
+            )
+
+    class _MemContainer:
+        def __init__(self):
+            self.tree = {"main.py": "print('hi')\n"}
+
+        def read_tree(self):
+            return dict(self.tree)
+
+        def write_tree(self, files):
+            self.tree = dict(files)
+
+    cfg = _cfg()
+    a_name, _b_name = _distinct_names(cfg.a, cfg.b)
+    clear_artifact_cache()
+    try:
+        core = HarnessPlayerCore(
+            adapter=_FakeAdapter(), container=_MemContainer(),
+            goal="improve", player_id=a_name, game=cfg.game,
+        )
+        result = core.edit_turn()
+        assert result.usage.tokens == 1234
+
+        budgets = summarize_budgets({}, cfg)
+        a_budget = budgets[cfg.a]
+        assert a_budget.tokens == 1234
+        assert a_budget.wall_time_s == pytest.approx(5.0)
+        assert a_budget.tokens is not None  # not sourced from the empty metadata.budgets
+    finally:
+        clear_artifact_cache()

@@ -25,6 +25,26 @@ MODEL_SOURCES = ("recording", "parsed", "gateway")
 
 
 @dataclasses.dataclass(frozen=True)
+class BudgetVector:
+    """Per-player resource spend for a match (G10 — moat-cost disclosure).
+
+    A harness that wins by outspending 10x must be visible, so the leaderboard and
+    rating engine can normalize/annotate cost. Fields are best-effort: when the CLI
+    does not report a value (e.g. tokens/tool-calls for a harness that emits no usage
+    payload) it is recorded as None — never fabricated. `wall_time_s` is sourced from
+    the adapter's measured wall clock (Usage.seconds, set by each adapter around the
+    CLI subprocess), so in a real run it is present, not None.
+    """
+
+    tokens: int | None = None
+    tool_calls: int | None = None
+    wall_time_s: float | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclasses.dataclass(frozen=True)
 class PlayerRecord:
     """One player's provenance in a match record."""
 
@@ -36,6 +56,7 @@ class PlayerRecord:
     nested_skills: list[str]
     fingerprint_sha256: str
     adapter_version: str
+    budget: BudgetVector = dataclasses.field(default_factory=BudgetVector)
 
     def to_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)

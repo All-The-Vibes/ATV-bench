@@ -1150,18 +1150,23 @@ def _run_live(cfg, out_dir, a_home, b_home, json_out):  # pragma: no cover - Doc
     homes = {cfg.a: a_home, cfg.b: b_home}
     raw = run_live_match(cfg, output_dir=Path(out_dir), homes=homes)
 
-    # Fingerprint each harness (leak-safe) for the record identity.
+    # Fingerprint each harness (leak-safe) for the record identity + moat surface.
     fps: dict[str, str] = {}
+    manifests: dict[str, dict] = {}
     for h, home in homes.items():
         try:
-            sha, _manifest = fingerprint_harness_repo(h, home)
+            sha, manifest = fingerprint_harness_repo(h, home)
             fps[h] = sha
+            manifests[h] = manifest
         except Exception:
             fps[h] = "0" * 64
 
+    from atv_bench.runner import summarize_budgets
     outcome, models = _summarize_tournament(raw, cfg)
+    budgets = summarize_budgets(raw, cfg)
     rec = build_match_record(
         cfg, outcome=outcome, player_models=models, player_fingerprints=fps,
+        player_manifests=manifests, player_budgets=budgets,
         replay_path=str(Path(out_dir)), verified=False,
     )
     return ok_envelope(rec.to_dict())

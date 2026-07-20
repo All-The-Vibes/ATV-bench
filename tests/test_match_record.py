@@ -11,6 +11,7 @@ import pytest
 
 from atv_bench.match_record import (
     MATCH_RECORD_SCHEMA_VERSION,
+    BudgetVector,
     PlayerRecord,
     MatchRecord,
     identity_key,
@@ -82,6 +83,28 @@ def test_match_record_round_trips_to_dict():
     assert len(d["players"]) == 2
     assert d["players"][0]["fingerprint_sha256"] == "a" * 64
     assert d["codeclash_version"].startswith("vendored@")
+
+
+def test_player_record_carries_budget_vector():
+    # G10: each player discloses a budget vector — tokens, tool_calls, wall_time_s —
+    # so a harness that wins by outspending 10x is visible, not invisible.
+    b = BudgetVector(tokens=12345, tool_calls=7, wall_time_s=42.5)
+    p = _player(budget=b)
+    d = p.to_dict()
+    assert d["budget"] == {"tokens": 12345, "tool_calls": 7, "wall_time_s": 42.5}
+
+
+def test_budget_vector_allows_unreported_fields_as_none():
+    # No-fake: when the CLI doesn't report tokens/tool-calls, record None, don't fabricate.
+    b = BudgetVector(tokens=None, tool_calls=None, wall_time_s=3.14)
+    d = b.to_dict()
+    assert d == {"tokens": None, "tool_calls": None, "wall_time_s": 3.14}
+
+
+def test_player_record_defaults_to_empty_budget():
+    # A record built without an explicit budget still exposes the field (all-None).
+    p = _player()
+    assert p.budget.to_dict() == {"tokens": None, "tool_calls": None, "wall_time_s": None}
 
 
 def test_match_verified_only_when_all_players_publishable():
