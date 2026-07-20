@@ -52,21 +52,46 @@ not guessed.
 | lightcycles | iterative | stdin-stdout | supported | `submission="main.py"`; `engine.py` polls each bot per tick for one of N/S/E/W. **The shipped live arena** (`games.py`) — the reference `edit_turn`/`main.py` contract. |
 | paintvolley | iterative | stdin-stdout | supported | `submission="main.py"`; per-turn action (`LEFT/RIGHT/JUMP/...`), `engine.py`-driven 1‑v‑1. Matches the per-turn `main.py` contract. |
 | robocode | one-shot | files | unsupported | `submission="robots/custom/"`; a Java class extending `robocode.Robot` whose `run()`/`onScannedRobot` callbacks ARE the tank. Event-driven JVM bot, not a per-turn stdin `main.py`. |
-| robotrumble | iterative | files | experimental | `submission="robot.js"`, Python **or JS** `robot(state, unit)` called per turn over a 100-turn match. Per-turn shape is close to the contract, but it drives a *team of units* and defaults to JS — would need a Python-single-unit adapter before it's `supported`. |
+| robotrumble | iterative | files | unsupported | `submission="robot.js"`, Python **or JS** `robot(state, unit)` called **per unit per turn** over a 100-turn match. Downgraded from `experimental` in Wave C (see below): the per-turn shape looked close, but `robot(state, unit)` drives a *team of units* (many-vs-many within one function surface), not a 1‑v‑1 per-turn decision. A single-unit adapter would field one unit against a full team — an unfair, undefined-scoring match — so it is not honestly adjudicable. |
 | scml | simultaneous | socket | unsupported | `submission="scml_agent.py"`; ANAC SCML OneShot supply-chain **negotiation** over `runtime/run_scml.py`. Concurrent simultaneous negotiations, env-initiated — not expressible as an `edit_turn`/`main.py` turn. |
 
 ## Summary
 
 - **supported (5):** ants, dummy, gomoku, lightcycles, paintvolley — all
-  `main.py`, single-player-per-turn, stdin/stdout, `engine.py`-driven. Only
-  `lightcycles` is wired live in `games.py` today; the other four are the
-  natural next candidates.
-- **experimental (1):** robotrumble — per-turn `robot()` contract, but multi-unit
-  and JS-first; needs an adapter.
-- **unsupported (16):** everything whose move model is compiled-binary
+  `main.py`, single-player-per-turn, stdin/stdout, `engine.py`-driven. All five are
+  wired live in `games.py` (Wave A). They are the complete set of arenas that fit the
+  1‑v‑1 per-turn `edit_turn`/`main.py` contract.
+- **experimental (0):** none. robotrumble was the sole experimental arena; Wave C
+  adversarial verification downgraded it to `unsupported` (see Wave C below).
+- **unsupported (17):** everything whose move model is compiled-binary
   (chess, corewar, robocode, battlecode*, halite*), an HTTP/socket server
-  (battlesnake, bomberland, cyborg, scml), or simultaneous / multi-player polling
-  (figgie, bridge, huskybench). None can be expressed as a 1‑v‑1 per-turn
-  `edit_turn`/`main.py` contract without a new referee.
-</content>
-</invoke>
+  (battlesnake, bomberland, cyborg, scml), simultaneous / multi-player polling
+  (figgie, bridge, huskybench), or many-vs-many team control (robotrumble). None can be
+  expressed as a 1‑v‑1 per-turn `edit_turn`/`main.py` contract without a new referee.
+
+## Wave C — verification of the 17 non-supported arenas
+
+Waves C1/C2/C3 asked whether any of the 17 non-live arenas could be made live by
+generalizing the harness driver beyond the single-`main.py` contract. Each was
+re-read against the **actual** driver requirement (the harness edits a file *tree* in
+the arena's Docker workdir; the arena's own referee adjudicates; the match must be a
+strict 1‑v‑1 for pairwise Bradley-Terry) — a laxer bar than the single-`main.py`
+census — and every superficially-plausible candidate was then handed to an independent
+adversary tasked with refuting the "could go live" claim. **All three candidates were
+refuted with concrete code evidence; the live set stays at 5.**
+
+| candidate | initial read | adversarial verdict | refuting code fact |
+|-----------|--------------|---------------------|--------------------|
+| robotrumble | achievable (single-unit adapter) | **unsupported** | `robot(state, unit)` is called per *unit* per turn — a team of units, not one 1‑v‑1 decision. A single-unit adapter fields 1 unit vs a full team: unfair, undefined scoring. |
+| robocode | live-now (source-editable `robots/custom/`) | **unsupported** | `execute_round` has **no** `len(agents)==2` assert and the bot is an event-driven JVM `Robot` subclass (`run()`/`onScannedRobot` callbacks), not a per-turn stdin loop the driver polls. |
+| cyborg | achievable (add 1‑v‑1 assert) | **unsupported** | Each agent independently controls all 18 drones and is scored by **absolute reward**; `max(scores)→winner` is not a decisive A-beats-B outcome, so it cannot feed Bradley-Terry even with a 2-player assert. |
+
+The remaining 14 (chess, corewar, battlecode23/24/25, halite/2/3, battlesnake,
+bomberland, scml, figgie, bridge, huskybench) were unsupported on first read and not
+contested: compiled non-source artifacts, HTTP/socket servers, or N>2 / simultaneous /
+team play. See `tests/test_wave_c_arenas.py` for the pinned invariant.
+
+**Conclusion:** every remaining arena would require authoring a *new referee* (or a new
+rating model), which is explicitly out of scope (`IMPLEMENTATION_PLAN.md` → "New arenas
+beyond battlesnake + lightcycles" is NOT in v1) and would violate the honest-adjudication
+thesis. Wave C's deliverable is this verified negative result, not a set of fake-live games.
