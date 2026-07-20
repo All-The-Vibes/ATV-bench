@@ -1,4 +1,4 @@
-# ATV-bench Community League — Approach A (active v1)
+# ATV-bench Community League — reviewed-data v1
 
 The shipping v1. Supersedes the local-harness plan in `IMPLEMENTATION_PLAN.md`
 (retained for context). Re-scoped by a 4-phase dual-voice review (2026-07-15):
@@ -20,37 +20,21 @@ both models 6/6 rejected the hosted Approach B on strategy; it had no owner.
    branch → push → `gh pr create`, first-timer fork bootstrapped) or by hand (manual
    fallback in CONTRIBUTING.md). The contributor never reports their own win/loss
    (forgeable) — only the artifact.
-3. A **GitHub Action** runs when a maintainer adds the `run-match` label to the PR
-   (the label is the trust boundary gating untrusted bot execution):
-   - **match job (untrusted):** executes the bot in the ATV Lightcycles Docker arena against
-     the stored roster with fixed seeds. Runs with read-only repository permission, no
-     write or Pages token, egress blocked, resource caps, and a non-root read-only
-     container. Writes only a schema-validated **result artifact** plus GitHub-context
-     metadata.
-   - **publish job (trusted, on `workflow_run`):** reads the artifact (never executes bot
-     code), first proves that the producer used the trusted `league.yml`, independently
-     derives the PR author/head/bot hash from GitHub, requires the artifact metadata to
-     match, recomputes ELO deterministically, and opens a run-scoped protected bot PR.
-     It never pushes the default branch directly and has no Pages scope; required checks,
-     CODEOWNERS, and branch protection remain authoritative.
-   - **deploy job (trusted, on `push` to the default branch — `league-deploy.yml`):** the
-     merged bot PR triggers a rebuild + GitHub Pages deploy from that exact settled head
-     (a `pages` concurrency group makes the newest deploy win, so the board never
-     regresses to a stale snapshot). A merged submission PR triggers the same path, so a
-     new entrant's row appears on merge.
-4. The **static leaderboard** publishes each row: rank · ELO · fingerprint chips.
+3. GitHub Actions performs **ordinary CI/security tests only**. It never executes a
+   submitted bot, harness, model call, arena, trial, or benchmark evaluation.
+4. A match is produced locally or by an independently approved runner outside GitHub
+   Actions. Its result enters `league/` only through a reviewed PR.
+5. `league-deploy.yml` runs only on a protected default-branch push and rebuilds GitHub
+   Pages from committed data. A `pages` concurrency group makes the newest deploy win.
+6. The **static leaderboard** publishes each row: rank · ELO · fingerprint chips.
 
-**Onboarding timing (by design):** the match-result bot PR is based on the latest protected
-default branch. A brand-new entrant's `submission.json` lands there only when the
-submission PR merges, while its independently verified match may land through a separate
-bot PR before or after that merge. Matches are never lost because history is recomputed
-from committed records; the entrant's row appears after both the submission and relevant
-match records have reached the default branch.
+A new entrant appears after its submission and any reviewed match records have both
+reached the default branch. Merging a submission does not execute or score it.
 
 ## Attribution (eng T13 — no client-side crypto)
 
 Attribution = **the PR author's GitHub identity**. There is no client-side signing key,
-no PKI, no `fingerprint.sig`. Under a serverless git+Action model the PR author is already
+no PKI, no `fingerprint.sig`. Under the git review model the PR author is already
 authenticated by GitHub; a client-generated signature would verify nothing the platform
 doesn't already prove and is security theater. Removed from scope.
 
@@ -60,12 +44,10 @@ the claimed harness produced the bot. Public match logs can help investigate a d
 but they do not repair that missing execution evidence. See "Scope of the claim" in the
 README.
 
-## Match-result trust boundary (what the Action does and does NOT prove)
+## Match-result trust boundary
 
-The untrusted bot runs in the sandboxed match job and its stdout becomes a result
-artifact. The trusted publish job **binds** that artifact to a workflow-issued match spec
-(`MatchSpec`: submitter = PR author's GitHub login, opponent = the roster anchor,
-match_id = the stable `github.run_id`) before anything enters permanent ELO history:
+GitHub Actions does not create match results. The local or approved external executor
+must bind a result to a `MatchSpec` before it is proposed as reviewed data:
 
 - **Identity is trusted, not bot-asserted.** An `ok` artifact's `player_a`/`player_b`
   must be exactly the two issued participants and its `match_id` the issued one. A bot
@@ -73,8 +55,7 @@ match_id = the stable `github.run_id`) before anything enters permanent ELO hist
   itself is **rebound to a `CRASH` forfeit against the submitter** — never trusted, never
   dropped (a dropped match skews everyone's ELO). Stored identities are canonicalized
   from the spec, so no bot-chosen string ever lands in an identity field. Enforced on
-  every push by `tests/test_match_binding.py` + the `league.yml` tripwire in
-  `tests/test_action_isolation.py`.
+  ordinary tests including `tests/test_match_binding.py`.
 - **Outcome is now ARENA-ADJUDICATED (trust boundary CLOSED).** The win/loss/draw is no
   longer bot-asserted. The arena image's ENTRYPOINT is a **trusted referee**
   (`python3 -m atv_bench.arena`) that runs a deterministic lightcycles/Tron game inside
@@ -88,33 +69,20 @@ match_id = the stable `github.run_id`) before anything enters permanent ELO hist
   `src/atv_bench/arena/`, and the proof artifacts in `docs/proof/item1-adjudication/`.
   Public match logs remain the fingerprint-honesty dispute mechanism (Premise 4).
 
-## Required repository configuration (the fork-PR governance layer)
+## Required repository configuration
 
-GitHub runs a `pull_request`-triggered workflow from the **PR's own copy** of the workflow
-file. That is fundamental to the fork-PR model and means a malicious submission PR could
-rewrite the `pr-path-guard` gate or the `league.yml` scorer to no-op itself. No workflow can
-close this alone (the PR can rewrite that workflow too), so the deployment MUST set:
+The repository MUST set:
 
 1. **Branch protection on the default branch** with *Require status checks to pass* →
    `hermetic` and `pr-path-guard` as **required** checks, *Require a pull request before
    merging*, *Require review from Code Owners*, and *Do not allow bypassing the above
    settings* (include administrators).
-2. **`.github/CODEOWNERS`** (in-repo) makes every trust-critical path — `.github/**` (the
-   workflows/gate/scorer), `league/matches.jsonl` (the durable store), and `src/**` (the
-   trusted publish/scoring code) — require an explicit maintainer approval. A PR that edits
-   any of them cannot merge without a code owner, which is exactly the manual inspection
-   GitHub's own fork-PR security guidance depends on. Community submission PRs (only
-   `league/submissions/<author>/{main.py,submission.json}`) match none of these and merge
-   through the automated gate alone.
-3. **Defense in depth in the trusted publisher.** `league-publish.yml` runs on
-   `workflow_run` from the default branch (a PR *cannot* rewrite it) and independently
-   re-resolves the triggering PR's author via the GitHub API, failing closed if the match
-   artifact's `submitter` does not match. So even a rewritten scorer that forges a
-   `match-meta.json` submitter is caught before it reaches permanent ELO history.
-
-Enforced/asserted by `tests/test_action_isolation.py`
-(`test_codeowners_protects_trust_critical_paths`,
-`test_publish_job_cross_checks_submitter_against_pr_author`) + `.github/CODEOWNERS`.
+2. **`.github/CODEOWNERS`** protects `.github/**`, `league/matches.jsonl`, `src/**`,
+   `arena/**`, `tests/**`, `pyproject.toml`, `uv.lock`, and the leaderboard schema.
+3. **Actions execution invariant:** only `ci.yml` and push-only `league-deploy.yml` may
+   exist. `tests/test_action_isolation.py` fails if an Actions-hosted scorer, harness,
+   model call, benchmark command, privileged event chain, or retired League workflow
+   reappears.
 
 ## Harness fingerprint (descriptive metadata, not attestation)
 

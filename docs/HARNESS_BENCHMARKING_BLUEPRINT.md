@@ -8,13 +8,14 @@ Audited branch: `codex/legitimacy-harness-generalization` at base commit `8f71ea
 
 ATV-Bench is currently two useful prototypes sharing one name:
 
-1. A security-conscious **community bot league** with a trusted Lightcycles referee.
+1. A **community bot league** whose execution is local/external and whose reviewed data
+   is published statically.
 2. A local **harness experiment runner** that can invoke arbitrary commands and compare generated bots.
 
 Neither is yet a credible general harness benchmark.
 
-The current production league executes a frozen submitted bot, not the claimed harness. The local
-comparison runner executes harnesses, but one harness invocation can produce many downstream games.
+The repository stores frozen submitted bots, but GitHub Actions does not execute them. The local
+comparison runner executes harnesses, and one harness invocation can produce many downstream games.
 Those games measure the strength of one generated bot; they are not independent observations of
 harness quality. The current sequential 1500/K=32 Elo and heuristic interval are suitable for an
 entertainment league, not a scientific ranking.
@@ -50,7 +51,7 @@ The current worktree is not based on the current public branch.
 - a `players.py` build-once cache;
 - proof artifacts and a showcase board.
 
-Current public-state verification:
+Public-state verification at the audited July 19 base snapshot:
 
 - GitHub CI on `107341de` passed **723 tests, 15 skipped, 12 deselected** using
   `pip install -e '.[dev]'`.
@@ -58,9 +59,9 @@ Current public-state verification:
   CodeClash and the documented `vendor/CodeClash` tree is absent.
 - CP1252 Windows terminals crash on `submit --help`, `doctor`, `harnesses`, and `games`
   because user-facing Unicode arrows/checkmarks are written without a fallback.
-- `main` has no branch protection or ruleset.
-- The documented `league-match` protected environment and `run-match` label do not exist.
-- GitHub Actions allows all actions and does not require SHA pinning.
+- `main` had no branch protection or ruleset.
+- The documented `league-match` protected environment and `run-match` label did not exist.
+- GitHub Actions allowed all actions and did not require SHA pinning.
 - There are no releases or tags.
 - The public leaderboard remains empty.
 
@@ -145,8 +146,8 @@ must be separate.
 | Existing component | Evidence | Disposition |
 |---|---|---|
 | Trusted Lightcycles engine/referee | `src/atv_bench/arena/` | Keep as one competitive task family |
-| Untrusted bot sandbox | `.github/workflows/league.yml` | Reuse patterns, not the workflow itself |
-| Privileged publish separation | `league.yml` + `league-publish.yml` | Keep for the league; mirror trust separation in eval control plane |
+| Local untrusted bot sandbox | `arena/` + local integration tests | Keep local; never invoke from GitHub Actions |
+| Static Pages publication | `.github/workflows/league-deploy.yml` | Keep push-only and data-only |
 | Leak-safe local config readers | `src/atv_bench/fingerprint/` | Keep as descriptive metadata only |
 | Client provenance binding | `fingerprint/provenance.py` | Keep as tamper evidence; do not call it attestation |
 | Generic command adapter | `adapters/contract.py` | Keep as development transport; replace with versioned protocol for scored runs |
@@ -183,23 +184,21 @@ Contributor machine
 GitHub pull request
              |
              v
-Untrusted match job
-  run one submitted bot
-  vs fixed byok-anchor
-  in locked-down Lightcycles container
+Ordinary CI/security tests only
+  never run bot/harness/model/evaluation
              |
              v
-Trusted publish workflow
-  bind identity/hash
-  append one match
-  sequential online Elo
-  static board
+Reviewed submission/result data on main
+             |
+             v
+Push-only Pages workflow
+  recompute static board from committed data
 ```
 
 The local path executes harnesses but is self-attested, host-coupled, and not paper-faithful: its
 `--rounds` setting does not cause fresh edit-feedback cycles because the player cache replays one
-artifact. The public path is a defensible bot league, but the harness remains outside the trusted
-execution and evidence boundary.
+artifact. The public repository path no longer executes bots at all; any League execution remains
+outside GitHub Actions and must enter the store as reviewed data.
 
 ## Current-state gap matrix
 
@@ -290,17 +289,11 @@ newline conversion. All non-empty saved patch files have a different SHA-256 tha
 Disposition: label the Phoenix/hve material an experimental case study, fix the evidence format, and
 never ingest it into an official benchmark.
 
-### 5. Written repository governance is not operational
+### 5. Actions must not become the benchmark runner
 
-The documentation requires protected checks, CODEOWNERS review, no bypass, and a protected
-`league-match` environment. Live settings have no branch protection/rulesets, no `league-match`
-environment, no `run-match` label, and no action-SHA requirement. CODEOWNERS without branch
-protection is advisory only.
-
-### 6. Publisher identity verification fails open
-
-The trusted publisher warns and continues when it cannot independently resolve exactly one PR author.
-This is incompatible with a privileged `workflow_run` consumer of less-trusted artifacts.
+Repository governance now treats Actions as test and static-publication infrastructure only.
+Submitted bots, harnesses, model calls, trials, and benchmark evaluations belong in explicit local
+or separately approved runners, never in pull-request or chained Actions workflows.
 
 ### 7. Evidence and UI claims drift
 
@@ -715,9 +708,8 @@ Infrastructure errors must not count as harness losses.
 - never trusts caller-supplied score, identity, model, or `verified` fields;
 - publishes benchmark version, exclusions, and uncertainty.
 
-The current `workflow_run` publisher must be hardened before reuse. It warns and proceeds when the
-PR author cannot be independently resolved. Official evaluation intake must fail closed on identity
-ambiguity and require an approved executor signature, run nonce, task digest, and attempt id.
+Official evaluation intake must fail closed on identity ambiguity and require an approved executor
+signature, run nonce, task digest, and attempt id. GitHub Actions is not that executor.
 
 ## Provenance and attestation
 
@@ -951,7 +943,7 @@ Primary personas:
 | Run smoke | Demo bot or custom script | `atv trial smoke --harness X --task Y` |
 | Run benchmark | Target-specific Python scripts | `atv eval run --suite pilot-v1 --harness X` |
 | Diagnose | Raw CLI output and local files | Typed failure + problem/cause/fix + artifact link |
-| Publish | PR-based bot league | Signed result bundle upload or official runner |
+| Publish | Reviewed data + push-only Pages | Signed result bundle upload or official runner |
 | Reproduce | Manual repo checkout | `atv eval reproduce <trial-id>` |
 
 Current estimated time-to-first-real-comparison: **30 to 90 minutes**.

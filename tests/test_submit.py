@@ -202,11 +202,12 @@ def _write_bot(tmp=[None]):
 
 
 def test_status_trail_is_honest_about_wiring():
-    """R4 (Reviewer B): status trail must be honest about how the PR is opened and that
-    the board updates via the label-triggered match + publish workflow (not 'on merge')."""
+    """The status trail must state that Actions never execute the submission."""
     from atv_bench.submit import submission_status_trail
     trail = " ".join(submission_status_trail(is_first_time=True)).lower()
-    assert "run-match" in trail or "label" in trail  # label-triggered, stated
+    assert "not executed" in trail
+    assert "local/external runner" in trail
+    assert "run-match" not in trail
     # honest about how the PR is opened: either the live gh path or the manual fallback
     assert "--live" in trail or "manually" in trail or "you open it" in trail
 

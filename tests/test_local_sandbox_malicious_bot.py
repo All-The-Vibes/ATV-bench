@@ -1,9 +1,11 @@
-"""Gated malicious-bot integration test (eng T8).
+"""Gated local malicious-bot sandbox integration test.
 
 Marked `integration`: needs Docker, not run on every push. Actually executes a
-hostile bot under the SAME container flags the league Action uses and asserts every
-attack is contained: no network egress, no fork-bomb, bounded memory, and a crash is
-scored (loss+flag), never a job failure that could taint the publish side.
+hostile bot under the local arena's hardened container policy and asserts every attack
+is contained: no network egress, no fork-bomb, bounded memory, and a read-only root.
+
+GitHub Actions never runs this test because integration tests are excluded from CI and
+the repository contains no Actions-hosted bot or harness execution workflow.
 
 Run: uv run pytest -m integration
 """
@@ -18,10 +20,7 @@ import pytest
 
 pytestmark = pytest.mark.integration
 
-# The exact sandbox flags from .github/workflows/league.yml (kept in sync by the
-# test_sandbox_flag_parity.py tripwire, which parses the real workflow and fails if these
-# drift). Memory cap is 512m to match the workflow — a parity claim is only true if the
-# test runs under the SAME limits production does.
+# Local sandbox policy for explicit developer-operated integration testing.
 SANDBOX_FLAGS = [
     "--rm", "--network", "none",
     "--memory", "512m", "--memory-swap", "512m",
@@ -30,9 +29,7 @@ SANDBOX_FLAGS = [
     "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 ]
 
-# The real arena image, built from the in-repo TRUSTED arena/Dockerfile — NOT a stock
-# python:3.12-alpine. The workflow builds this same image inside the match job and runs
-# the bot in it; the parity test asserts this ref matches. A local tag is used here.
+# The real local arena image, built from the in-repo trusted arena/Dockerfile.
 ARENA_IMAGE_REF = "atv-bench/arena"
 _ARENA_DOCKERFILE_DIR = Path(__file__).parent.parent / "arena"
 _ARENA_TEST_TAG = "atv-bench/arena:integration-test"
@@ -49,11 +46,9 @@ requires_docker = pytest.mark.skipif(not _docker_available(), reason="docker not
 
 @pytest.fixture(scope="module")
 def arena_image() -> str:
-    """Build the in-repo arena image once for the module (mirrors the workflow build).
+    """Build the in-repo arena image once for local integration testing.
 
-    The workflow's match job runs `docker build ./arena` and executes the bot in that
-    image. Building the SAME image here keeps the integration test's runtime identical to
-    production, not a stock base image. The arena ENTRYPOINT is the TRUSTED referee, which
+    The arena ENTRYPOINT is the trusted referee, which
     consumes the bot's stdout as MOVE tokens (so a bot's diagnostic prints never surface).
     These tests verify SANDBOX CONTAINMENT (network/RO/pids/secrets) — a property of the
     `docker run` flags, independent of adjudication — so they override the entrypoint back
@@ -76,7 +71,7 @@ def _run_bot(arena_image: str, tmp_path: Path, bot_src: str,
     # Override the entrypoint to a bare interpreter: these tests assert the SANDBOX
     # contains a hostile bot (its own stdout is the observation). The trusted referee
     # entrypoint would otherwise eat the bot's stdout as moves. Sandbox flags are the
-    # same ones production uses (kept in sync by test_sandbox_flag_parity.py).
+    # the explicit local sandbox policy above.
     cmd = [
         "docker", "run", *SANDBOX_FLAGS,
         "--entrypoint", "python3",

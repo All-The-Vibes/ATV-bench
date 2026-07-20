@@ -1,13 +1,10 @@
 """Bot-identity binding (santa re-review #5) — ok result bound to immutable bot bytes.
 
-PR #1 closed identity + match_id forgery, but the MatchSpec was (submitter, opponent,
-match_id) only. Nothing tied a scored `ok` result to the SPECIFIC submitted bytes on
-record (`bot_sha256` / PR head bytes), so a contributor could get one bot scored, then
-change the bot/fingerprint under the same identity — the leaderboard row and the scored
-match would no longer provably describe the same bytes.
+Identity + match_id binding alone does not tie a scored result to the specific bot bytes
+on record. MatchSpec therefore carries a trusted bot digest supplied by the explicit local
+or official executor.
 
-THE FIX: the trusted match job computes the sha256 of the exact bot bytes it mounted and
-issues it as part of the MatchSpec. On bind, the stored record is stamped with
+On bind, the stored record is stamped with
 `spec.bot_sha256` (from the trusted spec, never bot-asserted). If the bot ALSO reports a
 `bot_sha256` that disagrees with the trusted one, that is a forgery signal and binds to a
 CRASH forfeit — never trusts the bot's claim, never drops the match.
@@ -18,10 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
-
 import pytest
-import yaml
 
 from atv_bench.publish import (
     MatchSpec,
@@ -33,9 +27,6 @@ from atv_bench.store import LeagueStore
 
 _SHA = "b" * 64
 _OTHER_SHA = "c" * 64
-
-WORKFLOW = Path(__file__).parent.parent / ".github" / "workflows" / "league.yml"
-
 
 def _ok(pa="alice", pb="byok-anchor", outcome="a_wins", mid="run-1", **extra):
     return {"status": "ok", "player_a": pa, "player_b": pb, "outcome": outcome,
@@ -149,7 +140,7 @@ def test_ingest_sha_mismatch_scores_submitter_forfeit(tmp_path):
 
 
 def test_real_sha256_of_bytes_binds(tmp_path):
-    """Integration-flavoured: the sha computed from real bot bytes (as the match job would
+    """Integration-flavoured: the sha computed from real bot bytes (as an executor would
     compute it) is what the spec carries and what the record is stamped with."""
     bot_bytes = b"def move(state):\n    return 'up'\n"
     real_sha = hashlib.sha256(bot_bytes).hexdigest()
@@ -163,49 +154,3 @@ def test_real_sha256_of_bytes_binds(tmp_path):
                   spec=_spec(bot_sha256=real_sha))
     m = store.load_matches()[0]
     assert m["bot_sha256"] == real_sha
-
-
-# --- workflow wiring tripwire (runs on every push) ---
-
-@pytest.fixture(scope="module")
-def wf():
-    assert WORKFLOW.exists(), "league.yml must exist"
-    return yaml.safe_load(WORKFLOW.read_text())
-
-
-def test_match_job_exports_trusted_bot_sha256_output(wf):
-    """The match job must compute the sha of the bytes it mounted and hand it to the
-    trusted publish side. Post santa #7 this travels in the match-meta artifact (the
-    publish workflow_run event carries no PR context), authored from the extract step's
-    trusted output."""
-    match = wf["jobs"]["match"]
-    steps = match["steps"]
-    meta = next((s for s in steps if "match-meta.json" in str(s.get("run", ""))), None)
-    assert meta is not None, "match job must write the trusted match-meta.json"
-    assert "BOT_SHA256" in meta.get("env", {}), "match-meta must carry the bot_sha256"
-    assert "steps.extract.outputs.bot_sha256" in str(meta["env"]["BOT_SHA256"]), \
-        "bot_sha256 must come from the extract step that stages the bot bytes"
-
-
-def test_extract_step_computes_sha_of_staged_bytes(wf):
-    """The sha must be computed from the STAGED bot file (trusted bytes), not bot stdout."""
-    steps = wf["jobs"]["match"]["steps"]
-    extract = next(s for s in steps if s.get("id") == "extract")
-    run = extract["run"]
-    assert "sha256sum submission/main.py" in run, (
-        "extract step must sha256 the staged submission/main.py (the exact mounted bytes)"
-    )
-    assert "bot_sha256=" in run and "GITHUB_OUTPUT" in run, (
-        "extract step must write bot_sha256 to GITHUB_OUTPUT"
-    )
-
-
-def test_publish_ingest_receives_bot_sha256_from_meta():
-    """The trusted publish workflow must export ATV_BOT_SHA256 sourced from the match-meta
-    (loaded into steps.meta.outputs), so the scored record is bound to the submitted bytes."""
-    publish_wf = Path(__file__).parent.parent / ".github" / "workflows" / "league-publish.yml"
-    raw = publish_wf.read_text()
-    assert "ATV_BOT_SHA256:" in raw, "publish workflow must export ATV_BOT_SHA256"
-    assert "steps.meta.outputs.bot_sha256" in raw, (
-        "ATV_BOT_SHA256 must be sourced from the trusted match-meta artifact"
-    )

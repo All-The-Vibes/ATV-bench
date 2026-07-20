@@ -1,11 +1,10 @@
 # ATV-bench arena image.
 #
-# The league match job runs the submitted bot inside THIS image, under a locked-down
-# `docker run` (--network none, --read-only, --user 65534, --cap-drop ALL, caps on
-# cpu/mem/pids, per-container timeout). See .github/workflows/league.yml.
+# Explicit local integration runs may execute a submitted bot inside THIS image under a
+# locked-down `docker run` policy. GitHub Actions never builds or runs this image.
 #
-# The image is built from this in-repo, TRUSTED Dockerfile inside the match job and run
-# by a pinned local tag — never pulled from a mutable/unbuilt `:latest` registry ref.
+# The image is built explicitly from this in-repo trusted Dockerfile and run by a local
+# tag — never pulled from a mutable/unbuilt `:latest` registry ref.
 # That closes santa re-review finding #2 (the ok/scoring path was dead because
 # `atv-bench/arena:latest` had no producer).
 #
@@ -33,7 +32,7 @@ ENV PYTHONPATH=/opt/arena
 # is the conventional `nobody` uid present in the base image.
 USER 65534:65534
 
-# The bot is mounted read-only at /work by the match job (`-v $PWD/submission:/work:ro`).
+# The bot is mounted read-only at /work by a local runner (`-v $PWD/submission:/work:ro`).
 # It is NOT executed by the entrypoint — the trusted referee spawns it as a move-only
 # subprocess and adjudicates the game itself.
 WORKDIR /work

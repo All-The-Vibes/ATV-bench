@@ -37,28 +37,22 @@ runner identity, and task-clustered uncertainty before they can be official. See
 [`docs/PRODUCTS_AND_TRACKS.md`](docs/PRODUCTS_AND_TRACKS.md) and the
 [`benchmark blueprint`](docs/HARNESS_BENCHMARKING_BLUEPRINT.md).
 
-## How it works — Approach A (git + Action + static Pages)
+## How it works — reviewed data + static Pages
 
 ```
- you                                 this repo (GitHub)
- ┌───────────────────────┐  PR       ┌───────────────────────────────┐
- │ atv-bench submit       │ ────────▶ │ match job (untrusted):        │
- │  local match           │           │   perms:{}, no token,         │
- │  fingerprint probe     │           │   egress blocked → artifact   │
- │  (leak-scrubbed)       │           ├───────────────────────────────┤
- └───────────────────────┘           │ publish job (trusted):        │
-                                      │   reads artifact only,        │
-                                      │   recompute ELO, build board  │
-                                      └───────────────┬───────────────┘
-                                                      ▼
-                                       static leaderboard (GitHub Pages)
-                                       row = rank · ELO · fingerprint chips
+ local/offline execution                   this repo (GitHub)
+ ┌────────────────────────────┐  PR        ┌──────────────────────────────┐
+ │ bot/harness/model execution │ ─────────▶ │ reviewed submissions/results │
+ │ local or approved runner    │            │ ordinary tests only          │
+ └────────────────────────────┘            └──────────────┬───────────────┘
+                                                         │ protected push
+                                                         ▼
+                                          static leaderboard (GitHub Pages)
 ```
 
-The two-job split is load-bearing: the job that executes an untrusted, harness-built
-bot has **no** `GITHUB_TOKEN`, no Pages write, and blocked egress. The trusted publish
-job never executes bot code — it only reads a schema-validated result artifact, and runs
-in a fork-safe `workflow_run` context so external contributors work end-to-end.
+**GitHub Actions never executes submitted bots, harnesses, model calls, arenas, trials,
+or benchmark evaluations.** Actions run ordinary code/security tests and rebuild GitHub
+Pages after reviewed data reaches the protected default branch.
 
 ## The trust boundary
 
@@ -173,9 +167,8 @@ branch on them.
 ### Local benchmark workflow
 
 Harness benchmark execution is local-only. It is not triggered by GitHub Actions and
-does not upload or publish scores. The separate `league` Action may run a labeled
-submitted **bot** in the public ATV League arena; that is a League match, not a
-Controlled, Systems, or Resilience harness evaluation.
+does not upload or publish scores. League bot execution is local or performed by a
+separately approved runner outside GitHub Actions.
 
 ```bash
 atv-bench benchmark schema check ./schemas
@@ -285,15 +278,15 @@ Use `--no-open` to skip launching the browser.
    atv-bench submit ./main.py --game lightcycles \
      --identity <your-github-login> --dry-run --out submission.json
    ```
-6. **Open the PR** (live automation behind the preflight):
+6. **Open the PR**:
    ```bash
    atv-bench submit ./main.py --game lightcycles --live --identity <your-github-login>
    ```
 
-A maintainer adds the `run-match` label, the sandboxed arena plays your bot, the trusted
-referee adjudicates from real gameplay, Elo is recomputed, and your League row appears
-on the board. **That result describes this bot's League history, not general harness
-quality.**
+The PR contributes reviewed submission data only. GitHub Actions will validate the
+repository and may deploy Pages, but it will not run the bot. Match records must be
+produced locally or by an approved external runner and enter `league/` through a separate
+reviewed PR. **League history describes the bot, not general harness quality.**
 
 `fingerprint --dry-run` prints a three-section consent view — **Will publish**,
 **Scrubbed** (values the scanner withheld, proving it ran), **Unknown** (surfaces it

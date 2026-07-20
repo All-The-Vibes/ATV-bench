@@ -23,3 +23,9 @@
 /src/                           @All-The-Vibes/league-maintainers
 /pyproject.toml                 @All-The-Vibes/league-maintainers
 /leaderboard/schema.json        @All-The-Vibes/league-maintainers
+
+# Local evaluators, their executable image inputs, and the tests that enforce the
+# Actions-never-evaluate invariant are trust-critical even though Actions do not run them.
+/arena/                         @All-The-Vibes/league-maintainers
+/tests/                         @All-The-Vibes/league-maintainers
+/uv.lock                        @All-The-Vibes/league-maintainers

@@ -1,9 +1,9 @@
 # Contributing to ATV-bench Community League
 
-Two ways to contribute: **submit a harness** (enter the league) or **extend the
+Two ways to contribute: **submit a harness-built bot** (enter the league) or **extend the
 ecosystem** (add a harness adapter or a game). Both are validated locally before you
-open a PR — the validators reuse the exact leak-safe scanner and sandbox the
-production path uses, so nothing weaker runs in review.
+open a PR. GitHub Actions runs ordinary code/security checks only; it never executes a
+submitted bot, harness, model call, or benchmark evaluation.
 
 ## Prerequisites
 
@@ -112,45 +112,37 @@ to produce the record, then fork `All-The-Vibes/ATV-bench` and add exactly two f
   `--dry-run` (identity, game, bot_sha256, bot_filename, pr_url, logs_url, fingerprint).
   This is the exact nested shape the league store ingests (`LeagueStore.load_submissions`
   reads `league/submissions/<identity>/submission.json` and anchors identity to the
-  directory name); do not hand-edit the fingerprint — the publish job re-scans it for
+  directory name); do not hand-edit the fingerprint — the board builder re-scans it for
   secret-shaped values and drops any it finds.
 
-Then open a PR. A maintainer reviews it and adds the `run-match` label to trigger the
-match job. (The label is the trust boundary that gates untrusted bot execution, so only
-maintainers can add it.)
+Then open a PR. The PR is reviewed as data; no GitHub Actions job executes the bot.
 
 ## What happens after you submit
 
 ```
-PR opened → (first-timer: maintainer approves the run) → match job runs your bot
-          → result + trusted-meta artifacts → league-publish (workflow_run) recomputes
-            ELO, persists the store, and deploys the leaderboard
+PR opened → ordinary CI/security checks → reviewed submission merges
+          → an approved local/external runner may produce a match record
+          → reviewed result PR merges → Pages rebuilds from committed data
 ```
 
-First-time contributors need a maintainer to approve the workflow run before the
-untrusted bot executes (a GitHub environment gate). Expect a short wait the first time.
+Actions never execute submissions. A merged submission is not automatically scored.
 
 ## Seeing where you rank
 
-The live board is at **https://all-the-vibes.github.io/ATV-bench/** — every merged
-harness ranks there. Locally:
+The live board is at **https://all-the-vibes.github.io/ATV-bench/**. It reflects reviewed
+submission and match records committed to the default branch. Locally:
 
 ```bash
 atv-bench board --demo            # populated sample board, opens in your browser
 atv-bench board --store league    # render the real board from a checkout's store
 ```
 
-`board` renders the exact static site the Action publishes; the viewer is bundled in the
+`board` renders the exact static site the Pages workflow publishes; the viewer is bundled in the
 package, so `--demo` works from the installed CLI with no clone.
 
-**Fork-safe by design.** The match job that runs your bot holds no token (a fork PR's
-`GITHUB_TOKEN` is read-only anyway) and only uploads two artifacts: the bot's result and
-a *trusted* meta record (your GitHub identity + the run id + the bot's byte hash, built
-from GitHub context, never from bot output). A separate trusted workflow
-(`league-publish.yml`) then runs in the base repo on `workflow_run`, where it has the
-write access needed to persist the store and deploy Pages — without ever checking out or
-executing your PR code. This is what lets **fork** submissions score end-to-end, not just
-same-repo branches.
+**Fork-safe by construction.** Submission PRs are treated as source/data. CI has read-only
+repository permission, persists no checkout credentials, receives no repository secrets,
+and never invokes the submitted program. Pages deploys only from protected-branch pushes.
 
 ## Extending the ecosystem
 
@@ -197,14 +189,13 @@ reads *only* `config.toml["model"]` and never `[model_providers.*]` / `http_head
 ### Add a game
 
 Reuse a CodeClash arena. A game contribution needs: the arena, a bot entrypoint
-convention, and a `validate-game`-compatible shape check. Bots run in the locked-down
-sandbox (`--network none`, memory/pid/time caps, non-root read-only) — see
-`.github/workflows/league.yml` and `tests/test_action_malicious_bot.py`.
+convention, and a `validate-game`-compatible shape check. Local integration tests can run
+bots in the locked-down sandbox (`--network none`, memory/pid/time caps, non-root
+read-only) — see `tests/test_local_sandbox_malicious_bot.py`.
 
-## Security model (why the two-job Action matters)
+## Security model
 
-The match job that runs your untrusted bot has **no** `GITHUB_TOKEN`, no Pages write,
-and blocked egress; it writes only a result artifact. The trusted publish job never
-executes bot code. See `docs/COMMUNITY_LEAGUE.md`. The isolation is asserted on every
-push by `tests/test_action_isolation.py` and proven against real Docker by the gated
-`tests/test_action_malicious_bot.py`.
+GitHub Actions does not run the untrusted bot at all. `tests/test_action_isolation.py`
+asserts that the only workflows are ordinary CI and push-only Pages deployment. Local
+Docker containment remains covered by the gated
+`tests/test_local_sandbox_malicious_bot.py`.

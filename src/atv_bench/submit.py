@@ -214,17 +214,21 @@ def verify_submission_provenance(record: dict[str, Any],
 def submission_status_trail(is_first_time: bool) -> list[str]:
     """Copy for the submission status trail (devex T7).
 
-    Surfaces the first-timer manual-approval wait so the virality moment doesn't
-    read as silent latency.
+    Be explicit that GitHub Actions validates and publishes data but never executes the
+    submitted bot or any harness.
     """
     trail = [
         "1. PR opened against All-The-Vibes/ATV-bench (`atv-bench submit --live` opens it via gh, or open it manually)",
-        "2. A maintainer adds the `run-match` label → the sandboxed match job runs your bot",
-        "3. Publish workflow recomputes ELO from history → the static leaderboard updates",
+        "2. GitHub Actions runs ordinary CI/security checks only → your bot is not executed",
+        "3. After merge, an approved local/external runner may produce a separately reviewed match record",
+        "4. A protected-branch push rebuilds the static GitHub Pages leaderboard from committed data",
     ]
     if is_first_time:
-        trail.insert(2, "→ First-time contributor: a maintainer must also approve the "
-                        "workflow run before matches start (GitHub gate; expect a short wait).")
+        trail.insert(
+            2,
+            "→ First-time contributor: maintainer review may take longer, but no workflow "
+            "approval will execute your submission.",
+        )
     return trail
 
 
@@ -322,8 +326,9 @@ def open_submission_pr(*, record: dict[str, Any], bot_path: str, identity: str,
     (the pre-PR record can only carry a placeholder), then re-pushed so the merged record
     links to the actual PR.
 
-    The bot + submission.json are materialized at the IDENTITY-PINNED path the match job
-    reads — league/submissions/<identity>/ — so the opened PR is directly scoreable.
+    The bot + submission.json are materialized at the canonical identity-pinned path
+    league/submissions/<identity>/. GitHub Actions treats those files as data and never
+    executes them.
     """
     if not identity.strip():
         raise AtvError(ErrorCode.SUBMIT_PR_FAILED,
