@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from atv_bench.adapters.snapshot import capture_diff
+from atv_bench.containment import ContainmentError, contained_run
 
 
 class AdapterStatus(str, enum.Enum):
@@ -63,10 +64,28 @@ class AdapterRequest:
     # Optional isolated subprocess environment (per-run HOME/XDG). When None,
     # adapters inherit the host environment.
     env: Optional[dict] = None
+    # Section 2.5 containment. LLM adapters need egress to reach their provider
+    # API, so egress deny defaults OFF here. The subprocess still runs through the
+    # containment boundary (contained_run) with an RLIMIT_CPU backstop derived
+    # from the budget, so a runaway harness can't burn unbounded CPU. A cap-killed
+    # subprocess exits non-zero → classify_outcome scores it CRASH.
+    #
+    # mem_limit (RLIMIT_AS) and nproc_limit (RLIMIT_NPROC) default OFF for the LLM
+    # CLIs: those CLIs are Node/V8, which reserve an enormous *virtual* address
+    # space up front (any finite RLIMIT_AS kills node) and spawn worker threads
+    # (RLIMIT_NPROC is per-real-uid across the whole host, so an absolute cap can
+    # starve thread creation). Both caps stay available opt-in — e.g. for captured
+    # pure-Python bot execution, where they're safe and meaningful.
+    deny_egress: bool = False
+    mem_limit: Optional[int] = None
+    nproc_limit: Optional[int] = None
 
     def to_dict(self) -> dict[str, Any]:
         d = dataclasses.asdict(self)
         d.pop("env", None)
+        # Containment knobs are runtime-only, not part of the design schema.
+        for k in ("deny_egress", "mem_limit", "nproc_limit"):
+            d.pop(k, None)
         return d
 
 
@@ -167,6 +186,37 @@ def classify_outcome(
     return AdapterStatus.ERROR
 
 
+def _run_harness_subprocess(
+    cmd: list[str],
+    req: "AdapterRequest",
+    *,
+    env: Optional[dict],
+) -> subprocess.CompletedProcess:
+    """Run an adapter CLI inside the Section 2.5 containment boundary.
+
+    Resource caps (RLIMIT_AS/NPROC/CPU) and optional egress deny are applied to
+    the SAME subprocess that already carries the isolated HOME env (Section 2), so
+    a poisoned harness can't fork/memory-bomb or exfiltrate. A cap-killed child
+    exits non-zero -> derive CRASH via ``classify_outcome``.
+
+    Raises ``subprocess.TimeoutExpired`` (translated from ``ContainmentError``) so
+    each adapter's existing timeout handling continues to score TIMEOUT.
+    """
+    try:
+        return contained_run(
+            cmd,
+            env=env,
+            cwd=req.repo_path,
+            deny_egress=req.deny_egress,
+            mem_limit=req.mem_limit,
+            nproc_limit=req.nproc_limit,
+            cpu_limit=req.budget.max_seconds,
+            timeout=req.budget.max_seconds,
+        )
+    except ContainmentError as exc:
+        raise subprocess.TimeoutExpired(cmd, req.budget.max_seconds) from exc
+
+
 def parse_copilot_model(jsonl: str) -> str:
     """Parse the REAL model Copilot invoked from its `--output-format json` (JSONL).
 
@@ -247,12 +297,9 @@ class ClaudeCodeAdapter(HarnessAdapter):
         if req.model and req.model != "auto":
             cmd += ["--model", req.model]
         try:
-            proc = subprocess.run(
+            proc = _run_harness_subprocess(
                 cmd,
-                cwd=req.repo_path,
-                capture_output=True,
-                text=True,
-                timeout=req.budget.max_seconds,
+                req,
                 env=req.env if req.env is not None else None,
             )
         except subprocess.TimeoutExpired:
@@ -329,14 +376,7 @@ class CopilotCliAdapter(HarnessAdapter):
             cmd += ["--model", req.model]
         env = dict(req.env) if req.env is not None else dict(os.environ)
         try:
-            proc = subprocess.run(
-                cmd,
-                cwd=req.repo_path,
-                capture_output=True,
-                text=True,
-                timeout=req.budget.max_seconds,
-                env=env,
-            )
+            proc = _run_harness_subprocess(cmd, req, env=env)
         except subprocess.TimeoutExpired:
             return AdapterResult(
                 status=AdapterStatus.TIMEOUT,
