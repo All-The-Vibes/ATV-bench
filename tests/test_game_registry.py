@@ -91,3 +91,35 @@ def test_enumerate_codeclash_games() -> None:
     assert set(dirs) == set(CODECLASH_ARENAS), (
         f"arena dir set mismatch: {set(dirs) ^ set(CODECLASH_ARENAS)}"
     )
+
+
+# --- Wave A: the census's five `supported` arenas must be the live set. ---------------
+
+WAVE_A_LIVE = ["ants", "dummy", "gomoku", "lightcycles", "paintvolley"]
+
+
+def test_supported_census_arenas_are_live() -> None:
+    """Every arena the census marks `supported` must be live in games.py, and vice
+    versa — the live set is exactly the census's supported set."""
+    from atv_bench.games import live_keys
+
+    root = _repo_root()
+    text = (root / "docs" / "arenas.md").read_text().lower()
+
+    supported = []
+    for arena in CODECLASH_ARENAS:
+        row = next(
+            (ln for ln in text.splitlines()
+             if re.search(rf"\|\s*{re.escape(arena)}\s*\|", ln)),
+            None,
+        )
+        if row and re.search(r"\|\s*supported\s*\|", row):
+            supported.append(arena)
+
+    assert set(supported) == set(WAVE_A_LIVE), (
+        f"census supported set drifted: {set(supported) ^ set(WAVE_A_LIVE)}"
+    )
+    assert set(live_keys()) == set(WAVE_A_LIVE), (
+        f"live_keys() must equal census supported set; "
+        f"diff: {set(live_keys()) ^ set(WAVE_A_LIVE)}"
+    )

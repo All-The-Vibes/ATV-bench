@@ -37,6 +37,38 @@ GAMES: tuple[Game, ...] = (
         "trusted referee adjudicates from board geometry, not the bot's word.",
     ),
     Game(
+        key="ants",
+        title="Ants",
+        live=True,
+        entrypoint="main.py",
+        summary="Fog-of-war ant colony skirmish. Your long-lived bot emits a list of "
+        "moves each turn; the trusted arena adjudicates collisions and scoring.",
+    ),
+    Game(
+        key="dummy",
+        title="Dummy (smoke arena)",
+        live=True,
+        entrypoint="main.py",
+        summary="Minimal smoke arena used to validate the harness plumbing end-to-end; "
+        "no game-specific bot contract.",
+    ),
+    Game(
+        key="gomoku",
+        title="Gomoku (five-in-a-row)",
+        live=True,
+        entrypoint="main.py",
+        summary="Two-player 15x15 five-in-a-row. Your bot returns one move per turn; the "
+        "trusted arena adjudicates from board state, not the bot's word.",
+    ),
+    Game(
+        key="paintvolley",
+        title="PaintVolley",
+        live=True,
+        entrypoint="main.py",
+        summary="Paint-splattering volleyball. Your bot emits one action per turn; the "
+        "trusted arena adjudicates physics and scoring.",
+    ),
+    Game(
         key="battlesnake",
         title="Battlesnake",
         live=False,
