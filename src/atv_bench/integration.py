@@ -18,6 +18,7 @@ from pathlib import Path
 
 from atv_bench.adapters.contract import ADAPTERS
 from atv_bench.codeclash_env import import_codeclash
+from atv_bench.isolation import isolated_home
 from atv_bench.players import HarnessPlayerCore
 
 # Harness keys ATV-bench can BUILD a bot with (fingerprint-only harnesses excluded).
@@ -25,6 +26,54 @@ BUILDER_HARNESSES = tuple(ADAPTERS.keys())
 
 _original_get_agent = None  # set on first register(), restored on unregister()
 _player_class_cache: dict[str, type] = {}
+# Per-harness config root (seed for the isolated HOME), threaded from run_live_match.
+_harness_homes: dict[str, Path | None] = {}
+
+
+def set_harness_homes(homes: dict[str, Path | None] | None) -> None:
+    """Record the per-harness config roots used to seed each isolated HOME.
+
+    Called by run_live_match before the tournament runs. Keys are harness/adapter
+    keys (claude-code / copilot-cli); values are the cloned config root (or None to
+    auto-detect / fall back to no seed).
+    """
+    _harness_homes.clear()
+    if homes:
+        _harness_homes.update(homes)
+
+
+def run_isolated_edit_turn(
+    *,
+    adapter,
+    container,
+    home: Path | None,
+    goal: str,
+    model: str,
+    player_id: str | None,
+    game: str,
+    prompt_version: str,
+    bot_file: str,
+):
+    """Production seam: run ONE build under a fresh per-run isolated HOME.
+
+    Enters ``isolated_home(home)`` for the WHOLE build so the adapter subprocess runs
+    under the per-run temp HOME/XDG dirs (never the shared host $HOME), then threads
+    the yielded env dict into HarnessPlayerCore(env=...). The context manager keeps the
+    isolated dir alive for the entire edit_turn and cleans it up afterwards.
+    """
+    with isolated_home(home) as env:
+        core = HarnessPlayerCore(
+            adapter=adapter,
+            container=container,
+            bot_file=bot_file,
+            goal=goal,
+            model=model,
+            player_id=player_id,
+            game=game,
+            prompt_version=prompt_version,
+            env=env,
+        )
+        return core.edit_turn()
 
 
 def resolve_player_class(agent_key: str):
@@ -68,6 +117,7 @@ def unregister() -> None:
     cc = import_codeclash()
     cc.pvp.get_agent = _original_get_agent
     _original_get_agent = None
+    _harness_homes.clear()
 
 
 def _make_harness_player(adapter_key: str):
@@ -78,17 +128,21 @@ def _make_harness_player(adapter_key: str):
     class HarnessPlayer(cc.Player):
         def run(self) -> None:
             cfg = self.config.get("config", {}) if isinstance(self.config, dict) else {}
-            core = HarnessPlayerCore(
+            # Seed the isolated HOME from this harness's config root (threaded via
+            # set_harness_homes before the tournament runs). Isolation is applied in
+            # the production seam so the adapter subprocess never inherits host $HOME.
+            home = _harness_homes.get(adapter_key)
+            run_isolated_edit_turn(
                 adapter=adapter_cls(),
                 container=_DockerTreeContainer(self.environment, self._workdir()),
-                bot_file=cfg.get("bot_file", "main.py"),
+                home=home,
                 goal=self.game_context.prompts.get("edit", "Improve the bot."),
                 model=cfg.get("model", "auto"),
                 player_id=self.name,
                 game=self.game_context.name,
                 prompt_version=self.game_context.prompts.get("_version", "edit@1"),
+                bot_file=cfg.get("bot_file", "main.py"),
             )
-            core.edit_turn()
 
         def _workdir(self) -> str:
             wd = getattr(self.game_context, "working_dir", None)

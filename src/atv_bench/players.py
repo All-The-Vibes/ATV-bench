@@ -61,6 +61,7 @@ class HarnessPlayerCore:
         player_id: str | None = None,
         game: str = "lightcycles",
         prompt_version: str = "edit@1",
+        env: dict | None = None,
     ) -> None:
         self.adapter = adapter
         self.container = container
@@ -71,6 +72,7 @@ class HarnessPlayerCore:
         self.player_id = player_id
         self.game = game
         self.prompt_version = prompt_version
+        self.env = env
         self.last_result: AdapterResult | None = None
         self.last_diff: str = ""
 
@@ -102,7 +104,7 @@ class HarnessPlayerCore:
 
             req = AdapterRequest(
                 repo_path=str(repo), goal=self.goal, model=self.model,
-                budget=self.budget, bot_file=self.bot_file,
+                budget=self.budget, bot_file=self.bot_file, env=self.env,
             )
             result = self.adapter.run(req)
             diff = capture_diff(repo, base)  # provenance/display only

@@ -19,7 +19,7 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from atv_bench.adapters.snapshot import capture_diff
 
@@ -60,9 +60,13 @@ class AdapterRequest:
     model: str = "auto"
     budget: Budget = dataclasses.field(default_factory=Budget)
     bot_file: str = "bot.py"
+    # Optional isolated subprocess environment (per-run HOME/XDG). When None,
+    # adapters inherit the host environment.
+    env: Optional[dict] = None
 
     def to_dict(self) -> dict[str, Any]:
         d = dataclasses.asdict(self)
+        d.pop("env", None)
         return d
 
 
@@ -249,6 +253,7 @@ class ClaudeCodeAdapter(HarnessAdapter):
                 capture_output=True,
                 text=True,
                 timeout=req.budget.max_seconds,
+                env=req.env if req.env is not None else None,
             )
         except subprocess.TimeoutExpired:
             return AdapterResult(
@@ -322,7 +327,7 @@ class CopilotCliAdapter(HarnessAdapter):
         ]
         if req.model and req.model != "auto":
             cmd += ["--model", req.model]
-        env = dict(os.environ)
+        env = dict(req.env) if req.env is not None else dict(os.environ)
         try:
             proc = subprocess.run(
                 cmd,

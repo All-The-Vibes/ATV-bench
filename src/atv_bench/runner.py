@@ -172,11 +172,17 @@ def run_live_match(cfg: RunConfig, *, output_dir: Path,
     """
     from atv_bench import integration
     from atv_bench.codeclash_env import import_codeclash
+    from atv_bench.integration import BUILDER_HARNESSES
+    from atv_bench.isolation import aa_lock
+    from contextlib import nullcontext
 
     cfg.validate()
     preflight_or_raise(cfg)
     import_codeclash()
     integration.register()
+    # Thread the per-harness config roots so each isolated HOME is seeded from the
+    # right harness config (skills/plugins/MCP) instead of the shared host $HOME.
+    integration.set_harness_homes(homes)
     try:
         pvp_config = build_pvp_config(
             game=cfg.game, a=cfg.a, b=cfg.b, model=cfg.model, rounds=cfg.rounds)
@@ -184,7 +190,13 @@ def run_live_match(cfg: RunConfig, *, output_dir: Path,
 
         output_dir.mkdir(parents=True, exist_ok=True)
         tournament = PvpTournament(pvp_config, output_dir=output_dir)
-        tournament.run()
+        # A/A self-play: both sides drive the SAME builder harness. Serialize on a
+        # per-(game, pair) filelock so two concurrent same-harness runs cannot
+        # cross-contaminate a shared profile (per the isolation plan).
+        is_aa = cfg.a == cfg.b and cfg.a in BUILDER_HARNESSES
+        guard = aa_lock(cfg.game, (cfg.a, cfg.b)) if is_aa else nullcontext()
+        with guard:
+            tournament.run()
         metadata = tournament.get_metadata()
         return {"metadata": metadata, "pvp_config": pvp_config}
     finally:
