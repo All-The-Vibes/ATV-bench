@@ -38,6 +38,12 @@ from atv_bench.security.gateway import (
     RouteDefinition,
     UsageSummary,
 )
+from atv_bench.security.openai_responses_backend import (
+    OpenAIResponsesBackend,
+    OpenAIResponsesBackendConfig,
+    OpenAIResponsesBackendError,
+    OpenAIResponsesBackendErrorCode,
+)
 from atv_bench.security.responses_gateway import (
     ResponsesBackend,
     ResponsesBackendError,
@@ -90,6 +96,10 @@ __all__ = [
     "NormalizedModelRequest",
     "OfficialBindings",
     "OfficialTrustPolicy",
+    "OpenAIResponsesBackend",
+    "OpenAIResponsesBackendConfig",
+    "OpenAIResponsesBackendError",
+    "OpenAIResponsesBackendErrorCode",
     "OpaqueTrialHandle",
     "ProviderCallError",
     "ProviderResponse",
