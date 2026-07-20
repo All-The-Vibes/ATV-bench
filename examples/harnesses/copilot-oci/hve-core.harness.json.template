@@ -1,0 +1,59 @@
+{
+  "schema": "atv.harness/v1",
+  "id": "microsoft-hve-core-copilot-v1",
+  "version": "3.3.101",
+  "display_name": "Microsoft hve-core via GitHub Copilot CLI",
+  "runtime": {
+    "kind": "oci",
+    "image": "ghcr.io/all-the-vibes/atv-phoenix-hve-common@sha256:__IMAGE_DIGEST__",
+    "entrypoint": [
+      "/opt/atv/bin/protocol-wrapper",
+      "--harness",
+      "hve-core"
+    ],
+    "working_directory": "/workspace"
+  },
+  "protocol": {
+    "minimum_version": 1,
+    "maximum_version": 1,
+    "input": "stdin-json",
+    "output": "stdout-jsonl"
+  },
+  "capabilities": {
+    "workspace_edit": true,
+    "subagents": true,
+    "resumable": false,
+    "browser": false,
+    "model_events": true,
+    "tool_events": true,
+    "usage_events": true,
+    "checkpoint_events": false,
+    "model_selection": "multiple",
+    "token_usage_reporting": "reported",
+    "call_usage_reporting": "reported",
+    "cost_usage_reporting": "unsupported"
+  },
+  "security": {
+    "env_allowlist": [
+      "ATV_MODEL_GATEWAY_HANDLE"
+    ],
+    "network_requirement": "model-gateway-only",
+    "writable_paths": [
+      "/workspace",
+      "/artifacts",
+      "/tmp"
+    ],
+    "requires_tty": false
+  },
+  "metadata": {
+    "source": {
+      "repository": "https://github.com/microsoft/hve-core",
+      "revision": "5c15a03c78da2408527693e0fc3b3e387bf99cb2",
+      "tree_digest": {
+        "algorithm": "sha256",
+        "value": "0fdbcd46102fb708038bdcd6ea9ed8ae5a4b94e294f18848a283e5023102b7c0"
+      }
+    },
+    "license": "MIT"
+  }
+}

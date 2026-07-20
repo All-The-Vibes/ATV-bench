@@ -1,0 +1,59 @@
+{
+  "schema": "atv.harness/v1",
+  "id": "atv-phoenix-copilot-v1",
+  "version": "0.4.0",
+  "display_name": "ATV-Phoenix via GitHub Copilot CLI",
+  "runtime": {
+    "kind": "oci",
+    "image": "ghcr.io/all-the-vibes/atv-phoenix-hve-common@sha256:__IMAGE_DIGEST__",
+    "entrypoint": [
+      "/opt/atv/bin/protocol-wrapper",
+      "--harness",
+      "phoenix"
+    ],
+    "working_directory": "/workspace"
+  },
+  "protocol": {
+    "minimum_version": 1,
+    "maximum_version": 1,
+    "input": "stdin-json",
+    "output": "stdout-jsonl"
+  },
+  "capabilities": {
+    "workspace_edit": true,
+    "subagents": false,
+    "resumable": false,
+    "browser": false,
+    "model_events": true,
+    "tool_events": true,
+    "usage_events": true,
+    "checkpoint_events": false,
+    "model_selection": "single",
+    "token_usage_reporting": "reported",
+    "call_usage_reporting": "reported",
+    "cost_usage_reporting": "unsupported"
+  },
+  "security": {
+    "env_allowlist": [
+      "ATV_MODEL_GATEWAY_HANDLE"
+    ],
+    "network_requirement": "model-gateway-only",
+    "writable_paths": [
+      "/workspace",
+      "/artifacts",
+      "/tmp"
+    ],
+    "requires_tty": false
+  },
+  "metadata": {
+    "source": {
+      "repository": "https://github.com/All-The-Vibes/ATV-Phoenix",
+      "revision": "233e8e1e968bbc0b1dc446d7830efa82489bf118",
+      "tree_digest": {
+        "algorithm": "sha256",
+        "value": "86c52f63c8a8e692995ef36c4737e1cf9c2568adf2593d0bf9362469ab80560f"
+      }
+    },
+    "license": "MIT"
+  }
+}
