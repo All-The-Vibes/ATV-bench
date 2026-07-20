@@ -458,7 +458,7 @@ def test_symlink_anywhere_in_package_is_rejected(tmp_path):
         os.symlink(tmp_path / "outside", link)
     except OSError:
         pytest.skip("symlink creation is unavailable on this Windows host")
-    with pytest.raises(TaskPackageError, match="links|junctions"):
+    with pytest.raises(TaskPackageError, match="symlink|junction"):
         TaskPackage.load(copy)
 
 

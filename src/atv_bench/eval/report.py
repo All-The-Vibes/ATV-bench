@@ -62,11 +62,10 @@ def _repo_root() -> Path:
 
 
 def report_schema_path() -> Path:
-    candidates = (_repo_root() / "reports" / "schema.json", Path.cwd() / "reports" / "schema.json")
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate
-    raise ReportError("reports/schema.json was not found")
+    candidate = Path(__file__).with_name("report.schema.json")
+    if candidate.is_file():
+        return candidate
+    raise ReportError("packaged evaluation report schema was not found")
 
 
 def _schema() -> dict[str, Any]:
@@ -754,13 +753,9 @@ def report_json_bytes(report: Mapping[str, Any]) -> bytes:
 
 
 def _viewer_template_path() -> Path:
-    candidates = (
-        Path(__file__).resolve().parents[1] / "view" / "eval.html",
-        _repo_root() / "reports" / "view" / "index.html",
-    )
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate
+    candidate = Path(__file__).resolve().parents[1] / "view" / "eval.html"
+    if candidate.is_file():
+        return candidate
     raise ReportError("evaluation report viewer template was not found")
 
 

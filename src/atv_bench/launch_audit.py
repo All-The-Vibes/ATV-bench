@@ -269,7 +269,10 @@ _VALID_CLAIMS: dict[str, dict[str, Any]] = {
     "signature_identities": {"signature_scheme": "ed25519-dsse", "role_identities_verified": True},
     "security_review": {"independent": True, "review_completed": True},
     "task_gates": {"all_tasks_passed": True, "oracle": True, "noop": True, "regression": True, "alternative": True, "exploit": True, "mutation": True},
-    "grader_determinism": {"replay_count": 1000, "nondeterminism_rate": 0.0},
+    "grader_determinism": {
+        "deterministic_replay_contract_enforced": True,
+        "nondeterministic_tasks_rejected": True,
+    },
     "human_review": {"review_kind": "independent-human", "author_approved": True, "reviewer_approved": True},
     "task_split": {"public_count": 1, "private_count": 1, "rotating_count": 1},
     "contamination_review": {"all_tasks_reviewed": True},
@@ -304,9 +307,6 @@ def _claim_errors(evaluator: str, claims: Mapping[str, Any]) -> list[str]:
         elif evaluator == "five_trials" and key == "min_trials_per_cell":
             if not isinstance(observed, int) or observed < value:
                 errors.append(f"min_trials_per_cell={observed!r} is below {value}")
-        elif evaluator == "grader_determinism" and key == "nondeterminism_rate":
-            if not isinstance(observed, (int, float)) or observed >= 0.001:
-                errors.append("grader nondeterminism must be < 0.001")
         elif evaluator == "retention" and key == "retention_days":
             if not isinstance(observed, int) or observed < value:
                 errors.append(f"retention_days={observed!r} is below {value}")

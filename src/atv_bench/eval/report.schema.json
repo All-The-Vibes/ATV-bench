@@ -1,0 +1,677 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:atv-bench:schema:atv.eval-report:v1",
+  "title": "ATV-Bench evaluation report schema v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "report_version",
+    "generated_at",
+    "versions",
+    "integrity",
+    "tracks",
+    "global_conclusion",
+    "evidence",
+    "warnings"
+  ],
+  "properties": {
+    "schema": {
+      "const": "atv.eval-report/v1"
+    },
+    "report_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generated_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "versions": {
+      "$ref": "#/$defs/versions"
+    },
+    "integrity": {
+      "$ref": "#/$defs/integrity"
+    },
+    "tracks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "controlled",
+        "systems",
+        "resilience"
+      ],
+      "properties": {
+        "controlled": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/track"
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "controlled"
+                }
+              }
+            }
+          ]
+        },
+        "systems": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/track"
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "systems"
+                }
+              }
+            }
+          ]
+        },
+        "resilience": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/track"
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "resilience"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "global_conclusion": {
+      "$ref": "#/$defs/globalConclusion"
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/evidence"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "$defs": {
+    "nullableNumber": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "versionIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "manifest_digest"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "manifest_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "versions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "benchmark_releases",
+        "protocol_versions",
+        "task_sets",
+        "runners",
+        "report"
+      ],
+      "properties": {
+        "benchmark_releases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "protocol_versions": {
+          "type": "array",
+          "items": {
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "task_sets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/versionIdentity"
+          }
+        },
+        "runners": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/versionIdentity"
+          }
+        },
+        "report": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "integrityState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "note"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "minLength": 1
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contamination",
+        "retraction"
+      ],
+      "properties": {
+        "contamination": {
+          "$ref": "#/$defs/integrityState"
+        },
+        "retraction": {
+          "$ref": "#/$defs/integrityState"
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "trial_count",
+        "task_success_rate",
+        "graded_result_rate",
+        "reliability_rate",
+        "infrastructure_error_rate",
+        "crash_rate",
+        "timeout_rate",
+        "mean_score",
+        "mean_cost_microusd",
+        "mean_duration_ms"
+      ],
+      "properties": {
+        "trial_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "task_success_rate": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "graded_result_rate": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "reliability_rate": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "infrastructure_error_rate": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "crash_rate": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "timeout_rate": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "mean_score": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "mean_cost_microusd": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "mean_duration_ms": {
+          "$ref": "#/$defs/nullableNumber"
+        }
+      }
+    },
+    "metricRow": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/metrics"
+        },
+        {
+          "type": "object",
+          "required": [
+            "key"
+          ],
+          "properties": {
+            "key": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "breakdownSide": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tasks",
+        "categories",
+        "model_policies",
+        "budgets"
+      ],
+      "properties": {
+        "tasks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/metricRow"
+          }
+        },
+        "categories": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/metricRow"
+          }
+        },
+        "model_policies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/metricRow"
+          }
+        },
+        "budgets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/metricRow"
+          }
+        }
+      }
+    },
+    "track": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "label",
+        "interpretation",
+        "official_results",
+        "unofficial_results",
+        "metrics",
+        "breakdowns",
+        "paired_effects",
+        "analysis_summaries",
+        "infrastructure_exclusions",
+        "failure_taxonomy",
+        "quality_gate_failures"
+      ],
+      "properties": {
+        "id": {
+          "enum": [
+            "controlled",
+            "systems",
+            "resilience"
+          ]
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "interpretation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "official_results": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "unofficial_results": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "metrics": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "official",
+            "unofficial"
+          ],
+          "properties": {
+            "official": {
+              "$ref": "#/$defs/metrics"
+            },
+            "unofficial": {
+              "$ref": "#/$defs/metrics"
+            }
+          }
+        },
+        "breakdowns": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "official",
+            "unofficial"
+          ],
+          "properties": {
+            "official": {
+              "$ref": "#/$defs/breakdownSide"
+            },
+            "unofficial": {
+              "$ref": "#/$defs/breakdownSide"
+            }
+          }
+        },
+        "paired_effects": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "analysis_summaries": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "infrastructure_exclusions": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "failure_taxonomy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "official",
+            "unofficial"
+          ],
+          "properties": {
+            "official": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "unofficial": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "quality_gate_failures": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "gateFailure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "policyDirection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model_policy",
+        "policy_digest",
+        "decision",
+        "winner",
+        "publication_eligible"
+      ],
+      "properties": {
+        "model_policy": {
+          "type": "string"
+        },
+        "policy_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "decision": {
+          "type": "string"
+        },
+        "winner": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "publication_eligible": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ranking": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rank",
+        "harness_id"
+      ],
+      "properties": {
+        "rank": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "harness_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "globalConclusion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "winner",
+        "language",
+        "publication_eligible",
+        "numeric_rankings",
+        "gate_failures",
+        "model_policy_directions"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "no-data",
+            "category-only",
+            "winner",
+            "equivalent",
+            "inconclusive"
+          ]
+        },
+        "winner": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "language": {
+          "type": "string",
+          "minLength": 1
+        },
+        "publication_eligible": {
+          "type": "boolean"
+        },
+        "numeric_rankings": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ranking"
+              }
+            }
+          ]
+        },
+        "gate_failures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/gateFailure"
+          }
+        },
+        "model_policy_directions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/policyDirection"
+          }
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_id",
+        "bundle_digest",
+        "bundle_url",
+        "trial_id",
+        "attempt_id",
+        "trust_tier",
+        "official",
+        "rankable",
+        "track",
+        "status",
+        "task_id",
+        "task_version",
+        "task_category",
+        "harness_id",
+        "harness_version",
+        "model_policy_key",
+        "budget_id",
+        "budget_digest",
+        "benchmark_release",
+        "protocol_version",
+        "analysis_digest"
+      ],
+      "properties": {
+        "evidence_id": {
+          "type": "string"
+        },
+        "bundle_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "bundle_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "trial_id": {
+          "type": "string"
+        },
+        "attempt_id": {
+          "type": "string"
+        },
+        "trust_tier": {
+          "type": "string"
+        },
+        "official": {
+          "type": "boolean"
+        },
+        "rankable": {
+          "type": "boolean"
+        },
+        "track": {
+          "enum": [
+            "controlled",
+            "systems",
+            "resilience"
+          ]
+        },
+        "status": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "task_version": {
+          "type": "string"
+        },
+        "task_category": {
+          "type": "string"
+        },
+        "harness_id": {
+          "type": "string"
+        },
+        "harness_version": {
+          "type": "string"
+        },
+        "model_policy_key": {
+          "type": "string"
+        },
+        "budget_id": {
+          "type": "string"
+        },
+        "budget_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "benchmark_release": {
+          "type": "string"
+        },
+        "protocol_version": {
+          "type": [
+            "integer",
+            "string"
+          ]
+        },
+        "analysis_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    }
+  }
+}

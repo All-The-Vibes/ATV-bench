@@ -43,6 +43,8 @@ packages = ["src/atv_bench"]
 [tool.hatch.build.targets.wheel.force-include]
 "src/atv_bench/view/index.html" = "atv_bench/view/index.html"
 "src/atv_bench/view/live.html" = "atv_bench/view/live.html"
+"src/atv_bench/view/eval.html" = "atv_bench/view/eval.html"
+"src/atv_bench/eval/report.schema.json" = "atv_bench/eval/report.schema.json"
 
 [tool.hatch.build.targets.sdist]
 # Ship installable source and licensing metadata only. Benchmark tasks, real evaluation

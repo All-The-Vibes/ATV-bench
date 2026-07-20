@@ -98,6 +98,8 @@ def test_built_sdist_is_source_only_bounded_and_free_of_local_evidence(tmp_path)
     assert "NOTICE" in relative
     assert "src/atv_bench/__init__.py" in relative
     assert "src/atv_bench/view/index.html" in relative
+    assert "src/atv_bench/view/eval.html" in relative
+    assert "src/atv_bench/eval/report.schema.json" in relative
 
     top_level = {
         PurePosixPath(path).parts[0]
@@ -134,6 +136,8 @@ def test_built_sdist_can_produce_an_importable_clean_wheel(tmp_path):
         names = package.namelist()
     assert "atv_bench/__init__.py" in names
     assert "atv_bench/view/index.html" in names
+    assert "atv_bench/view/eval.html" in names
+    assert "atv_bench/eval/report.schema.json" in names
     assert not any(
         PurePosixPath(name).parts
         and PurePosixPath(name).parts[0] in FORBIDDEN_TOP_LEVEL

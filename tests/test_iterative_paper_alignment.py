@@ -404,7 +404,12 @@ def test_match_record_never_promotes_nested_rounds_to_trials():
 
 def test_cli_run_help_and_invalid_mode_are_explicit():
     runner = CliRunner()
-    help_result = runner.invoke(app, ["run", "--help"])
+    help_result = runner.invoke(
+        app,
+        ["run", "--help"],
+        terminal_width=160,
+        color=False,
+    )
     assert help_result.exit_code == 0
     assert "--adaptation" in help_result.stdout
     assert "iterative" in help_result.stdout

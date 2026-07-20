@@ -168,7 +168,7 @@ def test_grader_rejects_symlinked_output_tree_content(tmp_path):
         os.symlink(tmp_path / "outside", candidate / "leak")
     except OSError:
         pytest.skip("symlink creation is unavailable on this Windows host")
-    with pytest.raises(GraderError, match="links|junctions"):
+    with pytest.raises(GraderError, match="symlink|junction"):
         FileAssertionsGrader.from_task(package).grade(
             package,
             candidate,

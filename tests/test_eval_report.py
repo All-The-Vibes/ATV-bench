@@ -21,6 +21,7 @@ from atv_bench.eval.report import (
     generate_report,
     render_report_html,
     report_json_bytes,
+    report_schema_path,
     validate_report,
     write_static_report,
 )
@@ -555,10 +556,9 @@ def test_no_legacy_rating_field_raw_evidence_links_and_versions():
 
 
 def test_viewer_copies_are_identical_offline_and_escape_embedded_data(tmp_path):
-    source = ROOT / "reports" / "view" / "index.html"
     bundled = ROOT / "src" / "atv_bench" / "view" / "eval.html"
-    assert source.read_bytes() == bundled.read_bytes()
-    template = source.read_text(encoding="utf-8")
+    assert report_schema_path() == ROOT / "src" / "atv_bench" / "eval" / "report.schema.json"
+    template = bundled.read_text(encoding="utf-8")
     assert "https://" not in template
     assert "http://" not in template
     assert "innerHTML" not in template

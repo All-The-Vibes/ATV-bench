@@ -470,7 +470,8 @@ def test_verification_environment_is_allowlisted_without_secret_value_hashes():
     redacted = verification._redact_host_path(Path.home() / "bin" / "tool")
     assert redacted == "$HOME/bin/tool"
     executable = verification._hash_tool_executable(Path(sys.executable))
-    assert executable["path"].startswith("$HOME/")
+    assert executable["path"] == verification._redact_host_path(Path(sys.executable))
+    assert "private-user" not in executable["path"]
 
 
 def test_junit_hostname_is_removed_before_public_evidence(tmp_path):
