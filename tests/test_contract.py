@@ -96,3 +96,48 @@ def test_copilot_model_auto_never_echoes_input():
     """
     # Even if the JSONL somehow lacked a model, we get 'unknown', not 'auto'.
     assert parse_copilot_model('{"type":"result"}') == "unknown"
+
+
+# --- ENG-A: status derivation must use the union, not plain `git diff` -----------
+
+import subprocess
+from pathlib import Path
+
+
+def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True
+    )
+
+
+def _seed(repo: Path) -> str:
+    from atv_bench.adapters.snapshot import seed_base
+
+    repo.mkdir(parents=True, exist_ok=True)
+    (repo / "main.py").write_text("def get_move(o):\n    return 'N'\n")
+    _git(repo, "init", "-q")
+    _git(repo, "add", "-A")
+    _git(repo, "-c", "user.email=a@b.c", "-c", "user.name=t", "commit", "-qm", "seed")
+    return seed_base(repo)
+
+
+def test_derive_status_committed_edit_is_not_no_edit(tmp_path):
+    """A committed edit leaves a CLEAN working tree; plain `git diff` is empty. The
+    union-based derivation must still report EDITED/OK, never NO_EDIT (ENG-A)."""
+    from atv_bench.adapters.contract import derive_status
+
+    repo = tmp_path / "repo"
+    base = _seed(repo)
+    (repo / "main.py").write_text("def get_move(o):\n    return 'S'\n")
+    _git(repo, "add", "-A")
+    _git(repo, "-c", "user.email=a@b.c", "-c", "user.name=t", "commit", "-qm", "edit")
+
+    status = derive_status(str(repo), base)
+    assert status != AdapterStatus.NO_EDIT
+    assert status in {AdapterStatus.EDITED, AdapterStatus.OK}
+
+
+def test_distinct_nonwin_statuses_exist():
+    """The outcome taxonomy must distinguish crash / malformed from edited."""
+    values = {s.value for s in AdapterStatus}
+    assert {"edited", "crash", "malformed"} <= values

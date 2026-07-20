@@ -21,14 +21,26 @@ import time
 from pathlib import Path
 from typing import Any
 
+from atv_bench.adapters.snapshot import capture_diff
+
 
 class AdapterStatus(str, enum.Enum):
     OK = "ok"
+    EDITED = "edited"  # union-derived: harness produced a real edit (committed/staged/unstaged/untracked)
     NO_EDIT = "no_edit"
     ERROR = "error"
     TIMEOUT = "timeout"
+    CRASH = "crash"  # subprocess died by signal / uncaught exception (fit-excluded)
+    MALFORMED = "malformed"  # turn output unparseable / structurally invalid (fit-excluded)
     BUDGET_EXHAUSTED = "budget_exhausted"
     POLICY_DENIED = "policy_denied"  # auth ok, org policy blocks (fallback-ladder signal)
+
+
+# Outcomes that must be dropped from the rating fit and logged to unknown[]
+# (they are not scoreable wins/draws/losses — the harness never produced a valid turn).
+FIT_EXCLUDED_STATUSES = frozenset(
+    {AdapterStatus.CRASH, AdapterStatus.TIMEOUT, AdapterStatus.MALFORMED}
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -72,6 +84,11 @@ class AdapterResult:
     usage: Usage
     model: str = "unknown"  # underlying model actually used (thesis-integrity tagging)
 
+    @property
+    def fit_exclude(self) -> bool:
+        """True for CRASH/TIMEOUT/MALFORMED — dropped from the rating fit, logged to unknown[]."""
+        return self.status in FIT_EXCLUDED_STATUSES
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "status": self.status.value,
@@ -93,6 +110,57 @@ def git_diff(repo_path: str) -> str:
         text=True,
     )
     return out.stdout
+
+
+def _head_sha(repo_path: str) -> str | None:
+    """Record HEAD at start-of-run so status can be derived from the base..HEAD union.
+
+    Returns None if the repo has no commits / isn't a git repo (fall back to `git diff`).
+    """
+    proc = subprocess.run(
+        ["git", "-C", repo_path, "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+    )
+    sha = proc.stdout.strip()
+    return sha if proc.returncode == 0 and sha else None
+
+
+def derive_status(repo_path: str, base: str) -> AdapterStatus:
+    """Authoritative edit/no-edit decision via the snapshot UNION, not plain `git diff`.
+
+    Reflects base..HEAD ∪ staged ∪ working-tree ∪ untracked (via snapshot.capture_diff),
+    so a harness that COMMITS its edit (clean working tree) is EDITED, never a false
+    NO_EDIT forfeit (ENG-A). Genuinely empty union ⇒ NO_EDIT.
+    """
+    from atv_bench.adapters.snapshot import capture_diff
+
+    union = capture_diff(Path(repo_path), base)
+    return AdapterStatus.EDITED if union.strip() else AdapterStatus.NO_EDIT
+
+
+def classify_outcome(
+    *,
+    returncode: int | None = None,
+    crashed: bool = False,
+    timed_out: bool = False,
+    malformed: bool = False,
+) -> AdapterStatus:
+    """Map a non-win failure mode to a distinct, fit-excluded status.
+
+    Priority: timeout > crash > malformed > (returncode<0 ⇒ crash) > ERROR.
+    These are separate from win/draw/loss and from NO_EDIT so the rating engine can
+    drop them (fit_exclude) and log to unknown[].
+    """
+    if timed_out:
+        return AdapterStatus.TIMEOUT
+    if crashed:
+        return AdapterStatus.CRASH
+    if malformed:
+        return AdapterStatus.MALFORMED
+    if returncode is not None and returncode < 0:
+        return AdapterStatus.CRASH  # killed by signal
+    return AdapterStatus.ERROR
 
 
 def parse_copilot_model(jsonl: str) -> str:
@@ -162,6 +230,7 @@ class ClaudeCodeAdapter(HarnessAdapter):
 
     def run(self, req: AdapterRequest) -> AdapterResult:
         start = time.time()
+        base = _head_sha(req.repo_path)
         cmd = [
             "claude",
             "-p",
@@ -190,7 +259,7 @@ class ClaudeCodeAdapter(HarnessAdapter):
             )
 
         elapsed = time.time() - start
-        diff = git_diff(req.repo_path)
+        diff = capture_diff(Path(req.repo_path), base) if base else git_diff(req.repo_path)
         model_used = "unknown"
         tokens = 0
         try:
@@ -211,7 +280,9 @@ class ClaudeCodeAdapter(HarnessAdapter):
                 usage=Usage(seconds=elapsed),
                 model=model_used,
             )
-        status = AdapterStatus.OK if diff.strip() else AdapterStatus.NO_EDIT
+        status = derive_status(req.repo_path, base) if base else (
+            AdapterStatus.EDITED if diff.strip() else AdapterStatus.NO_EDIT
+        )
         return AdapterResult(
             status=status,
             diff=diff,
@@ -239,6 +310,7 @@ class CopilotCliAdapter(HarnessAdapter):
 
     def run(self, req: AdapterRequest) -> AdapterResult:
         start = time.time()
+        base = _head_sha(req.repo_path)
         cmd = [
             "copilot",
             "-p",
@@ -280,7 +352,7 @@ class CopilotCliAdapter(HarnessAdapter):
                 usage=Usage(seconds=elapsed),
                 model=model_used,
             )
-        diff = git_diff(req.repo_path)
+        diff = capture_diff(Path(req.repo_path), base) if base else git_diff(req.repo_path)
         if proc.returncode != 0 and not diff.strip():
             return AdapterResult(
                 status=AdapterStatus.ERROR,
@@ -289,7 +361,9 @@ class CopilotCliAdapter(HarnessAdapter):
                 usage=Usage(seconds=elapsed),
                 model=model_used,
             )
-        status = AdapterStatus.OK if diff.strip() else AdapterStatus.NO_EDIT
+        status = derive_status(req.repo_path, base) if base else (
+            AdapterStatus.EDITED if diff.strip() else AdapterStatus.NO_EDIT
+        )
         return AdapterResult(
             status=status,
             diff=diff,

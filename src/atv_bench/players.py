@@ -25,6 +25,7 @@ from atv_bench.adapters.contract import (
     HarnessAdapter,
 )
 from atv_bench.adapters.snapshot import capture_diff, seed_base
+from atv_bench.adapters.contract import derive_status
 from atv_bench.capture import scan_captured_tree
 
 
@@ -106,15 +107,21 @@ class HarnessPlayerCore:
             result = self.adapter.run(req)
             diff = capture_diff(repo, base)  # provenance/display only
 
+            # Authoritative edit/forfeit decision: trust the snapshot UNION
+            # (base..HEAD ∪ staged ∪ working-tree ∪ untracked), NOT result.status.
+            # A harness that COMMITS its edit leaves a clean working tree, so
+            # result.status could be advisory/wrong — the union is ground truth.
+            authoritative = derive_status(str(repo), base)
+
             captured_tree = original_tree
-            if result.status == AdapterStatus.OK:
+            if authoritative == AdapterStatus.EDITED:
                 # Materialized post-run tree is authoritative (ENG-3). Allowlist-scan it
                 # BEFORE it touches the container (ENG-7) — raises CaptureRejected.
                 scan_captured_tree(repo)
                 captured_tree = self._read_repo_tree(repo)
                 self.container.write_tree(captured_tree)
-            # NO_EDIT / ERROR / TIMEOUT: leave the container's original tree (forfeit),
-            # never crash.
+            # NO_EDIT / ERROR / TIMEOUT / CRASH / MALFORMED: leave the container's
+            # original tree (forfeit), never crash.
 
         self.last_result, self.last_diff = result, diff
         if key is not None:
