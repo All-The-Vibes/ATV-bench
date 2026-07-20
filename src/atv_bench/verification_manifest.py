@@ -732,9 +732,12 @@ _FIXED_COMMANDS: tuple[CommandSpec, ...] = (
     _pytest_command(
         "security_focused",
         "security",
-        "Credential gateway, confinement, OCI policy, and controller security.",
+        "Credential/Responses gateways, provider backend, operator, confinement, OCI policy, and controller security.",
         (
             "tests/test_security_gateway.py",
+            "tests/test_responses_gateway.py",
+            "tests/test_openai_responses_backend.py",
+            "tests/test_model_backed_operator.py",
             "tests/test_capture_hardening.py",
             "tests/test_snapshot_hardening.py",
             "tests/test_oci_runner.py",
@@ -767,6 +770,7 @@ _FIXED_COMMANDS: tuple[CommandSpec, ...] = (
         (
             "tests/test_adapter_conformance_v1.py",
             "tests/test_adapter_runtime_hardening.py",
+            "tests/test_copilot_oci_wrapper.py",
             "tests/test_capture_hardening.py",
             "tests/test_snapshot_hardening.py",
         ),
@@ -795,8 +799,8 @@ _FIXED_COMMANDS: tuple[CommandSpec, ...] = (
     _pytest_command(
         "cli_focused",
         "cli",
-        "Local benchmark CLI contracts without Docker integration.",
-        ("tests/test_benchmark_cli.py",),
+        "Local benchmark and League-executor CLI contracts without Docker integration.",
+        ("tests/test_benchmark_cli.py", "tests/test_league_executor.py"),
         marker="not integration",
     ),
     _pytest_command(
@@ -832,7 +836,7 @@ _FIXED_COMMANDS: tuple[CommandSpec, ...] = (
         "Every third-party GitHub Action uses its reviewed full SHA.",
         (
             "tests/test_workflow_supply_chain.py::"
-            "test_every_third_party_action_is_pinned_to_an_approved_full_sha",
+            "test_every_action_is_pinned_to_an_approved_full_sha",
         ),
     ),
     _pytest_command(
@@ -1385,7 +1389,7 @@ def gate_rules() -> tuple[GateRule, ...]:
             "actions_sha",
             (
                 "tests/test_workflow_supply_chain.py::"
-                "test_every_third_party_action_is_pinned_to_an_approved_full_sha",
+                "test_every_action_is_pinned_to_an_approved_full_sha",
             ),
         ),
     )
