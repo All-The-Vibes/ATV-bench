@@ -47,6 +47,9 @@ LEADERBOARD_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
     "properties": {
         "schema_version": {"const": SCHEMA_VERSION},
+        # Integrity gate (Section 6): when present and false, the viewer refuses to render
+        # any rank and shows the integrity-gate reframe instead. Omitted -> verified board.
+        "verified": {"type": "boolean"},
         "updated_at": {
             "type": "string",
             # ISO-8601 UTC (Z)
@@ -222,6 +225,7 @@ def build_leaderboard_doc(
     submissions: dict[str, dict[str, Any]],
     *,
     updated_at: str,
+    verified: bool | None = None,
 ) -> dict[str, Any]:
     """Compose the published leaderboard document.
 
@@ -287,7 +291,10 @@ def build_leaderboard_doc(
             "pr_url": sub["pr_url"],
             "logs_url": sub["logs_url"],
         })
-    return {"schema_version": SCHEMA_VERSION, "updated_at": updated_at, "rows": rows}
+    doc: dict[str, Any] = {"schema_version": SCHEMA_VERSION, "updated_at": updated_at, "rows": rows}
+    if verified is not None:
+        doc["verified"] = verified
+    return doc
 
 
 def build_insights(rows: list[dict[str, Any]]) -> list[str]:

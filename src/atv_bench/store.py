@@ -502,7 +502,9 @@ def _to_match_result(m: dict[str, Any]) -> MatchResult:
     )
 
 
-def build_leaderboard_from_store(store_dir: str, *, updated_at: str) -> dict[str, Any]:
+def build_leaderboard_from_store(
+    store_dir: str, *, updated_at: str, verified: bool | None = None
+) -> dict[str, Any]:
     """Recompute the full leaderboard document from the committed store.
 
     Dedup by match_id so recompute is idempotent: if the same match_id ever appears
@@ -540,4 +542,4 @@ def build_leaderboard_from_store(store_dir: str, *, updated_at: str) -> dict[str
         except (ValueError, KeyError) as e:
             print(f"[leaderboard] quarantined match record {m.get('match_id')!r}: {e}",
                   file=sys.stderr)
-    return build_leaderboard_doc(matches, submissions, updated_at=updated_at)
+    return build_leaderboard_doc(matches, submissions, updated_at=updated_at, verified=verified)

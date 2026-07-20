@@ -937,16 +937,26 @@ def demo_match_cmd(
         doc = json.loads((site / "leaderboard.json").read_text())
         rows = doc.get("rows", [])
 
-        typer.echo("\n=== Leaderboard ===")
-        for r in rows:
-            typer.echo(
-                f"  #{r.get('rank')}  {round(float(r.get('elo', 0)))} ELO  "
-                f"@{r.get('identity')} ({r.get('harness_name')})  "
-                f"— {r.get('fingerprint_summary', '')}"
-            )
-        typer.echo("\n=== Insights ===")
-        for line in build_insights(rows):
-            typer.echo(f"  • {line}")
+        # Section 6 typed-rank guard: an unverified board never prints a rank. Route the
+        # gate through the single renderer so a free-text rank leak is impossible here.
+        from atv_bench.render import render_ranking, UnrankedView
+
+        gate = render_ranking({"ratings": {"verified": doc.get("verified", True)}},
+                              verified=doc.get("verified", True))
+        if isinstance(gate, UnrankedView):
+            typer.echo("\n=== Leaderboard ===")
+            typer.echo(str(gate))
+        else:
+            typer.echo("\n=== Leaderboard ===")
+            for r in rows:
+                typer.echo(
+                    f"  #{r.get('rank')}  {round(float(r.get('elo', 0)))} ELO  "
+                    f"@{r.get('identity')} ({r.get('harness_name')})  "
+                    f"— {r.get('fingerprint_summary', '')}"
+                )
+            typer.echo("\n=== Insights ===")
+            for line in build_insights(rows):
+                typer.echo(f"  • {line}")
         typer.echo(f"\n  Static board written to: {site / 'index.html'}")
     finally:
         shutil.rmtree(tmp_store, ignore_errors=True)
@@ -1310,10 +1320,16 @@ def lift(
     }
     out_path = out or (store / "lift.json")
     out_path.write_text(json.dumps(doc, indent=2))
-    for r in results.values():
-        typer.echo(
-            f"{r.harness} (vs bare {r.bare_harness} on {r.base_model}): "
-            f"lift={r.lift:+.3f}  95% CI=({r.lo:+.3f}, {r.hi:+.3f})")
+    # Section 6: emit lift through the single typed renderer so LIFT is the headline
+    # metric and no rank leaks. Lift is inherently verified (each harness is its own control).
+    from atv_bench.render import render_ranking
+    ratings_stub = {
+        "verified": True,
+        "harnesses": [{"harness": r.harness, "theta": None, "bundle_unit": True}
+                      for r in results.values()],
+        "unknown": [],
+    }
+    typer.echo(str(render_ranking({"ratings": ratings_stub, "lifts": doc}, verified=True)))
     typer.echo(f"Wrote {out_path} — {len(doc['lifts'])} lift(s)")
     if json_out:
         typer.echo(json.dumps(doc, indent=2))

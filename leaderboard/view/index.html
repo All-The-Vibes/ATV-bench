@@ -186,9 +186,21 @@ function renderError(msg, sha) {
     <p style="font-family:var(--mono);font-size:.78rem">build ${esc(sha||"unknown")}</p>
   </div>`;
 }
+// Integrity gate (Section 6): an UNVERIFIED corpus renders NO rank — no #1, no medal,
+// no "leads"/"beats". The gate is the product working, not a broken board.
+function renderUnranked() {
+  return `<div class="state">
+    <h2>unranked (integrity gate)</h2>
+    <p>No — numbers are gated because we won't publish what we can't verify. This corpus is
+       not a ranked number yet: it is gated for integrity until every surface verifies.</p>
+    <p style="font-family:var(--mono);font-size:.78rem">The gate is the product working.</p>
+  </div>`;
+}
 
 function render(doc) {
   staleEl.innerHTML = `<span class="dot"></span> Last updated ${esc(fmtTs(doc.updated_at))} · rebuilt after each match`;
+  // Section 6 typed-rank guard AT THE DOM BOUNDARY: verified===false -> no rank ever.
+  if (doc.verified === false) { root.innerHTML = renderUnranked(); return; }
   const rows = (doc.rows || []).slice().sort((a, b) => a.rank - b.rank);
   if (rows.length === 0) { root.innerHTML = renderEmpty(); return; }
   // The builder already ranks stable rows above low-confidence/unrated ones, so we
