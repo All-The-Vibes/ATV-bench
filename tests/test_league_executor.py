@@ -36,6 +36,14 @@ from atv_bench.store import LeagueStore
 ROOT = Path(__file__).parent.parent
 
 
+@pytest.fixture(autouse=True)
+def _clear_ambient_engine_selection(monkeypatch):
+    """Unit/integration calls must opt into CI or non-default Docker routing."""
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    monkeypatch.delenv("DOCKER_CONTEXT", raising=False)
+
+
 def _command_result(
     argv: Sequence[str],
     *,
@@ -71,12 +79,14 @@ class FakeEngine:
         run_timed_out: bool = False,
         run_output_limit_exceeded: bool = False,
         cleanup_probe_error: bool = False,
+        context_host: str = "npipe:////./pipe/dockerDesktopLinuxEngine",
     ) -> None:
         self.run_stdout = run_stdout
         self.run_exit_code = run_exit_code
         self.run_timed_out = run_timed_out
         self.run_output_limit_exceeded = run_output_limit_exceeded
         self.cleanup_probe_error = cleanup_probe_error
+        self.context_host = context_host
         self.commands: list[tuple[str, ...]] = []
         self.context_files: dict[str, bytes] = {}
         self.staged_bot_bytes: bytes | None = None
@@ -94,6 +104,33 @@ class FakeEngine:
 
         if command[1:] == ("--version",):
             return _command_result(command, stdout=b"Docker version 28.0.0, build fake\n")
+
+        if command[1:] == ("context", "show"):
+            return _command_result(command, stdout=b"fake-local\n")
+
+        if command[1:4] == ("context", "inspect", "--format"):
+            return _command_result(
+                command,
+                stdout=(json.dumps(self.context_host) + "\n").encode(),
+            )
+
+        if command[1:4] == ("info", "--format", "{{json .}}"):
+            payload = {
+                "ID": "fake-daemon-id",
+                "Name": "fake-daemon",
+                "ServerVersion": "28.0.0",
+                "OperatingSystem": "Fake Linux",
+                "OSType": "linux",
+                "Architecture": "x86_64",
+                "KernelVersion": "6.6.0-fake",
+                "Driver": "overlay2",
+                "CgroupDriver": "cgroupfs",
+                "SecurityOptions": [
+                    "name=cgroupns",
+                    "name=seccomp,profile=builtin",
+                ],
+            }
+            return _command_result(command, stdout=(json.dumps(payload) + "\n").encode())
 
         if len(command) > 1 and command[1] == "build":
             context = Path(command[-1])
@@ -239,7 +276,27 @@ def test_fake_engine_end_to_end_stages_exact_bytes_binds_and_ingests(tmp_path):
     assert meta["binding_verified"] is True
     assert meta["cleanup"]["container_absent"] is True
     assert meta["cleanup"]["image_tag_absent"] is True
-    assert meta["cleanup"]["image_id_absent"] is True
+    assert meta["cleanup"]["image_removal_scope"] == "unique-run-tag-only"
+    assert meta["cleanup"]["image_id_removal_attempted"] is False
+    assert meta["cleanup"]["image_id_absence_claimed"] is False
+    assert "image_id_absent" not in meta["cleanup"]
+    assert meta["engine"]["endpoint"] == {
+        "source": "docker-context",
+        "context": "fake-local",
+        "uri": "npipe:////./pipe/dockerDesktopLinuxEngine",
+        "transport": "npipe",
+        "local_socket_verified": True,
+        "context_inspect_stdout_sha256": hashlib.sha256(
+            b'"npipe:////./pipe/dockerDesktopLinuxEngine"\n'
+        ).hexdigest(),
+    }
+    assert meta["engine"]["daemon"]["id"] == "fake-daemon-id"
+    assert meta["engine"]["daemon"]["name"] == "fake-daemon"
+    assert meta["engine"]["daemon"]["security_options"] == [
+        "name=cgroupns",
+        "name=seccomp,profile=builtin",
+    ]
+    assert meta["engine"]["daemon"]["rootless"] is False
     assert meta["resource_policy"]["network"] == "none"
     assert meta["resource_policy"]["read_only_root"] is True
     assert meta["match_spec"]["seed_semantics"].startswith("label-only")
@@ -347,6 +404,27 @@ def test_forged_arena_identity_is_rejected_and_cleanup_still_runs(tmp_path):
     assert not (tmp_path / "evidence" / "sha256").exists()
 
 
+def test_cleanup_removes_only_unique_run_tag_never_shared_image_id(tmp_path):
+    engine = FakeEngine()
+    _execute(tmp_path, engine)
+
+    run_command = _run_command(engine)
+    immutable_image_id = next(
+        part for part in run_command if part == "sha256:" + "a" * 64
+    )
+    image_remove = next(
+        command for command in engine.commands if command[1:3] == ("image", "rm")
+    )
+    assert image_remove[:3] == ("docker", "image", "rm")
+    assert len(image_remove) == 4
+    assert image_remove[3].startswith("atv-bench/league-score:")
+    assert image_remove[3] != immutable_image_id
+    assert "--force" not in image_remove
+    assert not any(
+        command[1:4] == ("image", "ls", "--all") for command in engine.commands
+    )
+
+
 @pytest.mark.parametrize(
     ("payload", "message"),
     [
@@ -384,8 +462,22 @@ def test_cleanup_probe_error_cannot_be_reported_as_absence(tmp_path):
     assert not (tmp_path / "evidence" / "sha256").exists()
 
 
+def test_cleanup_failure_is_surfaced_alongside_primary_execution_error(tmp_path):
+    engine = FakeEngine(run_exit_code=125, cleanup_probe_error=True)
+    with pytest.raises(LeagueExecutorError) as raised:
+        _execute(tmp_path, engine)
+
+    message = str(raised.value)
+    assert "sandboxed League match failed with exit code 125" in message
+    assert "additionally" in message
+    assert "cleanup could not be verified" in message
+    assert "container absence was not verified" in message
+    assert "unique image-tag absence was not verified" in message
+
+
 def test_refuses_to_execute_inside_github_actions(monkeypatch, tmp_path):
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    engine = FakeEngine()
     with pytest.raises(LeagueExecutorError, match="refuses to run inside GitHub Actions"):
         execute_league_score(
             submitter="alice",
@@ -394,8 +486,54 @@ def test_refuses_to_execute_inside_github_actions(monkeypatch, tmp_path):
             game="lightcycles",
             seed=17,
             output_dir=tmp_path / "evidence",
-            engine=None,
+            engine=engine,
         )
+    assert engine.commands == []
+
+
+@pytest.mark.parametrize(
+    "remote_host",
+    [
+        "tcp://127.0.0.1:2375",
+        "tcp://docker.example.test:2376",
+        "ssh://operator@docker.example.test",
+    ],
+)
+def test_rejects_remote_docker_host_before_any_engine_command(
+    monkeypatch, remote_host, tmp_path
+):
+    monkeypatch.setenv("DOCKER_HOST", remote_host)
+    engine = FakeEngine()
+    with pytest.raises(LeagueExecutorError, match="verified local unix:// or npipe://"):
+        _execute(tmp_path, engine)
+    assert engine.commands == []
+
+
+def test_rejects_remote_docker_context_before_build_or_run(tmp_path):
+    engine = FakeEngine(context_host="ssh://operator@docker.example.test")
+    with pytest.raises(LeagueExecutorError, match="verified local unix:// or npipe://"):
+        _execute(tmp_path, engine)
+    assert any(command[1:] == ("context", "show") for command in engine.commands)
+    assert any(command[1:3] == ("context", "inspect") for command in engine.commands)
+    assert not any(command[1] in {"info", "build", "run"} for command in engine.commands)
+
+
+def test_local_docker_host_is_bound_and_attested(monkeypatch, tmp_path):
+    monkeypatch.setenv("DOCKER_HOST", "unix:///var/run/docker.sock")
+    engine = FakeEngine()
+    receipt = _execute(tmp_path, engine)
+    meta = json.loads((receipt.bundle_dir / "meta.json").read_text())
+
+    assert not any(command[1] == "context" for command in engine.commands)
+    assert meta["engine"]["endpoint"] == {
+        "source": "DOCKER_HOST",
+        "context": None,
+        "uri": "unix:///var/run/docker.sock",
+        "transport": "unix",
+        "local_socket_verified": True,
+        "context_inspect_stdout_sha256": None,
+    }
+    assert meta["engine"]["daemon"]["server_version"] == "28.0.0"
 
 
 def test_bot_validation_rejects_non_utf8_and_oversize_before_docker(tmp_path):
@@ -754,6 +892,16 @@ def test_real_docker_league_score_from_packaged_context(tmp_path):
     assert receipt.result["seed"] == 5
     assert receipt.bundle_dir.is_dir()
     assert (receipt.bundle_dir / "checksums.json").is_file()
+    meta = json.loads((receipt.bundle_dir / "meta.json").read_text())
+    assert meta["engine"]["endpoint"]["transport"] in {"npipe", "unix"}
+    assert meta["engine"]["endpoint"]["local_socket_verified"] is True
+    assert meta["engine"]["daemon"]["id"]
+    assert meta["engine"]["daemon"]["name"]
+    assert meta["engine"]["daemon"]["server_version"]
+    assert isinstance(meta["engine"]["daemon"]["security_options"], list)
+    assert meta["cleanup"]["image_removal_scope"] == "unique-run-tag-only"
+    assert meta["cleanup"]["image_id_removal_attempted"] is False
+    assert meta["cleanup"]["image_id_absence_claimed"] is False
     assert (
         len((receipt.bundle_dir / "run.stdout.log").read_bytes())
         <= RUN_OUTPUT_LIMIT_BYTES

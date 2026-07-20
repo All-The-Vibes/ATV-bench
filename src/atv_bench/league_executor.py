@@ -242,6 +242,19 @@ class DockerCliEngine:
                 raise LeagueExecutorError(f"Docker executable not found: {executable}")
             resolved = str(Path(found).resolve())
         self.executable = resolved
+        self._environment = _engine_environment()
+
+    @property
+    def client_environment(self) -> Mapping[str, str]:
+        """Return the fixed, secret-minimized environment used by this client."""
+        return dict(self._environment)
+
+    def bind_verified_local_endpoint(self, endpoint: str) -> None:
+        """Pin later commands to the exact local endpoint that passed preflight."""
+        _local_docker_transport(endpoint)
+        self._environment.pop("DOCKER_CONTEXT", None)
+        self._environment.pop("CONTAINER_HOST", None)
+        self._environment["DOCKER_HOST"] = endpoint
 
     @classmethod
     def auto(cls) -> "DockerCliEngine":
@@ -282,7 +295,7 @@ class DockerCliEngine:
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env=_engine_environment(),
+            env=dict(self._environment),
             shell=False,
             creationflags=creationflags,
             start_new_session=start_new_session,
@@ -635,6 +648,157 @@ def _require_command_ok(result: CommandResult, stage: str) -> None:
         )
 
 
+def _command_engine_environment(engine: CommandEngine) -> Mapping[str, str]:
+    captured = getattr(engine, "client_environment", None)
+    if isinstance(captured, Mapping):
+        return captured
+    return _engine_environment()
+
+
+def _local_docker_transport(endpoint: str) -> str:
+    """Accept only an explicitly local Docker socket transport."""
+    value = endpoint.strip()
+    if not value or "\x00" in value or "\r" in value or "\n" in value:
+        raise LeagueExecutorError("Docker endpoint must be one non-empty local socket URI")
+    lowered = value.lower().replace("\\", "/")
+    if lowered.startswith("unix://"):
+        socket_path = lowered[len("unix://") :]
+        if socket_path.startswith("/") and socket_path != "/":
+            return "unix"
+    if lowered.startswith("npipe://"):
+        pipe_path = lowered[len("npipe://") :]
+        if pipe_path.startswith("//./pipe/") and len(pipe_path) > len("//./pipe/"):
+            return "npipe"
+    raise LeagueExecutorError(
+        "League execution requires a verified local unix:// or npipe:// Docker "
+        f"endpoint; refusing {value!r}"
+    )
+
+
+def _single_line(result: CommandResult, stage: str) -> str:
+    _require_command_ok(result, stage)
+    try:
+        text = result.stdout.decode("utf-8", errors="strict").strip()
+    except UnicodeDecodeError as exc:
+        raise LeagueExecutorError(f"{stage} did not return UTF-8") from exc
+    if not text or len(text.splitlines()) != 1:
+        raise LeagueExecutorError(f"{stage} must return exactly one non-empty line")
+    return text
+
+
+def _required_daemon_text(info: Mapping[str, Any], key: str) -> str:
+    value = info.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise LeagueExecutorError(f"Docker daemon identity is missing {key}")
+    return value.strip()
+
+
+def _probe_local_docker_daemon(engine: CommandEngine) -> dict[str, Any]:
+    """Bind Docker to a local socket and capture the daemon identity/security posture."""
+    client_environment = _command_engine_environment(engine)
+    docker_host = str(client_environment.get("DOCKER_HOST", "")).strip()
+    docker_context = str(client_environment.get("DOCKER_CONTEXT", "")).strip()
+    if docker_host and docker_context:
+        raise LeagueExecutorError(
+            "DOCKER_HOST and DOCKER_CONTEXT cannot both be set for League execution"
+        )
+
+    context_name: str | None = None
+    context_inspect_sha256: str | None = None
+    if docker_host:
+        endpoint = docker_host
+        endpoint_source = "DOCKER_HOST"
+    else:
+        context_show = engine.execute(
+            [engine.executable, "context", "show"],
+            timeout_seconds=CONTROL_TIMEOUT_SECONDS,
+            output_limit_bytes=CONTROL_OUTPUT_LIMIT_BYTES,
+        )
+        context_name = _single_line(context_show, "Docker context selection probe")
+        if docker_context and context_name != docker_context:
+            raise LeagueExecutorError(
+                "Docker context selection does not match the configured DOCKER_CONTEXT"
+            )
+        context_inspect = engine.execute(
+            [
+                engine.executable,
+                "context",
+                "inspect",
+                "--format",
+                "{{json .Endpoints.docker.Host}}",
+                context_name,
+            ],
+            timeout_seconds=CONTROL_TIMEOUT_SECONDS,
+            output_limit_bytes=CONTROL_OUTPUT_LIMIT_BYTES,
+        )
+        raw_endpoint = _single_line(context_inspect, "Docker context endpoint probe")
+        try:
+            endpoint_value = json.loads(raw_endpoint)
+        except json.JSONDecodeError as exc:
+            raise LeagueExecutorError(
+                "Docker context endpoint probe did not return canonical JSON"
+            ) from exc
+        if not isinstance(endpoint_value, str):
+            raise LeagueExecutorError("Docker context endpoint must be a string")
+        endpoint = endpoint_value.strip()
+        endpoint_source = "docker-context"
+        context_inspect_sha256 = context_inspect.stdout_sha256
+
+    transport = _local_docker_transport(endpoint)
+    binder = getattr(engine, "bind_verified_local_endpoint", None)
+    if callable(binder):
+        binder(endpoint)
+
+    info_result = engine.execute(
+        [engine.executable, "info", "--format", "{{json .}}"],
+        timeout_seconds=CONTROL_TIMEOUT_SECONDS,
+        output_limit_bytes=CONTROL_OUTPUT_LIMIT_BYTES,
+    )
+    raw_info = _single_line(info_result, "Docker daemon identity/security probe")
+    try:
+        info = json.loads(raw_info)
+    except json.JSONDecodeError as exc:
+        raise LeagueExecutorError(
+            "Docker daemon identity/security probe did not return canonical JSON"
+        ) from exc
+    if not isinstance(info, dict):
+        raise LeagueExecutorError("Docker daemon identity/security probe must return an object")
+    security_options = info.get("SecurityOptions")
+    if not isinstance(security_options, list) or not all(
+        isinstance(item, str) for item in security_options
+    ):
+        raise LeagueExecutorError("Docker daemon SecurityOptions must be a string array")
+
+    daemon = {
+        "id": _required_daemon_text(info, "ID"),
+        "name": _required_daemon_text(info, "Name"),
+        "server_version": _required_daemon_text(info, "ServerVersion"),
+        "operating_system": _required_daemon_text(info, "OperatingSystem"),
+        "os_type": _required_daemon_text(info, "OSType"),
+        "architecture": _required_daemon_text(info, "Architecture"),
+        "kernel_version": _required_daemon_text(info, "KernelVersion"),
+        "storage_driver": _required_daemon_text(info, "Driver"),
+        "cgroup_driver": _required_daemon_text(info, "CgroupDriver"),
+        "security_options": sorted(security_options),
+        "rootless": any(
+            option == "name=rootless" or option.startswith("name=rootless,")
+            for option in security_options
+        ),
+        "info_stdout_sha256": info_result.stdout_sha256,
+    }
+    return {
+        "endpoint": {
+            "source": endpoint_source,
+            "context": context_name,
+            "uri": endpoint,
+            "transport": transport,
+            "local_socket_verified": True,
+            "context_inspect_stdout_sha256": context_inspect_sha256,
+        },
+        "daemon": daemon,
+    }
+
+
 def _parse_and_bind_result(
     raw_stdout: bytes,
     *,
@@ -722,9 +886,8 @@ def _cleanup_engine_resources(
     *,
     container_name: str,
     image_tag: str,
-    image_id: str,
 ) -> dict[str, Any]:
-    """Remove exact temporary names, then prove both names are absent."""
+    """Remove only unique run names, then prove those names are absent."""
     remove_container = engine.execute(
         [engine.executable, "rm", "--force", container_name],
         timeout_seconds=CONTROL_TIMEOUT_SECONDS,
@@ -744,7 +907,7 @@ def _cleanup_engine_resources(
         output_limit_bytes=CONTROL_OUTPUT_LIMIT_BYTES,
     )
     remove_image = engine.execute(
-        [engine.executable, "image", "rm", "--force", image_id or image_tag],
+        [engine.executable, "image", "rm", image_tag],
         timeout_seconds=CONTROL_TIMEOUT_SECONDS,
         output_limit_bytes=CONTROL_OUTPUT_LIMIT_BYTES,
     )
@@ -761,36 +924,42 @@ def _cleanup_engine_resources(
         timeout_seconds=CONTROL_TIMEOUT_SECONDS,
         output_limit_bytes=CONTROL_OUTPUT_LIMIT_BYTES,
     )
-    inspect_image_ids = engine.execute(
-        [
-            engine.executable,
-            "image",
-            "ls",
-            "--all",
-            "--quiet",
-            "--no-trunc",
-        ],
-        timeout_seconds=CONTROL_TIMEOUT_SECONDS,
-        output_limit_bytes=CONTROL_OUTPUT_LIMIT_BYTES,
-    )
-    listed_image_ids = {
-        line.strip()
-        for line in inspect_image_ids.stdout.decode("utf-8", errors="replace").splitlines()
-        if line.strip()
-    }
     return {
         "container_remove_exit_code": remove_container.exit_code,
         "container_probe_exit_code": inspect_container.exit_code,
         "container_absent": inspect_container.ok and not inspect_container.stdout.strip(),
-        "image_remove_exit_code": remove_image.exit_code,
-        "image_probe_exit_code": inspect_image.exit_code,
+        "image_tag_remove_exit_code": remove_image.exit_code,
+        "image_tag_probe_exit_code": inspect_image.exit_code,
         "image_tag_absent": inspect_image.ok and not inspect_image.stdout.strip(),
-        "image_id_probe_exit_code": inspect_image_ids.exit_code,
-        "image_id_absent": (
-            not image_id
-            or (inspect_image_ids.ok and image_id not in listed_image_ids)
-        ),
+        "image_removal_scope": "unique-run-tag-only",
+        "image_id_removal_attempted": False,
+        "image_id_absence_claimed": False,
     }
+
+
+def _cleanup_verification_failure(cleanup: Mapping[str, Any]) -> LeagueExecutorError | None:
+    if cleanup.get("cleanup_error"):
+        return LeagueExecutorError(
+            "temporary Docker resource cleanup raised an error: "
+            f"{cleanup['cleanup_error']}"
+        )
+    failures: list[str] = []
+    if not cleanup.get("container_absent"):
+        failures.append(
+            "container absence was not verified "
+            f"(probe exit {cleanup.get('container_probe_exit_code')!r})"
+        )
+    if not cleanup.get("image_tag_absent"):
+        failures.append(
+            "unique image-tag absence was not verified "
+            f"(probe exit {cleanup.get('image_tag_probe_exit_code')!r})"
+        )
+    if failures:
+        return LeagueExecutorError(
+            "temporary Docker resource cleanup could not be verified: "
+            + "; ".join(failures)
+        )
+    return None
 
 
 def _engine_executable_sha256(engine: CommandEngine) -> str | None:
@@ -930,10 +1099,7 @@ def execute_league_score(
     engine: CommandEngine | None = None,
 ) -> LeagueScoreReceipt:
     """Execute and verify one frozen-bot League match outside GitHub Actions."""
-    if (
-        engine is None
-        and os.environ.get("GITHUB_ACTIONS", "").strip().lower() == "true"
-    ):
+    if os.environ.get("GITHUB_ACTIONS", "").strip().lower() == "true":
         raise LeagueExecutorError(
             "`atv-bench league-score` refuses to run inside GitHub Actions; "
             "Actions is Pages/test-only by repository policy."
@@ -947,6 +1113,7 @@ def execute_league_score(
     bot_bytes = _read_validated_bot(Path(bot_path))
     bot_sha256 = _sha256(bot_bytes)
     resolved_engine = engine or DockerCliEngine.auto()
+    engine_attestation = _probe_local_docker_daemon(resolved_engine)
 
     token = uuid.uuid4().hex
     image_tag = f"atv-bench/league-score:{token}"
@@ -959,10 +1126,13 @@ def execute_league_score(
     build_argv: list[str] = []
     run_argv: list[str] = []
     bound_result: dict[str, Any] | None = None
+    image_id = ""
     cleanup: dict[str, Any] = {
         "container_absent": False,
         "image_tag_absent": False,
-        "image_id_absent": False,
+        "image_removal_scope": "unique-run-tag-only",
+        "image_id_removal_attempted": False,
+        "image_id_absence_claimed": False,
     }
     primary_error: BaseException | None = None
 
@@ -1042,35 +1212,30 @@ def execute_league_score(
             )
         except BaseException as exc:
             primary_error = exc
-            image_id = ""
         finally:
             try:
                 cleanup = _cleanup_engine_resources(
                     resolved_engine,
                     container_name=container_name,
                     image_tag=image_tag,
-                    image_id=image_id,
                 )
             except BaseException as exc:
                 cleanup = {
                     "container_absent": False,
                     "image_tag_absent": False,
-                    "image_id_absent": False,
-                    "cleanup_error": type(exc).__name__,
+                    "image_removal_scope": "unique-run-tag-only",
+                    "image_id_removal_attempted": False,
+                    "image_id_absence_claimed": False,
+                    "cleanup_error": f"{type(exc).__name__}: {exc}",
                 }
-                if primary_error is None:
-                    primary_error = LeagueExecutorError(
-                        f"temporary Docker resource cleanup failed: {exc}"
-                    )
 
-        if primary_error is None and (
-            not cleanup.get("container_absent")
-            or not cleanup.get("image_tag_absent")
-            or not cleanup.get("image_id_absent")
-        ):
-            primary_error = LeagueExecutorError(
-                "temporary Docker container/image cleanup could not be verified"
-            )
+        cleanup_failure = _cleanup_verification_failure(cleanup)
+        if primary_error is not None and cleanup_failure is not None:
+            raise LeagueExecutorError(
+                f"{primary_error}; additionally, {cleanup_failure}"
+            ) from primary_error
+        if cleanup_failure is not None:
+            raise cleanup_failure
         if primary_error is not None:
             raise primary_error
         assert context is not None
@@ -1131,6 +1296,7 @@ def execute_league_score(
                 "name": Path(resolved_engine.executable).name,
                 "version": engine_version,
                 "executable_sha256": _engine_executable_sha256(resolved_engine),
+                **engine_attestation,
             },
             "resource_policy": resource_policy,
             "commands": {
@@ -1185,6 +1351,7 @@ def execute_league_score(
                 "source": "importlib.resources:atv_bench.arena",
             },
             "resource_policy": resource_policy,
+            "engine": engine_attestation,
             "argv": {
                 "build": _redact_argv(
                     build_argv,
