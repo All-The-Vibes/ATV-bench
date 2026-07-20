@@ -484,8 +484,8 @@ def validate_pr_paths_cmd(
     ),
     name_status: bool = typer.Option(
         False, "--name-status",
-        help="Input is `git diff --name-status` output (rejects renames/deletes and "
-             "confines only submission PRs). Preferred for the always-on CI gate.",
+        help="Input is `git diff --name-status` output (renames/deletes are rejected "
+             "inside submission PRs; ordinary reviewed plumbing PRs are not confined).",
     ),
 ) -> None:
     """Fail closed if a community submission PR touches anything outside its own tree.
@@ -495,7 +495,8 @@ def validate_pr_paths_cmd(
     With --name-status: a PR touching league/submissions/** is a submission PR and is
     confined to its own league/submissions/<author>/{main.py,submission.json}; renames,
     deletes, and any other path (incl .github/workflows/**, league/matches.jsonl) fail
-    closed. A pure plumbing PR (no submissions/**) passes for normal review.
+    closed within that submission PR. A pure plumbing PR (no per-entrant submission path)
+    passes for normal review, including legitimate reviewed renames and deletions.
     Legacy --name-only mode (no flag) confines against a plain path list.
     """
     from atv_bench.validate import validate_pr_paths, validate_pr_changes

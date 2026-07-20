@@ -94,7 +94,7 @@ def validate_pr_changes(author: str, name_status_lines: list[str]) -> dict[str, 
     if not isinstance(author, str) or not _AUTHOR_RE.fullmatch(author):
         return {"ok": False, "errors": [f"invalid PR author login: {author!r}"],
                 "is_submission_pr": False}
-    changed_paths: list[str] = []
+    records: list[tuple[str, list[str]]] = []
     is_submission_pr = False
     for raw in name_status_lines:
         if not isinstance(raw, str):
@@ -108,10 +108,23 @@ def validate_pr_changes(author: str, name_status_lines: list[str]) -> dict[str, 
         parts = raw.split("\t")
         status = parts[0]
         paths = parts[1:]
+        if not paths:
+            errors.append(f"malformed name-status record: {raw!r}")
+            continue
         if status != status.strip() or any(not path or path != path.strip() for path in paths):
             errors.append(f"malformed name-status record: {raw!r}")
             # Still classify any recognizable path so malformed submission records cannot
             # downgrade the whole PR into the less-restrictive plumbing path.
+            if any(_is_submission_path(path) for path in paths):
+                is_submission_pr = True
+            continue
+        one_path_status = status in {"A", "M", "D", "T", "U", "X", "B"}
+        scored_status = re.fullmatch(r"[RC](?:100|[0-9]{1,2})", status) is not None
+        if not (
+            (one_path_status and len(paths) == 1)
+            or (scored_status and len(paths) == 2)
+        ):
+            errors.append(f"malformed name-status record: {raw!r}")
             if any(_is_submission_path(path) for path in paths):
                 is_submission_pr = True
             continue
@@ -123,16 +136,20 @@ def validate_pr_changes(author: str, name_status_lines: list[str]) -> dict[str, 
         # own .github/** and src/** files.
         if any(_is_submission_path(p) for p in paths):
             is_submission_pr = True
-        # Only one-path ADD/MODIFY records are accepted. This rejects rename/copy/delete,
-        # unmerged/type-change records, similarity-score tricks such as M100, and malformed
-        # records with missing/extra paths. In particular, a type change to a symlink or
-        # gitlink must not be accepted merely because its path string is otherwise allowed.
-        if status not in {"A", "M"} or len(paths) != 1:
-            errors.append(f"disallowed change status {status!r} for paths {paths}")
-            continue
-        changed_paths.extend(paths)
-    # Only confine a PR that actually touches the submissions tree; plumbing PRs pass.
+        records.append((status, paths))
+    # Only confine a PR that actually touches a per-entrant submission tree. Ordinary
+    # maintainer/plumbing PRs may legitimately rename or delete repository files and are
+    # governed by normal review/CODEOWNERS instead of this community-submission gate.
     if is_submission_pr:
+        changed_paths: list[str] = []
+        for status, paths in records:
+            # A submission PR may only add or modify one regular path per record. This
+            # rejects rename/copy/delete, unmerged/type-change records, similarity-score
+            # tricks such as M100, and malformed records with missing/extra paths.
+            if status not in {"A", "M"} or len(paths) != 1:
+                errors.append(f"disallowed change status {status!r} for paths {paths}")
+                continue
+            changed_paths.extend(paths)
         inner = validate_pr_paths(author, changed_paths)
         errors.extend(inner["errors"])
     return {"ok": not errors, "errors": errors, "is_submission_pr": is_submission_pr}

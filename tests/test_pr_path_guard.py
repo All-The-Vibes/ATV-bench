@@ -74,7 +74,10 @@ def test_changes_rename_rejected():
 
 
 def test_changes_delete_rejected():
-    res = validate_pr_changes("octocat", ["D\tleague/matches.jsonl"])
+    res = validate_pr_changes("octocat", [
+        "A\tleague/submissions/octocat/main.py",
+        "D\tleague/matches.jsonl",
+    ])
     assert res["ok"] is False
 
 
@@ -118,6 +121,16 @@ def test_changes_non_submission_pr_is_not_confined():
         "M\t.github/workflows/ci.yml",
     ])
     assert res["ok"] is True
+    assert res["is_submission_pr"] is False
+
+
+def test_changes_non_submission_pr_may_delete_and_rename_under_normal_review():
+    res = validate_pr_changes("maintainer", [
+        "D\t.github/workflows/obsolete.yml",
+        "R075\ttests/old_name.py\ttests/new_name.py",
+    ])
+    assert res["ok"] is True
+    assert res["errors"] == []
     assert res["is_submission_pr"] is False
 
 
