@@ -108,6 +108,10 @@ class StreamLimitError(WrapperError):
     """A bounded Copilot stream exceeded its negotiated limit."""
 
 
+class ProtocolOutputLimitError(WrapperError):
+    """The wrapper cannot emit another event within negotiated protocol limits."""
+
+
 def _reject_float(value: str) -> None:
     raise WrapperError(f"floating-point JSON is forbidden by protocol v1: {value}")
 
@@ -282,28 +286,110 @@ def _failure(
 class EventEmitter:
     trial_id: str
     attempt_id: str
+    max_events: int
+    max_line_bytes: int
+    max_total_bytes: int
+    stream: BinaryIO = field(default_factory=lambda: sys.stdout.buffer, repr=False)
     sequence: int = 0
+    total_bytes: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
+    def __post_init__(self) -> None:
+        _positive_int(self.max_events, field_name="max_events", allow_zero=False)
+        _positive_int(
+            self.max_line_bytes, field_name="max_line_bytes", allow_zero=False
+        )
+        _positive_int(
+            self.max_total_bytes, field_name="max_total_bytes", allow_zero=False
+        )
+        if self.max_line_bytes > self.max_total_bytes:
+            raise WrapperError("max_line_bytes cannot exceed max_total_bytes")
+
     def emit(self, event_type: str, **payload: Any) -> None:
-        event = {
-            "schema": HARNESS_EVENT_SCHEMA,
-            "type": event_type,
-            "protocol_version": PROTOCOL_VERSION,
-            "trial_id": self.trial_id,
-            "attempt_id": self.attempt_id,
-            "harness_sequence": self.sequence,
-            "emitted_at": utc_timestamp(),
-            **payload,
-        }
-        encoded = canonical_json_bytes(event)
         with self._lock:
-            sys.stdout.buffer.write(encoded + b"\n")
-            sys.stdout.buffer.flush()
+            if self.sequence >= self.max_events:
+                raise ProtocolOutputLimitError(
+                    f"protocol max_events exceeded ({self.max_events})"
+                )
+            event = {
+                "schema": HARNESS_EVENT_SCHEMA,
+                "type": event_type,
+                "protocol_version": PROTOCOL_VERSION,
+                "trial_id": self.trial_id,
+                "attempt_id": self.attempt_id,
+                "harness_sequence": self.sequence,
+                "emitted_at": utc_timestamp(),
+                **payload,
+            }
+            encoded = canonical_json_bytes(event)
+            if len(encoded) > self.max_line_bytes:
+                raise ProtocolOutputLimitError(
+                    "protocol max_line_bytes exceeded "
+                    f"({len(encoded)} > {self.max_line_bytes})"
+                )
+            framed = encoded + b"\n"
+            next_total = self.total_bytes + len(framed)
+            if next_total > self.max_total_bytes:
+                raise ProtocolOutputLimitError(
+                    "protocol max_total_bytes exceeded "
+                    f"({next_total} > {self.max_total_bytes})"
+                )
+            self.stream.write(framed)
+            self.stream.flush()
             self.sequence += 1
+            self.total_bytes = next_total
 
 
-def _validate_request(request: Mapping[str, Any], harness: str) -> None:
+def _select_model(model_policy: Mapping[str, Any]) -> str:
+    models = model_policy.get("allowed_models")
+    if not isinstance(models, list) or not models:
+        raise WrapperError(
+            "model_policy.allowed_models must be a non-empty ordered list"
+        )
+    if not all(
+        isinstance(item, str) and item and item == item.strip() and len(item) <= 255
+        for item in models
+    ):
+        raise WrapperError(
+            "model_policy.allowed_models must contain normalized model names"
+        )
+    if len(models) != len(set(models)):
+        raise WrapperError("model_policy.allowed_models must not contain duplicates")
+
+    explicit: list[tuple[str, str]] = []
+    for field_name in ("selected_model", "default_model"):
+        if field_name not in model_policy:
+            continue
+        value = model_policy[field_name]
+        if (
+            not isinstance(value, str)
+            or not value
+            or value != value.strip()
+            or len(value) > 255
+        ):
+            raise WrapperError(f"model_policy.{field_name} is malformed")
+        explicit.append((field_name, value))
+
+    if explicit:
+        selected_values = {value for _, value in explicit}
+        if len(selected_values) != 1:
+            raise WrapperError(
+                "model_policy selected_model and default_model are ambiguous"
+            )
+        selected_model = explicit[0][1]
+        if selected_model not in models:
+            raise WrapperError(
+                "controller-selected/default model is outside allowed_models"
+            )
+        return selected_model
+
+    # Protocol v1 currently represents the controller default through the
+    # canonical order of this JSON array. Reject malformed/duplicate arrays
+    # above so choosing index zero is explicit rather than set-order behavior.
+    return models[0]
+
+
+def _validate_request(request: Mapping[str, Any], harness: str) -> str:
     if request.get("schema") != REQUEST_SCHEMA:
         raise WrapperError(f"request schema must be {REQUEST_SCHEMA!r}")
     if request.get("protocol_version") != PROTOCOL_VERSION:
@@ -330,11 +416,7 @@ def _validate_request(request: Mapping[str, Any], harness: str) -> None:
     model_policy = request.get("model_policy")
     if not isinstance(model_policy, dict):
         raise WrapperError("request model_policy is missing")
-    models = model_policy.get("allowed_models")
-    if not isinstance(models, list) or not models or not all(
-        isinstance(item, str) and item for item in models
-    ):
-        raise WrapperError("model_policy.allowed_models must be non-empty")
+    selected_model = _select_model(model_policy)
     gateway = model_policy.get("gateway")
     if not isinstance(gateway, str) or not gateway:
         raise WrapperError("model_policy.gateway is missing")
@@ -350,6 +432,8 @@ def _validate_request(request: Mapping[str, Any], harness: str) -> None:
         raise WrapperError("request protocol_limits is missing")
     for field_name in ("max_line_bytes", "max_total_bytes", "max_events"):
         _positive_int(limits.get(field_name), field_name=field_name, allow_zero=False)
+    if int(limits["max_line_bytes"]) > int(limits["max_total_bytes"]):
+        raise WrapperError("max_line_bytes cannot exceed max_total_bytes")
     budgets = request.get("budget_limits")
     if not isinstance(budgets, dict):
         raise WrapperError("request budget_limits is missing")
@@ -363,6 +447,7 @@ def _validate_request(request: Mapping[str, Any], harness: str) -> None:
     output = request.get("output")
     if not isinstance(output, dict):
         raise WrapperError("request output contract is missing")
+    return selected_model
 
 
 def _validate_accepted(
@@ -384,10 +469,10 @@ def _validate_accepted(
     for field_name, value in expected.items():
         if accepted.get(field_name) != value:
             raise WrapperError(f"accepted event {field_name} does not match request")
-    if accepted.get("capabilities") != request["required_capabilities"] and not isinstance(
-        accepted.get("capabilities"), dict
-    ):
-        raise WrapperError("accepted capabilities are malformed")
+    if accepted.get("capabilities") != request["required_capabilities"]:
+        raise WrapperError(
+            "accepted capabilities do not exactly match required capabilities"
+        )
     if accepted.get("effective_budget_limits") != request["budget_limits"]:
         raise WrapperError("accepted budget limits do not match the request")
     if accepted.get("effective_protocol_limits") != request["protocol_limits"]:
@@ -1236,6 +1321,13 @@ def _terminate_process_tree(
         )
         return "SIGKILL"
 
+    if hard:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return None
+        return "SIGKILL"
+
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -1243,7 +1335,7 @@ def _terminate_process_tree(
     deadline = time.monotonic() + (grace_ms / 1000)
     while process.poll() is None and time.monotonic() < deadline:
         time.sleep(0.02)
-    if process.poll() is None and hard:
+    if process.poll() is None:
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -1320,8 +1412,14 @@ def run_wrapper(args: argparse.Namespace) -> int:
         HARD_INPUT_LINE_BYTES, label="trial request"
     )
     request = strict_json_loads(request_raw)
-    _validate_request(request, args.harness)
-    emitter = EventEmitter(request["trial_id"], request["attempt_id"])
+    selected_model = _validate_request(request, args.harness)
+    emitter = EventEmitter(
+        request["trial_id"],
+        request["attempt_id"],
+        max_events=int(request["protocol_limits"]["max_events"]),
+        max_line_bytes=int(request["protocol_limits"]["max_line_bytes"]),
+        max_total_bytes=int(request["protocol_limits"]["max_total_bytes"]),
+    )
     emitter.emit(
         "hello",
         supported_protocol_versions=[PROTOCOL_VERSION],
@@ -1365,7 +1463,7 @@ def run_wrapper(args: argparse.Namespace) -> int:
     started = time.monotonic()
     usage = Usage(started=started)
     state = TranslationState(
-        requested_model=str(request["model_policy"]["allowed_models"][0]),
+        requested_model=selected_model,
         usage=usage,
     )
     baseline = WorkspaceBaseline.capture(workspace, request["output"])

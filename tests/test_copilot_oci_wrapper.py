@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
+import io
 import json
 import os
 import pathlib
@@ -19,6 +21,19 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 EXAMPLE = ROOT / "examples" / "harnesses" / "copilot-oci"
 WRAPPER = EXAMPLE / "protocol_wrapper.py"
 IMAGE_DIGEST = "1" * 64
+
+
+def _load_wrapper_module():
+    module_name = "atv_test_copilot_oci_protocol_wrapper"
+    spec = importlib.util.spec_from_file_location(module_name, WRAPPER)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+WRAPPER_MODULE = _load_wrapper_module()
 
 
 def _manifest(harness: str) -> dict:
@@ -119,7 +134,8 @@ if mode == "cancel":
     time.sleep(30)
     raise SystemExit(8)
 
-emit("assistant.turn_start", {"turnId": "turn-1", "model": "gpt-5.4"})
+selected_model = os.environ["COPILOT_MODEL"]
+emit("assistant.turn_start", {"turnId": "turn-1", "model": selected_model})
 emit(
     "tool.execution_start",
     {"toolCallId": "tool-1", "toolName": "write", "arguments": {}},
@@ -156,7 +172,7 @@ emit(
     "assistant.usage",
     {
         "turnId": "turn-1",
-        "model": "gpt-5.4",
+        "model": selected_model,
         "inputTokens": 11,
         "outputTokens": 7,
         "duration": 9,
@@ -433,6 +449,111 @@ def test_wrapper_rejects_forged_accepted_digest_before_launch(
     assert not (workspace / "result.json").exists()
 
 
+def test_wrapper_rejects_forged_accepted_capabilities_before_launch(
+    tmp_path, protocol_documents
+):
+    fake = _fake_copilot(tmp_path)
+    process, workspace, _, manifest, _ = _start_wrapper(
+        tmp_path, "phoenix", fake
+    )
+    request = _request(protocol_documents, "phoenix", "result.json")
+    assert process.stdin is not None
+    assert process.stdout is not None
+    process.stdin.write(json.dumps(request).encode() + b"\n")
+    process.stdin.flush()
+    hello = process.stdout.readline()
+    session = ProtocolSession(manifest, request)
+    session.receive_harness_line(hello, recorded_at="2026-07-20T12:00:00Z")
+    accepted = session.record_controller_accept(
+        recorded_at="2026-07-20T12:00:01Z"
+    )
+    accepted["capabilities"]["browser"] = True
+    process.stdin.write(json.dumps(accepted).encode() + b"\n")
+    process.stdin.flush()
+    process.stdin.close()
+    stderr = process.stderr.read() if process.stderr is not None else b""
+    assert process.wait(timeout=10) == 2
+    assert b"capabilities do not exactly match" in stderr
+    assert not (workspace / "result.json").exists()
+
+
+def test_event_emitter_enforces_max_events_atomically():
+    stream = io.BytesIO()
+    emitter = WRAPPER_MODULE.EventEmitter(
+        "trial-1",
+        "attempt-1",
+        max_events=1,
+        max_line_bytes=4096,
+        max_total_bytes=8192,
+        stream=stream,
+    )
+    emitter.emit("status", status="running", detail_code="first")
+    before = stream.getvalue()
+    before_total = emitter.total_bytes
+
+    with pytest.raises(WRAPPER_MODULE.ProtocolOutputLimitError, match="max_events"):
+        emitter.emit("status", status="running", detail_code="second")
+
+    assert stream.getvalue() == before
+    assert emitter.sequence == 1
+    assert emitter.total_bytes == before_total
+
+
+def test_event_emitter_enforces_max_line_bytes_atomically():
+    stream = io.BytesIO()
+    emitter = WRAPPER_MODULE.EventEmitter(
+        "trial-1",
+        "attempt-1",
+        max_events=10,
+        max_line_bytes=1,
+        max_total_bytes=8192,
+        stream=stream,
+    )
+
+    with pytest.raises(WRAPPER_MODULE.ProtocolOutputLimitError, match="max_line_bytes"):
+        emitter.emit("status", status="running", detail_code="too-large")
+
+    assert stream.getvalue() == b""
+    assert emitter.sequence == 0
+    assert emitter.total_bytes == 0
+
+
+def test_event_emitter_enforces_max_total_bytes_atomically(monkeypatch):
+    stream = io.BytesIO()
+    emitted_at = "2026-07-20T12:00:00.000000Z"
+    monkeypatch.setattr(WRAPPER_MODULE, "utc_timestamp", lambda: emitted_at)
+    encoded = WRAPPER_MODULE.canonical_json_bytes(
+        {
+            "schema": WRAPPER_MODULE.HARNESS_EVENT_SCHEMA,
+            "type": "status",
+            "protocol_version": WRAPPER_MODULE.PROTOCOL_VERSION,
+            "trial_id": "trial-1",
+            "attempt_id": "attempt-1",
+            "harness_sequence": 0,
+            "emitted_at": emitted_at,
+            "status": "running",
+            "detail_code": "too-large",
+        }
+    )
+    emitter = WRAPPER_MODULE.EventEmitter(
+        "trial-1",
+        "attempt-1",
+        max_events=10,
+        max_line_bytes=len(encoded),
+        max_total_bytes=len(encoded),
+        stream=stream,
+    )
+
+    with pytest.raises(
+        WRAPPER_MODULE.ProtocolOutputLimitError, match="max_total_bytes"
+    ):
+        emitter.emit("status", status="running", detail_code="too-large")
+
+    assert stream.getvalue() == b""
+    assert emitter.sequence == 0
+    assert emitter.total_bytes == 0
+
+
 def test_controller_cancel_kills_copilot_process_tree(
     tmp_path, protocol_documents
 ):
@@ -459,6 +580,86 @@ def test_controller_cancel_kills_copilot_process_tree(
     assert transcript.result["exit"]["cancelled"] is True
     time.sleep(3.5)
     assert not (workspace / "grandchild-survived.txt").exists()
+
+
+def test_soft_cancel_escalates_for_noncooperative_child(tmp_path):
+    ready = tmp_path / "noncooperative-ready.txt"
+    code = (
+        "import pathlib,signal,time;"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN);"
+        f"pathlib.Path({str(ready)!r}).write_text('ready', encoding='utf-8');"
+        "time.sleep(30)"
+    )
+    process = subprocess.Popen(
+        [sys.executable, "-c", code],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        **WRAPPER_MODULE._creation_kwargs(),
+    )
+    deadline = time.monotonic() + 8
+    while not ready.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert ready.exists()
+    started = time.monotonic()
+    signal_name = WRAPPER_MODULE._terminate_process_tree(
+        process, grace_ms=100, hard=False
+    )
+    process.wait(timeout=5)
+
+    assert time.monotonic() - started < 5
+    assert signal_name == "SIGKILL"
+    assert process.poll() is not None
+
+
+def test_model_selection_uses_validated_allowed_model_order(
+    tmp_path, protocol_documents
+):
+    fake = _fake_copilot(tmp_path)
+    process, workspace, _, manifest, _ = _start_wrapper(
+        tmp_path, "hve-core", fake
+    )
+    request = _request(protocol_documents, "hve-core", "result.json")
+    request["model_policy"]["allowed_models"] = [
+        "provider/controller-default",
+        "provider/secondary",
+    ]
+    session, _ = _handshake(process, manifest, request)
+    transcript, _ = _finish_transcript(process, session)
+    payload = json.loads((workspace / "result.json").read_text(encoding="utf-8"))
+
+    assert transcript.status.value == "completed"
+    assert payload["env"]["COPILOT_MODEL"] == "provider/controller-default"
+    argv = payload["argv"]
+    assert argv[argv.index("--model") + 1] == "provider/controller-default"
+    assert (
+        WRAPPER_MODULE._select_model(
+            {
+                "allowed_models": ["provider/first", "provider/default"],
+                "default_model": "provider/default",
+            }
+        )
+        == "provider/default"
+    )
+    with pytest.raises(WRAPPER_MODULE.WrapperError, match="ambiguous"):
+        WRAPPER_MODULE._select_model(
+            {
+                "allowed_models": ["provider/first", "provider/second"],
+                "selected_model": "provider/first",
+                "default_model": "provider/second",
+            }
+        )
+    with pytest.raises(WRAPPER_MODULE.WrapperError, match="duplicates"):
+        WRAPPER_MODULE._select_model(
+            {"allowed_models": ["provider/first", "provider/first"]}
+        )
+    with pytest.raises(WRAPPER_MODULE.WrapperError, match="outside allowed_models"):
+        WRAPPER_MODULE._select_model(
+            {
+                "allowed_models": ["provider/first"],
+                "selected_model": "provider/other",
+            }
+        )
 
 
 def test_child_stdout_limit_fails_closed(tmp_path, protocol_documents):
