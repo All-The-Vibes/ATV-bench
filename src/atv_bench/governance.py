@@ -16,27 +16,65 @@ snapshot with read-only ``gh api`` GET requests.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import fnmatch
+import hashlib
 import re
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Any
 
 SCHEMA_VERSION = 1
+EXPECTED_DEFAULT_BRANCH = "main"
 REQUIRED_CHECKS = ("hermetic", "pr-path-guard")
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 PINNED_ACTION_PATTERN = re.compile(
     r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*@[0-9a-f]{40}$"
 )
+WORKFLOW_PATH = re.compile(r"^\.github/workflows/[^/]+\.(?:yml|yaml)$")
+KNOWN_WORKFLOW_STATES = {
+    "active",
+    "deleted",
+    "disabled_fork",
+    "disabled_inactivity",
+    "disabled_manually",
+}
+# Source-code invariant, not a runtime attestation: these hashes bind the only
+# active workflows to the reviewed CI and Pages-only files introduced by c1011ee.
+REVIEWED_WORKFLOW_SHA256 = {
+    ".github/workflows/ci.yml": (
+        "f4d3417a0bd6b34ed8391706492f908f354ea9aeb4c80c1cd28b0d759d3f1700"
+    ),
+    ".github/workflows/league-deploy.yml": (
+        "c2ccde1abdb8dfde1b2bc8163e4b4f91f79059500a943548fb3c63fbd19ffc27"
+    ),
+}
+REVIEWED_CODEOWNERS_SHA256 = (
+    "09f58f5e5d697f7565dc58119951ac96a6048da287d0656cb8a1ec48025f2cf6"
+)
+REQUIRED_CODEOWNER_RULES = {
+    "/.github/": "@All-The-Vibes/league-maintainers",
+    "/league/matches.jsonl": "@All-The-Vibes/league-maintainers",
+    "/src/": "@All-The-Vibes/league-maintainers",
+    "/pyproject.toml": "@All-The-Vibes/league-maintainers",
+    "/leaderboard/schema.json": "@All-The-Vibes/league-maintainers",
+    "/arena/": "@All-The-Vibes/league-maintainers",
+    "/tests/": "@All-The-Vibes/league-maintainers",
+    "/uv.lock": "@All-The-Vibes/league-maintainers",
+}
 
 SNAPSHOT_KEYS = (
     "repository",
     "branch_protection",
+    "codeowners",
     "rulesets",
-    "environment",
-    "label",
+    "pages_environment",
+    "pages_branch_policies",
     "actions_permissions",
     "selected_actions",
+    "workflows",
+    "workflow_sources",
     "releases",
     "tags",
 )
@@ -496,69 +534,452 @@ def _check_is_required(check: str, configured: set[str]) -> bool:
     return False
 
 
-def _environment_finding(result: EndpointResult) -> Finding:
+def _contents_file_bytes(
+    result: EndpointResult,
+    *,
+    expected_path: str,
+    label: str,
+    errors: list[str],
+) -> bytes | None:
+    if not result.ok:
+        errors.append(
+            f"{label} endpoint is unavailable "
+            f"(status={result.status!r}, error={result.error!r})"
+        )
+        return None
+    data = _as_mapping(result.data, f"{label} response", errors)
+    if data is None:
+        return None
+    if data.get("type") != "file":
+        errors.append(f"{label} response is not a file")
+    if data.get("path") != expected_path:
+        errors.append(f"{label} response path does not match {expected_path!r}")
+    blob_sha = data.get("sha")
+    if not isinstance(blob_sha, str) or not FULL_SHA.fullmatch(blob_sha):
+        errors.append(f"{label} response has invalid blob SHA")
+    size = data.get("size")
+    if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+        errors.append(f"{label} response has invalid size")
+        size = None
+    if data.get("encoding") != "base64":
+        errors.append(f"{label} response encoding is not base64")
+        return None
+    content = data.get("content")
+    if not isinstance(content, str):
+        errors.append(f"{label} response is missing content")
+        return None
+    try:
+        decoded = base64.b64decode(
+            "".join(content.split()),
+            validate=True,
+        )
+    except (binascii.Error, ValueError) as exc:
+        errors.append(f"{label} response has invalid base64: {exc}")
+        return None
+    if size is not None and len(decoded) != size:
+        errors.append(
+            f"{label} size mismatch (declared={size}, decoded={len(decoded)})"
+        )
+    return decoded
+
+
+def _codeowners_source_finding(result: EndpointResult) -> Finding:
     errors: list[str] = []
-    data = _as_mapping(result.data, "environment response", errors) if result.ok else None
-    reviewers: list[str] = []
-    can_admins_bypass: bool | None = None
-    prevent_self_review: bool | None = None
-    if data is not None:
-        can_admins_bypass = data.get("can_admins_bypass")
-        if not isinstance(can_admins_bypass, bool):
-            errors.append("environment response is missing boolean can_admins_bypass")
-        rules = _as_list(data.get("protection_rules"), "protection_rules", errors)
-        if rules is not None:
-            for raw_rule in rules:
-                rule = _as_mapping(raw_rule, "protection_rules[]", errors)
-                if rule is None or rule.get("type") != "required_reviewers":
+    decoded = _contents_file_bytes(
+        result,
+        expected_path=".github/CODEOWNERS",
+        label="CODEOWNERS",
+        errors=errors,
+    )
+    observed_sha256 = hashlib.sha256(decoded).hexdigest() if decoded is not None else None
+    rules: dict[str, list[str]] = {}
+    if decoded is not None:
+        try:
+            text = decoded.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            errors.append(f"CODEOWNERS is not valid UTF-8: {exc}")
+        else:
+            for line_number, raw_line in enumerate(text.splitlines(), start=1):
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
                     continue
-                prevent_self_review = rule.get("prevent_self_review")
-                if not isinstance(prevent_self_review, bool):
+                fields = line.split()
+                if len(fields) < 2:
                     errors.append(
-                        "required_reviewers is missing boolean prevent_self_review"
+                        f"CODEOWNERS line {line_number} lacks an owner"
                     )
-                raw_reviewers = _as_list(
-                    rule.get("reviewers"),
-                    "required_reviewers.reviewers",
-                    errors,
-                )
-                if raw_reviewers is not None:
-                    for raw in raw_reviewers:
-                        reviewer = raw.get("reviewer") if isinstance(raw, Mapping) else None
-                        reviewers.append(_actor_name(reviewer or raw))
+                    continue
+                pattern, owners = fields[0], fields[1:]
+                rules[pattern] = owners
+
+    missing_patterns = sorted(set(REQUIRED_CODEOWNER_RULES) - set(rules))
+    wrong_owners = {
+        pattern: {
+            "required": owner,
+            "observed": rules.get(pattern, []),
+        }
+        for pattern, owner in REQUIRED_CODEOWNER_RULES.items()
+        if pattern in rules and owner not in rules[pattern]
+    }
     passed = (
         result.ok
         and not errors
-        and bool(reviewers)
-        and can_admins_bypass is False
-        and prevent_self_review is True
+        and not missing_patterns
+        and not wrong_owners
+        and observed_sha256 == REVIEWED_CODEOWNERS_SHA256
     )
     return _finding(
-        "environment.league_match_reviewers",
+        "codeowners.required_trust_surfaces",
         passed,
         (
-            "league-match requires independent reviewer approval with no admin bypass"
+            "CODEOWNERS exactly matches the reviewed trust-surface policy"
             if passed
-            else "league-match lacks independent review or permits an unsafe bypass"
+            else "CODEOWNERS source or trust-surface coverage is unreviewed or ambiguous"
         ),
-        reviewers=reviewers,
-        can_admins_bypass=can_admins_bypass,
-        prevent_self_review=prevent_self_review,
+        scope="repository-source invariant bound to the reviewed c1011ee policy",
+        expected_sha256=REVIEWED_CODEOWNERS_SHA256,
+        observed_sha256=observed_sha256,
+        required_rules=dict(REQUIRED_CODEOWNER_RULES),
+        observed_rules=rules,
+        missing_patterns=missing_patterns,
+        wrong_owners=wrong_owners,
         errors=errors,
         **_endpoint_evidence(result),
     )
 
 
-def _label_finding(result: EndpointResult) -> Finding:
-    data = result.data if isinstance(result.data, Mapping) else {}
-    name = data.get("name")
-    passed = result.ok and isinstance(name, str) and name.casefold() == "run-match"
+def _pages_environment_finding(
+    environment: EndpointResult,
+    branch_policies: EndpointResult,
+    *,
+    default_branch: str,
+) -> Finding:
+    errors: list[str] = []
+    data = (
+        _as_mapping(environment.data, "github-pages environment response", errors)
+        if environment.ok
+        else None
+    )
+    policy_data = (
+        _as_mapping(
+            branch_policies.data,
+            "github-pages deployment branch policies response",
+            errors,
+        )
+        if branch_policies.ok
+        else None
+    )
+
+    name: str | None = None
+    can_admins_bypass: bool | None = None
+    protected_branches: bool | None = None
+    custom_branch_policies: bool | None = None
+    has_branch_policy_rule = False
+    if data is not None:
+        name = data.get("name")
+        if not isinstance(name, str) or not name:
+            errors.append("github-pages environment is missing name")
+        can_admins_bypass = data.get("can_admins_bypass")
+        if not isinstance(can_admins_bypass, bool):
+            errors.append(
+                "github-pages environment is missing boolean can_admins_bypass"
+            )
+        rules = _as_list(
+            data.get("protection_rules"),
+            "github-pages protection_rules",
+            errors,
+        )
+        if rules is not None:
+            for index, raw_rule in enumerate(rules):
+                rule = _as_mapping(
+                    raw_rule,
+                    f"github-pages protection_rules[{index}]",
+                    errors,
+                )
+                if rule is None:
+                    continue
+                rule_type = rule.get("type")
+                if not isinstance(rule_type, str) or not rule_type:
+                    errors.append(
+                        f"github-pages protection_rules[{index}] is missing type"
+                    )
+                elif rule_type == "branch_policy":
+                    has_branch_policy_rule = True
+        deployment_policy = _as_mapping(
+            data.get("deployment_branch_policy"),
+            "github-pages deployment_branch_policy",
+            errors,
+        )
+        if deployment_policy is not None:
+            protected_branches = deployment_policy.get("protected_branches")
+            custom_branch_policies = deployment_policy.get(
+                "custom_branch_policies"
+            )
+            if not isinstance(protected_branches, bool):
+                errors.append(
+                    "deployment_branch_policy is missing boolean protected_branches"
+                )
+            if not isinstance(custom_branch_policies, bool):
+                errors.append(
+                    "deployment_branch_policy is missing boolean "
+                    "custom_branch_policies"
+                )
+            if (
+                isinstance(protected_branches, bool)
+                and isinstance(custom_branch_policies, bool)
+                and protected_branches == custom_branch_policies
+            ):
+                errors.append(
+                    "deployment_branch_policy must select exactly one policy mode"
+                )
+
+    policy_names: list[str] = []
+    if policy_data is not None:
+        total_count = policy_data.get("total_count")
+        if isinstance(total_count, bool) or not isinstance(total_count, int):
+            errors.append("deployment branch policies is missing integer total_count")
+        rows = _as_list(
+            policy_data.get("branch_policies"),
+            "deployment branch policies.branch_policies",
+            errors,
+        )
+        if rows is not None:
+            if isinstance(total_count, int) and total_count != len(rows):
+                errors.append(
+                    "deployment branch policy response is incomplete: "
+                    f"total_count={total_count}, rows={len(rows)}"
+                )
+            for index, raw_policy in enumerate(rows):
+                policy = _as_mapping(
+                    raw_policy,
+                    f"deployment branch policies[{index}]",
+                    errors,
+                )
+                if policy is None:
+                    continue
+                policy_id = policy.get("id")
+                if isinstance(policy_id, bool) or not isinstance(policy_id, int):
+                    errors.append(
+                        f"deployment branch policies[{index}] is missing integer id"
+                    )
+                policy_type = policy.get("type")
+                if policy_type != "branch":
+                    errors.append(
+                        f"deployment branch policies[{index}] has unsupported "
+                        f"type {policy_type!r}"
+                    )
+                policy_name = policy.get("name")
+                if not isinstance(policy_name, str) or not policy_name:
+                    errors.append(
+                        f"deployment branch policies[{index}] is missing name"
+                    )
+                else:
+                    policy_names.append(policy_name)
+
+    expected_policies = [default_branch] if default_branch else []
+    observed_policies = sorted(policy_names)
+    passed = (
+        environment.ok
+        and branch_policies.ok
+        and not errors
+        and name == "github-pages"
+        and default_branch == EXPECTED_DEFAULT_BRANCH
+        and has_branch_policy_rule
+        and protected_branches is False
+        and custom_branch_policies is True
+        and observed_policies == expected_policies
+    )
     return _finding(
-        "label.run_match",
+        "pages.environment_deployment_branch_policy",
         passed,
-        "run-match label exists" if passed else "run-match label is missing or ambiguous",
-        observed=name,
-        **_endpoint_evidence(result),
+        (
+            "github-pages accepts deployments only from the protected main branch"
+            if passed
+            else "github-pages deployment branch policy is missing, broad, or ambiguous"
+        ),
+        environment_name=name,
+        default_branch=default_branch or None,
+        expected_branch_policies=expected_policies,
+        observed_branch_policies=observed_policies,
+        has_branch_policy_rule=has_branch_policy_rule,
+        protected_branches=protected_branches,
+        custom_branch_policies=custom_branch_policies,
+        can_admins_bypass=can_admins_bypass,
+        errors=errors,
+        environment_endpoint=_endpoint_evidence(environment),
+        branch_policies_endpoint=_endpoint_evidence(branch_policies),
+    )
+
+
+def _workflow_source_finding(
+    workflows: EndpointResult,
+    sources: EndpointResult,
+) -> Finding:
+    """Verify an exact reviewed source allowlist for all active workflows."""
+    errors: list[str] = []
+    catalog = (
+        _as_mapping(workflows.data, "workflow catalog response", errors)
+        if workflows.ok
+        else None
+    )
+    catalog_rows: list[Any] | None = None
+    active_paths: list[str] = []
+    active_ids: dict[str, int] = {}
+    if catalog is not None:
+        total_count = catalog.get("total_count")
+        if isinstance(total_count, bool) or not isinstance(total_count, int):
+            errors.append("workflow catalog is missing integer total_count")
+        catalog_rows = _as_list(
+            catalog.get("workflows"),
+            "workflow catalog.workflows",
+            errors,
+        )
+        if catalog_rows is not None:
+            if isinstance(total_count, int) and total_count != len(catalog_rows):
+                errors.append(
+                    "workflow catalog response is incomplete: "
+                    f"total_count={total_count}, rows={len(catalog_rows)}"
+                )
+            seen_ids: set[int] = set()
+            seen_paths: set[str] = set()
+            for index, raw_row in enumerate(catalog_rows):
+                row = _as_mapping(raw_row, f"workflows[{index}]", errors)
+                if row is None:
+                    continue
+                workflow_id = row.get("id")
+                if isinstance(workflow_id, bool) or not isinstance(workflow_id, int):
+                    errors.append(f"workflows[{index}] is missing integer id")
+                    continue
+                if workflow_id in seen_ids:
+                    errors.append(f"workflows[{index}] duplicates id {workflow_id}")
+                seen_ids.add(workflow_id)
+                path = row.get("path")
+                if not isinstance(path, str) or not WORKFLOW_PATH.fullmatch(path):
+                    errors.append(f"workflows[{index}] has invalid path {path!r}")
+                    continue
+                if path in seen_paths:
+                    errors.append(f"workflows[{index}] duplicates path {path!r}")
+                seen_paths.add(path)
+                state = row.get("state")
+                if state not in KNOWN_WORKFLOW_STATES:
+                    errors.append(
+                        f"workflows[{index}] has unknown state {state!r}"
+                    )
+                    continue
+                if state == "active":
+                    active_paths.append(path)
+                    active_ids[path] = workflow_id
+
+    source_rows = (
+        _as_list(sources.data, "active workflow sources", errors)
+        if sources.ok
+        else None
+    )
+    observed_hashes: dict[str, str] = {}
+    source_paths: list[str] = []
+    if source_rows is not None:
+        for index, raw_entry in enumerate(source_rows):
+            entry = _as_mapping(
+                raw_entry,
+                f"active workflow sources[{index}]",
+                errors,
+            )
+            if entry is None:
+                continue
+            path = entry.get("path")
+            workflow_id = entry.get("id")
+            state = entry.get("state")
+            if not isinstance(path, str) or not WORKFLOW_PATH.fullmatch(path):
+                errors.append(
+                    f"active workflow sources[{index}] has invalid path {path!r}"
+                )
+                continue
+            source_paths.append(path)
+            if source_paths.count(path) > 1:
+                errors.append(
+                    f"active workflow sources[{index}] duplicates path {path!r}"
+                )
+            if workflow_id != active_ids.get(path):
+                errors.append(
+                    f"active workflow sources[{index}] id does not match catalog"
+                )
+            if state != "active":
+                errors.append(
+                    f"active workflow sources[{index}] is not marked active"
+                )
+
+            raw_source = entry.get("source")
+            embedded = EndpointResult.from_snapshot(
+                {"source": raw_source},
+                "source",
+            )
+            if not embedded.ok:
+                errors.append(
+                    f"{path}: source endpoint is unavailable "
+                    f"(status={embedded.status!r}, error={embedded.error!r})"
+                )
+                continue
+            decoded = _contents_file_bytes(
+                embedded,
+                expected_path=path,
+                label=f"{path} contents",
+                errors=errors,
+            )
+            if decoded is None:
+                continue
+            observed_hashes[path] = hashlib.sha256(decoded).hexdigest()
+
+    expected_paths = sorted(REVIEWED_WORKFLOW_SHA256)
+    observed_active_paths = sorted(active_paths)
+    observed_source_paths = sorted(source_paths)
+    missing_active = sorted(set(expected_paths) - set(active_paths))
+    unexpected_active = sorted(set(active_paths) - set(expected_paths))
+    missing_sources = sorted(set(active_paths) - set(source_paths))
+    unexpected_sources = sorted(set(source_paths) - set(active_paths))
+    digest_mismatches = {
+        path: {
+            "expected": REVIEWED_WORKFLOW_SHA256[path],
+            "observed": observed_hashes.get(path),
+        }
+        for path in expected_paths
+        if observed_hashes.get(path) != REVIEWED_WORKFLOW_SHA256[path]
+    }
+    passed = (
+        workflows.ok
+        and sources.ok
+        and not errors
+        and not missing_active
+        and not unexpected_active
+        and not missing_sources
+        and not unexpected_sources
+        and not digest_mismatches
+        and observed_active_paths == expected_paths
+        and observed_source_paths == expected_paths
+    )
+    return _finding(
+        "workflows.reviewed_source_invariant",
+        passed,
+        (
+            "all active workflows exactly match the reviewed CI and Pages-only sources"
+            if passed
+            else "active workflow set or source differs from the reviewed allowlist"
+        ),
+        scope=(
+            "repository-source invariant only; not runtime attestation or proof "
+            "of transitive action internals"
+        ),
+        expected_sha256=dict(REVIEWED_WORKFLOW_SHA256),
+        observed_sha256=observed_hashes,
+        active_workflows=observed_active_paths,
+        source_workflows=observed_source_paths,
+        missing_active=missing_active,
+        unexpected_active=unexpected_active,
+        missing_sources=missing_sources,
+        unexpected_sources=unexpected_sources,
+        digest_mismatches=digest_mismatches,
+        errors=errors,
+        workflows_endpoint=_endpoint_evidence(workflows),
+        sources_endpoint=_endpoint_evidence(sources),
     )
 
 
@@ -755,11 +1176,14 @@ def audit_governance(
         )
     )
     for key in (
+        "codeowners",
         "rulesets",
-        "environment",
-        "label",
+        "pages_environment",
+        "pages_branch_policies",
         "actions_permissions",
         "selected_actions",
+        "workflows",
+        "workflow_sources",
         "releases",
         "tags",
     ):
@@ -782,6 +1206,7 @@ def audit_governance(
         endpoints["repository"].ok
         and not repo_errors
         and str(observed_repo).casefold() == repository.casefold()
+        and default_branch == EXPECTED_DEFAULT_BRANCH
     )
     findings.append(
         _finding(
@@ -790,10 +1215,11 @@ def audit_governance(
             (
                 f"resolved {repository} default branch {default_branch!r}"
                 if identity_passed
-                else "repository identity or default branch is missing or ambiguous"
+                else "repository identity is wrong or default branch is not main"
             ),
             expected_repository=repository,
             observed_repository=observed_repo,
+            expected_default_branch=EXPECTED_DEFAULT_BRANCH,
             default_branch=default_branch or None,
             errors=repo_errors,
         )
@@ -924,6 +1350,7 @@ def audit_governance(
             errors=classic_pr_errors + branch_rules["errors"],
         )
     )
+    findings.append(_codeowners_source_finding(endpoints["codeowners"]))
 
     bypass_errors: list[str] = []
     enforce_admins = None
@@ -956,13 +1383,24 @@ def audit_governance(
         )
     )
 
-    findings.append(_environment_finding(endpoints["environment"]))
-    findings.append(_label_finding(endpoints["label"]))
+    findings.append(
+        _pages_environment_finding(
+            endpoints["pages_environment"],
+            endpoints["pages_branch_policies"],
+            default_branch=default_branch,
+        )
+    )
     actions_policy, action_pinning = _actions_findings(
         endpoints["actions_permissions"],
         endpoints["selected_actions"],
     )
     findings.extend((actions_policy, action_pinning))
+    findings.append(
+        _workflow_source_finding(
+            endpoints["workflows"],
+            endpoints["workflow_sources"],
+        )
+    )
     findings.append(
         _immutable_release_or_tag(
             endpoints["releases"],
