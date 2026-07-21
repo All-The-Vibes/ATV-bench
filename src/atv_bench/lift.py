@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import dataclasses
 from contextlib import contextmanager
-from typing import Any, Iterator, Mapping
+from typing import Any, Iterator, Mapping, Sequence
 
 import numpy as np
 from scipy import optimize
@@ -235,6 +235,7 @@ def compute_lift(
     seed: int = 0,
     n_boot: int = 1000,
     ci: float = 0.95,
+    cluster_ids: Sequence[Any] | None = None,
 ) -> dict[str, LiftResult]:
     """Per-harness lift over its bare baseline: theta(M+H) - theta(bare M).
 
@@ -243,15 +244,28 @@ def compute_lift(
     the phi_M term shared by both players cancels, so the number is a pure harness effect and
     is comparable across harnesses on different base models.
 
-    CI: a percentile bootstrap that resamples whole MATCHES with replacement (each match is an
-    independent run — the run-to-run nondeterminism lives at the row level) and refits the
-    player thetas on each replicate, recomputing every lift. The seed pins the replicate draw.
+    CI: a percentile bootstrap that refits the player thetas on each replicate and recomputes
+    every lift; the seed pins the replicate draw. The RESAMPLING UNIT depends on
+    ``cluster_ids``:
+
+    * ``cluster_ids is None`` (default) — resample whole MATCHES i.i.d. Correct only when
+      every match is an independent run.
+    * ``cluster_ids`` supplied (one label per match, aligned to ``matches``) — resample whole
+      CLUSTERS with replacement and pool their rows. A cluster is a set of correlated matches
+      (e.g. all games played by one harness build-artifact). Because N nested games under one
+      artifact are NOT N independent observations, the i.i.d.-row bootstrap understates the
+      variance (design effect ``1 + (m-1)rho``); clustering restores nominal coverage. The
+      point estimate is identical either way — only the CI width changes.
 
     Raises ``LiftError`` if a harness never played, or if its declared bare baseline was never
-    run on the same base model (theta(bare) undefined -> no baseline to subtract).
+    run on the same base model (theta(bare) undefined -> no baseline to subtract), or if
+    ``cluster_ids`` is supplied with a length that does not match ``matches``.
     """
     if not matches:
         raise LiftError("no matches supplied")
+    if cluster_ids is not None and len(cluster_ids) != len(matches):
+        raise LiftError(
+            f"cluster_ids length {len(cluster_ids)} != number of matches {len(matches)}")
 
     players, pidx, X, y = _build_player_design(matches)
     n_players = len(players)
@@ -286,15 +300,29 @@ def compute_lift(
     theta_hat = _fit_theta(X, y, n_players)
     point = _lifts_from_theta(theta_hat)
 
-    # --- bootstrap CI (resample matches i.i.d.; each match is an independent run) --------
+    # --- bootstrap CI ------------------------------------------------------------------- #
+    # Resampling unit = row (cluster_ids is None) or whole cluster (cluster_ids supplied).
     rng = np.random.default_rng(seed)
     n = X.shape[0]
     boot: dict[str, list[float]] = {h: [] for h in plan}
-    for _ in range(n_boot):
-        idx = rng.integers(0, n, size=n)
-        theta_b = _fit_theta(X[idx], y[idx], n_players)
-        for h, val in _lifts_from_theta(theta_b).items():
-            boot[h].append(val)
+
+    if cluster_ids is None:
+        for _ in range(n_boot):
+            idx = rng.integers(0, n, size=n)
+            theta_b = _fit_theta(X[idx], y[idx], n_players)
+            for h, val in _lifts_from_theta(theta_b).items():
+                boot[h].append(val)
+    else:
+        cid = np.asarray(cluster_ids)
+        uniq = np.unique(cid)
+        members = {c: np.flatnonzero(cid == c) for c in uniq}
+        n_clusters = uniq.shape[0]
+        for _ in range(n_boot):
+            chosen = rng.integers(0, n_clusters, size=n_clusters)
+            rows = np.concatenate([members[uniq[c]] for c in chosen])
+            theta_b = _fit_theta(X[rows], y[rows], n_players)
+            for h, val in _lifts_from_theta(theta_b).items():
+                boot[h].append(val)
 
     alpha = 1.0 - ci
     lo_q, hi_q = 100 * (alpha / 2), 100 * (1 - alpha / 2)
@@ -321,6 +349,8 @@ def fit_lift(
     seed: int = 0,
     n_boot: int = 1000,
     ci: float = 0.95,
+    cluster_ids: Sequence[Any] | None = None,
 ) -> dict[str, LiftResult]:
     """Documented alias of :func:`compute_lift`."""
-    return compute_lift(matches, baselines, seed=seed, n_boot=n_boot, ci=ci)
+    return compute_lift(matches, baselines, seed=seed, n_boot=n_boot, ci=ci,
+                        cluster_ids=cluster_ids)

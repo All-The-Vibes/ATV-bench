@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
   "typer>=0.12",
   "jsonschema>=4.0",
+  "numpy>=1.26",
 ]
 
 [project.optional-dependencies]

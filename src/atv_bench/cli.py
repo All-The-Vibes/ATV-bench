@@ -1242,8 +1242,30 @@ def rate(
         typer.echo(json.dumps(doc, indent=2))
 
 
-def _load_rating_matches(store: Path) -> list:
-    """Load matches.jsonl from a corpus dir into RatingMatch rows (shared by rate/lift)."""
+def _cluster_key_from_match(m: dict) -> str:
+    """Cluster key = game x (unordered build-artifact pair).
+
+    Nested games sharing a harness build-artifact are intra-cluster correlated, so the lift
+    bootstrap must resample the CLUSTER, not the row (gap G2). We key on the two players'
+    fingerprint_sha256 (the artifact identity) when present, falling back to harness names,
+    scoped by game so cross-game rows never share a cluster.
+    """
+    game = m.get("game") or m.get("game_version") or "game"
+    players = m.get("players") or []
+    ids = []
+    for p in players[:2]:
+        ids.append(str(p.get("fingerprint_sha256") or p.get("harness") or "?"))
+    if len(ids) < 2:
+        ids = [str(m.get("harness_a", "?")), str(m.get("harness_b", "?"))]
+    return f"{game}::" + "~".join(sorted(ids))
+
+
+def _load_rating_matches(store: Path, *, with_clusters: bool = False):
+    """Load matches.jsonl from a corpus dir into RatingMatch rows (shared by rate/lift).
+
+    When ``with_clusters`` is True, returns ``(matches, cluster_ids)`` with ``cluster_ids``
+    aligned to ``matches`` (one key per row). Otherwise returns just ``matches``.
+    """
     from atv_bench.rating import RatingMatch
 
     matches_file = store / "matches.jsonl"
@@ -1251,6 +1273,7 @@ def _load_rating_matches(store: Path) -> list:
         typer.echo(f"Cannot rate: no matches.jsonl in {store}")
         raise typer.Exit(2)
     out = []
+    clusters: list[str] = []
     for line in matches_file.read_text().splitlines():
         line = line.strip()
         if not line:
@@ -1267,6 +1290,10 @@ def _load_rating_matches(store: Path) -> list:
                 model_a=row["model_a"], model_b=row["model_b"],
                 score_a=float(row["score_a"]),
             ))
+            if with_clusters:
+                clusters.append(_cluster_key_from_match(m))
+    if with_clusters:
+        return out, clusters
     return out
 
 
@@ -1281,6 +1308,10 @@ def lift(
     seed: int = typer.Option(0, "--seed", help="Bootstrap seed."),
     n_boot: int = typer.Option(1000, "--n-boot", help="Bootstrap replicates for the CI."),
     json_out: bool = typer.Option(False, "--json", help="Also print the lift doc to stdout."),
+    cluster: bool = typer.Option(
+        True, "--cluster/--no-cluster",
+        help="Resample whole build-artifact clusters (game x artifact pair) instead of "
+             "individual matches, so nested games do not inflate CI precision (gap G2)."),
 ) -> None:
     """Emit harness LIFT over the bare model — the headline product metric (Section 5.5).
 
@@ -1291,7 +1322,10 @@ def lift(
     """
     from atv_bench.lift import LiftError, compute_lift
 
-    matches = _load_rating_matches(store)
+    if cluster:
+        matches, cluster_ids = _load_rating_matches(store, with_clusters=True)
+    else:
+        matches, cluster_ids = _load_rating_matches(store), None
     if not matches:
         typer.echo("No rateable matches in corpus (need >=1 scored head-to-head record).")
         raise typer.Exit(2)
@@ -1305,7 +1339,8 @@ def lift(
         baselines[h.strip()] = bare.strip()
 
     try:
-        results = compute_lift(matches, baselines, seed=seed, n_boot=n_boot)
+        results = compute_lift(matches, baselines, seed=seed, n_boot=n_boot,
+                               cluster_ids=cluster_ids)
     except LiftError as e:
         typer.echo(f"Cannot compute lift: {e}")
         raise typer.Exit(2)
@@ -1313,6 +1348,7 @@ def lift(
     doc = {
         "seed": seed,
         "n_boot": n_boot,
+        "resampling_unit": "cluster" if cluster else "match",
         "lifts": [
             {
                 "harness": r.harness,
