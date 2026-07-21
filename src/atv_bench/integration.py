@@ -13,6 +13,7 @@ to the TreeContainerLike protocol players.py expects.
 """
 from __future__ import annotations
 
+import os
 import tempfile
 from pathlib import Path
 
@@ -24,10 +25,37 @@ from atv_bench.players import HarnessPlayerCore
 # Harness keys ATV-bench can BUILD a bot with (fingerprint-only harnesses excluded).
 BUILDER_HARNESSES = tuple(ADAPTERS.keys())
 
+# Default per-command timeout (seconds) for the in-arena `environment.execute` calls.
+# mini-swe-agent's DockerEnvironment.config.timeout defaults to 30s and CodeClash's
+# arena code calls execute(cmd) with timeout=None, so a real match's engine adjudication
+# (e.g. lightcycles `engine.py -r 10`) is killed at 30s on a slow/loaded host — a FALSE
+# forfeit of an honest match, which is a trust bug, not a real outcome. We default high and
+# let ops tune it via ATV_ARENA_EXEC_TIMEOUT. This bounds a genuinely hung bot generously;
+# the container itself is still capped by CodeClash's 10h container_timeout.
+_DEFAULT_ARENA_EXEC_TIMEOUT = 900
+
 _original_get_agent = None  # set on first register(), restored on unregister()
+_original_clash_execute = None  # set on first register(), restored on unregister()
 _player_class_cache: dict[str, type] = {}
 # Per-harness config root (seed for the isolated HOME), threaded from run_live_match.
 _harness_homes: dict[str, Path | None] = {}
+
+
+def arena_execute_timeout() -> int:
+    """Effective per-command arena execute timeout (seconds).
+
+    Read from ATV_ARENA_EXEC_TIMEOUT when set to a positive int; otherwise the safe default.
+    Garbage / non-positive values fall back to the default rather than crashing a live match.
+    """
+    raw = os.getenv("ATV_ARENA_EXEC_TIMEOUT")
+    if raw is not None:
+        try:
+            val = int(raw)
+            if val > 0:
+                return val
+        except (TypeError, ValueError):
+            pass
+    return _DEFAULT_ARENA_EXEC_TIMEOUT
 
 
 def set_harness_homes(homes: dict[str, Path | None] | None) -> None:
@@ -136,11 +164,37 @@ def register() -> None:
         return player_cls(config, environment, game_context)
 
     cc.pvp.get_agent = patched_get_agent
+    _patch_arena_execute_timeout()
+
+
+def _patch_arena_execute_timeout() -> None:
+    """Wrap ClashDockerEnvironment.execute so a timeout=None call gets the generous arena
+    default instead of mini-swe-agent's 30s (which false-forfeits honest matches). An explicit
+    timeout from the caller is always respected.
+    """
+    global _original_clash_execute
+    if _original_clash_execute is not None:
+        return
+    from codeclash.utils.environment import ClashDockerEnvironment
+
+    _original_clash_execute = ClashDockerEnvironment.execute
+    original_execute = _original_clash_execute
+
+    def patched_execute(self, action, cwd: str = "", *, timeout=None):
+        if timeout is None:
+            timeout = arena_execute_timeout()
+        return original_execute(self, action, cwd, timeout=timeout)
+
+    ClashDockerEnvironment.execute = patched_execute
 
 
 def unregister() -> None:
     """Restore CodeClash's original get_agent."""
-    global _original_get_agent
+    global _original_get_agent, _original_clash_execute
+    if _original_clash_execute is not None:
+        from codeclash.utils.environment import ClashDockerEnvironment
+        ClashDockerEnvironment.execute = _original_clash_execute
+        _original_clash_execute = None
     if _original_get_agent is None:
         return
     cc = import_codeclash()
