@@ -48,6 +48,7 @@ BUILD_OUTPUT_LIMIT_BYTES = 2 * 1024 * 1024
 RUN_OUTPUT_LIMIT_BYTES = 256 * 1024
 CONTROL_OUTPUT_LIMIT_BYTES = 256 * 1024
 TMPFS_BYTES = 16 * 1024 * 1024
+BUNDLE_PUBLISH_ATTEMPTS = 20
 
 _IDENTITY_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}")
 _MATCH_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@+\-]{0,127}")
@@ -1080,10 +1081,31 @@ def _write_bundle(
             path = temporary / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
-        os.replace(temporary, final)
+        last_error: OSError | None = None
+        for attempt in range(BUNDLE_PUBLISH_ATTEMPTS):
+            try:
+                os.replace(temporary, final)
+                last_error = None
+                break
+            except (PermissionError, FileExistsError) as exc:
+                last_error = exc
+                if final.exists():
+                    break
+                if attempt + 1 < BUNDLE_PUBLISH_ATTEMPTS:
+                    time.sleep(min(0.05 * (attempt + 1), 0.5))
+        if last_error is not None and not final.exists():
+            raise LeagueExecutorError(
+                "content-addressed bundle publish remained locked after bounded retries"
+            ) from last_error
     finally:
         if temporary.exists():
             shutil.rmtree(temporary, ignore_errors=True)
+    if not final.is_dir() or final.is_symlink():
+        raise LeagueExecutorError(f"content-address collision at {final}")
+    for name, data in artifacts.items():
+        candidate = final / name
+        if not candidate.is_file() or candidate.read_bytes() != data:
+            raise LeagueExecutorError(f"content-address collision for {name} at {final}")
     return final, bundle_sha256
 
 

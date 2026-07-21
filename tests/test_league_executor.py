@@ -645,6 +645,63 @@ def test_evidence_is_committed_before_optional_store_mutation(monkeypatch, tmp_p
     assert order == ["bundle", "ingest"]
 
 
+def test_content_addressed_bundle_publish_retries_transient_windows_lock(
+    monkeypatch,
+    tmp_path,
+):
+    from atv_bench import league_executor as executor
+
+    real_replace = executor.os.replace
+    calls = 0
+
+    def transient_replace(source, target):
+        nonlocal calls
+        calls += 1
+        if calls <= 3:
+            raise PermissionError("transient scanner lock")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(executor.os, "replace", transient_replace)
+    bundle, digest = executor._write_bundle(
+        tmp_path / "evidence",
+        result={"status": "ok"},
+        meta={"trust_tier": "local-self-attested"},
+        reproduction={"schema": "test"},
+        logs={"run.stdout.log": b"ok\n"},
+        materials={"materials/bot/main.py": b"print('up')\n"},
+    )
+
+    assert calls == 4
+    assert bundle.name == digest
+    assert (bundle / "checksums.json").is_file()
+
+
+def test_content_addressed_bundle_publish_lock_failure_is_bounded_and_safe(
+    monkeypatch,
+    tmp_path,
+):
+    from atv_bench import league_executor as executor
+
+    monkeypatch.setattr(executor, "BUNDLE_PUBLISH_ATTEMPTS", 2)
+    monkeypatch.setattr(
+        executor.os,
+        "replace",
+        lambda _source, _target: (_ for _ in ()).throw(PermissionError("private")),
+    )
+
+    with pytest.raises(LeagueExecutorError, match="bounded retries") as caught:
+        executor._write_bundle(
+            tmp_path / "evidence",
+            result={"status": "ok"},
+            meta={"trust_tier": "local-self-attested"},
+            reproduction={"schema": "test"},
+            logs={},
+            materials={},
+        )
+
+    assert "private" not in str(caught.value)
+
+
 def test_local_store_lock_serializes_cross_handle_ingestion(tmp_path):
     acquired = threading.Event()
     release = threading.Event()
