@@ -13,9 +13,11 @@ import pytest
 from atv_bench.stats import (
     bh_fdr,
     bootstrap_ci,
+    direction_stability,
     intransitivity_statistic,
     n_min_for_power,
     noise_floor_variance,
+    paired_permutation_test,
 )
 
 
@@ -181,3 +183,74 @@ def test_intransitivity_detected():
         f"{stat_trans['statistic']:.3f}")
     assert stat_cyclic["flagged"] is True, "cyclic tournament must be flagged"
     assert stat_trans["flagged"] is False, "transitive tournament must not be flagged"
+
+
+# ---------------------------------------------------------------------------
+# 6. Paired permutation (sign-flip) test.
+# ---------------------------------------------------------------------------
+
+
+def test_paired_permutation_all_positive_is_significant():
+    """All-positive paired diffs are extreme under the sign-flip null (which is symmetric
+    around 0), so almost no random sign flip matches |observed mean| -> p ~ 0."""
+    diffs = np.full(30, 0.5)
+    res = paired_permutation_test(diffs, n_perm=5000, seed=0)
+    assert res["p_value"] < 0.01
+    assert res["observed"] == pytest.approx(0.5)
+
+
+def test_paired_permutation_symmetric_is_null():
+    """Diffs symmetric around 0 have observed mean ~0; almost every sign flip is at least as
+    extreme -> p ~ 1."""
+    diffs = np.array([-3.0, -2.0, -1.0, 1.0, 2.0, 3.0])
+    res = paired_permutation_test(diffs, n_perm=5000, seed=0)
+    assert res["p_value"] > 0.5
+
+
+def test_paired_permutation_p_in_unit_interval():
+    rng = np.random.default_rng(7)
+    diffs = rng.normal(0.2, 1.0, size=40)
+    res = paired_permutation_test(diffs, n_perm=2000, seed=3)
+    assert 0.0 <= res["p_value"] <= 1.0
+
+
+def test_paired_permutation_seed_determinism():
+    rng = np.random.default_rng(11)
+    diffs = rng.normal(0.1, 1.0, size=25)
+    a = paired_permutation_test(diffs, n_perm=2000, seed=42)
+    b = paired_permutation_test(diffs, n_perm=2000, seed=42)
+    c = paired_permutation_test(diffs, n_perm=2000, seed=43)
+    assert a["p_value"] == b["p_value"]
+    assert isinstance(c["p_value"], float)
+
+
+def test_paired_permutation_empty_is_graceful():
+    res = paired_permutation_test([], n_perm=1000, seed=0)
+    assert res["p_value"] == 1.0
+    assert 0.0 <= res["p_value"] <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# 7. Direction-stability metric.
+# ---------------------------------------------------------------------------
+
+
+def test_direction_stability_all_same_sign():
+    draws = np.array([0.1, 0.2, 0.3, 0.4])
+    assert direction_stability(draws) == 1.0
+
+
+def test_direction_stability_fifty_fifty():
+    draws = np.array([-1.0] * 50 + [1.0] * 50)
+    # point est (mean) ~ 0; roughly half share its sign
+    val = direction_stability(draws)
+    assert 0.4 <= val <= 0.6
+
+
+def test_direction_stability_range_and_determinism():
+    rng = np.random.default_rng(5)
+    draws = rng.normal(0.3, 1.0, size=200)
+    a = direction_stability(draws)
+    b = direction_stability(draws)
+    assert 0.0 <= a <= 1.0
+    assert a == b

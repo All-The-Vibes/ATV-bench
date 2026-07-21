@@ -245,3 +245,70 @@ def reliability_ece(probs: Sequence[float], outcomes: Sequence[float],
         bins.append({"lo": float(lo), "hi": float(hi), "conf": conf,
                      "acc": acc, "n": int(mask.sum())})
     return {"ece": float(ece), "bins": bins}
+
+
+# ---------------------------------------------------------------------------
+# Paired permutation (sign-flip) test.
+# ---------------------------------------------------------------------------
+
+
+def paired_permutation_test(
+    diffs: Sequence[float],
+    *,
+    n_perm: int = 10000,
+    seed: int = 0,
+) -> dict[str, Any]:
+    """Two-sided paired permutation test by random sign flips of the paired diffs.
+
+    The null hypothesis is that each paired difference is symmetric around 0, so flipping
+    its sign is exchangeable. We draw ``n_perm`` random +/-1 sign vectors, recompute the
+    mean under each, and count how often the permuted |mean| is at least the observed
+    |mean|. This is a distribution-free corroborator beside the percentile bootstrap: it
+    makes no normality assumption, only the (weaker) symmetry-under-the-null assumption.
+
+    Uses the standard +1 correction (the observed assignment is one valid permutation) so
+    the p-value is never exactly 0 and stays a valid conservative estimate in [0,1].
+    Empty input has no signal, so we return p_value=1.0.
+    """
+    d = np.asarray(diffs, dtype=float)
+    if d.size == 0:
+        return {"p_value": 1.0, "observed": 0.0}
+
+    observed = float(np.mean(d))
+    abs_obs = abs(observed)
+    rng = np.random.default_rng(seed)
+    # signs: (n_perm, n) of +/-1; permuted means = mean over axis 1.
+    signs = rng.integers(0, 2, size=(n_perm, d.size)) * 2 - 1
+    perm_means = (signs * d).mean(axis=1)
+    count = int(np.sum(np.abs(perm_means) >= abs_obs - 1e-12))
+    p_value = (count + 1) / (n_perm + 1)
+    return {"p_value": float(p_value), "observed": observed}
+
+
+# ---------------------------------------------------------------------------
+# Direction-stability metric.
+# ---------------------------------------------------------------------------
+
+
+def direction_stability(boot_draws: Sequence[float], *, point: float | None = None) -> float:
+    """Fraction of bootstrap replicates whose sign matches the point estimate's sign.
+
+    A contrast is only trustworthy if the bootstrap distribution agrees on the DIRECTION of
+    the effect, not merely its magnitude. This returns the share of ``boot_draws`` sharing
+    the sign of the point estimate (the mean of the draws unless ``point`` is supplied),
+    feeding gates.decide_contrast: near 1.0 the sign is stable, near 0.5 the effect could
+    flip either way. Pure function of its inputs; always in [0,1].
+    """
+    x = np.asarray(boot_draws, dtype=float)
+    if x.size == 0:
+        return 0.0
+    est = float(np.mean(x)) if point is None else float(point)
+    if est == 0.0:
+        # No defined direction; report the larger side's share so the value stays in [0,1]
+        # and degrades gracefully rather than raising.
+        pos = float(np.mean(x > 0))
+        neg = float(np.mean(x < 0))
+        return max(pos, neg)
+    if est > 0:
+        return float(np.mean(x > 0))
+    return float(np.mean(x < 0))
