@@ -284,3 +284,33 @@ def test_row_gate_ci_width_window_matches_variance_gate():
     a_row = next(r for r in doc["rows"] if r["identity"] == "a")
     # The row gate must agree: a pair too noisy for variance_gate is not a stable row.
     assert a_row["low_confidence"] is True
+
+
+def test_quality_gates_block_is_honest_optional():
+    """G6/G9 surfacing: build_leaderboard_doc threads an optional quality_gates block onto
+    the doc (mirroring `verified`/`lifts`). Absent by default (honest-optional); present and
+    verbatim when supplied. The board can then show publishable/trust_tier without the
+    emitter inventing fields the schema forgot.
+    """
+    subs = {
+        "alice": {"fingerprint": _fingerprint(), "identity": "octocat",
+                  "bot_sha256": "a" * 64, "pr_url": "https://github.com/x/y/pull/1",
+                  "logs_url": "https://x/l"},
+    }
+    matches = [MatchResult("alice", "byok-anchor", Outcome.A_WINS, match_id="m0")]
+
+    # Absent by default.
+    doc = build_leaderboard_doc(matches, subs, updated_at="2026-07-21T00:00:00Z")
+    assert "quality_gates" not in doc
+
+    # Present and verbatim when supplied.
+    gates = {"passed": False, "publishable": False,
+             "trust_tier": "local-self-attested", "rankable": False,
+             "failures": [{"gate": "min_eligible_tasks", "observed": 1, "threshold": 10}]}
+    doc2 = build_leaderboard_doc(matches, subs, updated_at="2026-07-21T00:00:00Z",
+                                 quality_gates=gates)
+    assert doc2["quality_gates"] == gates
+    assert doc2["quality_gates"]["trust_tier"] == "local-self-attested"
+    # Doc stays JSON-serializable.
+    import json as _json
+    _json.dumps(doc2)

@@ -65,9 +65,34 @@ def _verified_board_doc(store_dir: str, updated_at: str) -> dict:
         "grace-demo": BudgetVector(tokens=96000, tool_calls=160, wall_time_s=380.0),
         "linus-demo": BudgetVector(tokens=64000, tool_calls=90, wall_time_s=210.0),
     }
+    # G5/G6/G9 gap-fill: the publication-gate report + winner verdict + trust tier, computed
+    # by the real gates module so the board proves the NEW gated/clustered numbers render.
+    from atv_bench.gates import (
+        GateThresholds, evaluate_quality_gates, decide_contrast,
+    )
+    from atv_bench.stats import direction_stability
+    import numpy as _np
+    # A demo stats bundle the gates evaluate against (all-clear synthetic corpus).
+    _stats = {"infrastructure_error_rate": 0.0, "eligible_n": 60,
+              "min_trials_per_cell": 6, "referee_nondeterminism_rate": 0.0}
+    _gate_report = evaluate_quality_gates(_stats, thresholds=GateThresholds())
+    # Winner verdict for the top contrast (claude-code lift 0.62 CI [0.41,0.83] over bare).
+    _draws = list(_np.random.default_rng(0).normal(0.62, 0.10, 2000))
+    _ds = direction_stability(_draws)
+    _verdict = decide_contrast(diff=0.62, lo=0.41, hi=0.83, margin=0.05,
+                               direction_stability=_ds, n_policies=2)
+    quality_gates = {
+        "passed": _gate_report.passed,
+        "publishable": _gate_report.passed,
+        "trust_tier": "attested" if _gate_report.passed else "local-self-attested",
+        "rankable": _gate_report.passed,
+        "failures": [dict(f) for f in _gate_report.failures],
+        "top_contrast_verdict": _verdict["verdict"],
+        "direction_stability": round(_ds, 4),
+    }
     return build_leaderboard_doc(
         matches, submissions, updated_at=updated_at, verified=True,
-        lifts=lifts, budgets=budgets,
+        lifts=lifts, budgets=budgets, quality_gates=quality_gates,
     )
 
 

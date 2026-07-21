@@ -50,6 +50,25 @@ LEADERBOARD_SCHEMA: dict[str, Any] = {
         # Integrity gate (Section 6): when present and false, the viewer refuses to render
         # any rank and shows the integrity-gate reframe instead. Omitted -> verified board.
         "verified": {"type": "boolean"},
+        # G6/G9 gap-fill: optional publication-gate report + trust tier + top-contrast
+        # verdict. Honest-optional; omitted when the emitter has no gate report.
+        "quality_gates": {
+            "type": "object",
+            "additionalProperties": True,
+            "properties": {
+                "passed": {"type": "boolean"},
+                "publishable": {"type": "boolean"},
+                "rankable": {"type": "boolean"},
+                "trust_tier": {
+                    "enum": ["local-self-attested", "attested", "reproduced"]
+                },
+                "top_contrast_verdict": {
+                    "enum": ["A_wins", "B_wins", "equivalent", "inconclusive"]
+                },
+                "direction_stability": {"type": "number"},
+                "failures": {"type": "array", "items": {"type": "object"}},
+            },
+        },
         "updated_at": {
             "type": "string",
             # ISO-8601 UTC (Z)
@@ -266,6 +285,7 @@ def build_leaderboard_doc(
     verified: bool | None = None,
     lifts: dict[str, Any] | None = None,
     budgets: dict[str, Any] | None = None,
+    quality_gates: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compose the published leaderboard document.
 
@@ -344,6 +364,11 @@ def build_leaderboard_doc(
     doc: dict[str, Any] = {"schema_version": SCHEMA_VERSION, "updated_at": updated_at, "rows": rows}
     if verified is not None:
         doc["verified"] = verified
+    if quality_gates is not None:
+        # G6/G9 surfacing (honest-optional): the publication-gate report + trust tier.
+        # Threaded verbatim so the viewer renders publishability/trust_tier without the
+        # emitter inventing schema fields. Absent when the caller has no gate report.
+        doc["quality_gates"] = quality_gates
     return doc
 
 
