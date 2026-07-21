@@ -70,6 +70,25 @@ def _generic_edit_prompt(arena: str, submission: str) -> str:
     )
 
 
+def _portkey_headers() -> dict[str, str]:
+    """Parse the Portkey gateway headers this environment routes Anthropic through.
+
+    The host authenticates the `claude` CLI (harness seats) via ANTHROPIC_BASE_URL (a local
+    Portkey gateway) + ANTHROPIC_CUSTOM_HEADERS (x-portkey-config, anthropic-version). The
+    bare `mini` seat uses litellm, which does NOT pick these up automatically and fails with
+    "x-portkey-config header is required". We forward them via litellm extra_headers so the
+    bare-model seat routes through the same gateway as the harness seats.
+    """
+    import os, re
+    raw = os.environ.get("ANTHROPIC_CUSTOM_HEADERS", "")
+    hdrs: dict[str, str] = {}
+    for part in re.split(r"\n", raw):
+        if ":" in part:
+            k, v = part.split(":", 1)
+            hdrs[k.strip()] = v.strip()
+    return hdrs
+
+
 def _mini_agent_yaml() -> dict[str, Any]:
     """Load CodeClash's mini/default.yaml (the ClashAgent template params)."""
     import yaml as _yaml
@@ -82,13 +101,23 @@ def _mini_agent_yaml() -> dict[str, Any]:
 
 
 def _bare_model_config() -> dict[str, Any]:
-    """CodeClash `mini` agent config: bare model (direct litellm Anthropic), no ATV harness.
+    """CodeClash `mini` agent config: bare model via litellm, no ATV harness.
 
-    config.agent = the mini ClashAgent yaml; config.model = the litellm model block.
+    config.agent = the mini ClashAgent yaml; config.model = the litellm model block. We
+    forward the host's Portkey gateway base_url + headers so the bare seat authenticates the
+    same way the harness (`claude` CLI) does on this host.
     """
+    import os
+    model_kwargs: dict[str, Any] = {"temperature": 0.2, "max_tokens": 4096}
+    headers = _portkey_headers()
+    if headers:
+        model_kwargs["extra_headers"] = headers
+    base_url = os.environ.get("ANTHROPIC_BASE_URL")
+    if base_url:
+        model_kwargs["api_base"] = base_url
     return {
         "agent": _mini_agent_yaml(),
-        "model": {"model_name": BARE_MODEL, "model_kwargs": {"temperature": 0.2, "max_tokens": 4096}},
+        "model": {"model_name": BARE_MODEL, "model_kwargs": model_kwargs},
     }
 
 
