@@ -1,0 +1,61 @@
+{
+  "schema": "atv.phoenix-hve-task-calibration-plan-index/v1",
+  "frozen_at": "2026-07-21",
+  "benchmark_commit": "a526a8d",
+  "calibration_plan_digest": "8ed128ece69b17c17548530129eed4a095dc0dd9a96b968f9a77979f3afe19a4",
+  "full_plan_file_sha256": "6ca6b150ff9eb4fdd8634f3ca5a41d37bd128df2457d8dc82629616ca8be1081",
+  "model": "gpt-5.4",
+  "candidate_max_ai_credits": [
+    30,
+    60
+  ],
+  "timeout_seconds": 900,
+  "randomization_seed": 20260721,
+  "execution_backend": "oci",
+  "tasks": [
+    {
+      "category": "context-retrieval",
+      "task_digest": "278bdf0c0aeea2f9ff4af0b0defa1d5447e78446d82497e8ecba3917d49e95ef",
+      "task_id": "pilot.context-retrieval.08-compliance-mode"
+    },
+    {
+      "category": "debugging",
+      "task_digest": "0333dba4370b8ae3d040f2ca31800292aa4e43a818b6b9ba9077a2206a1b7bfe",
+      "task_id": "pilot.debugging.08-retry-counter"
+    },
+    {
+      "category": "greenfield",
+      "task_digest": "1190934c102bc8a4e097035efea5030b139dc620ffe1f1895a0f9ef7d2f31e4b",
+      "task_id": "pilot.greenfield.10-median-value"
+    },
+    {
+      "category": "recovery",
+      "task_digest": "77ce92fd59514dea88c2d09a1f6f8086760ac3ff32be5972c1a9d6cffb6e49cd",
+      "task_id": "pilot.recovery.09-cursor-position"
+    },
+    {
+      "category": "repair",
+      "task_digest": "0aaf933c65fda19781d14a807f4365e566049b6074e4942e1e20eadfa08f0978",
+      "task_id": "pilot.repair.09-retry-limit"
+    }
+  ],
+  "source_commits": {
+    "atv_phoenix": "233e8e1e968bbc0b1dc446d7830efa82489bf118",
+    "hve_core": "5c15a03c78da2408527693e0fc3b3e387bf99cb2"
+  },
+  "oci_images": {
+    "hve": {
+      "build_spec_sha256": "a2afd332372228ca610c8470d078b9a0e85862085c3f5619188f8746f14ffe51",
+      "image_id": "sha256:497a1f29dd234c3fa538817fc7efb5eb9cc3df473f286ed47d38e815f1df6b20"
+    },
+    "phoenix": {
+      "build_spec_sha256": "e7c5ad4b47278d3286d459927ff9cd2537faaed5d8c46a2ecbf950cadf9fe010",
+      "image_id": "sha256:b918b4dfcc06d4ce97d9af55cdd8e8f407e0bc36475f905348660db07ea0a534"
+    },
+    "connect_proxy": {
+      "build_spec_sha256": "6c540f01c0b0b74ab6c43b63abc08f81ae4ad395b2715a55218ac9a532bac3c4",
+      "image_id": "sha256:dc7bc0755dad0b0c5b5bab7379c329a7cfda6df99c6db41048a617c3a3c93592"
+    }
+  },
+  "selection_rule": "Select the smallest ascending candidate for which both harnesses are reliable and artifact-valid on every held-out task; quality scores are not used."
+}
