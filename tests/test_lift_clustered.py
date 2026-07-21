@@ -166,3 +166,36 @@ def test_single_cluster_lift_refuses():
     with pytest.raises(LiftError):
         compute_lift(matches, baselines, seed=1, n_boot=100,
                      cluster_ids=["single"] * len(matches))
+
+
+# --------------------------------------------------------------------------- #
+# Santa round 2 — a bootstrap replicate that drops ALL rows for a harness or its
+# bare baseline must NOT contribute an arbitrary pseudo-lift. With the ridge-only
+# design that player's theta is unconstrained by data and the "lift" is noise.
+# The bootstrap must skip such degenerate replicates (and still produce a CI from
+# the usable ones), never fold a meaningless draw into the interval.
+# --------------------------------------------------------------------------- #
+def test_bootstrap_skips_replicates_missing_a_player():
+    import numpy as np
+    from atv_bench.lift import compute_lift
+
+    # Roster where a resample can omit a required player entirely: H vs bareH, and a
+    # separate opp vs bareH block, so an i.i.d. resample can drop ALL of H's rows while
+    # keeping the design non-empty. A replicate missing H (or bareH) has no data to rate
+    # that player — its "lift" is a ridge-pulled artifact, not an observation, and must be
+    # skipped rather than folded into the CI.
+    matches = []
+    for _ in range(4):
+        matches.append(RatingMatch("H", "bareH", "M", "M", 1.0))
+    matches.append(RatingMatch("H", "bareH", "M", "M", 0.0))
+    for _ in range(4):
+        matches.append(RatingMatch("opp", "bareH", "M", "M", 1.0))
+    matches.append(RatingMatch("opp", "bareH", "M", "M", 0.0))
+    baselines = {"H": "bareH"}
+    res = compute_lift(matches, baselines, seed=3, n_boot=400)["H"]
+    # Every retained draw is finite (a dropped-player replicate is skipped, not NaN).
+    assert np.isfinite(res.lo) and np.isfinite(res.hi)
+    # The API surfaces how many replicates were usable; some are skipped for this thin
+    # corpus, so the count is below the requested n_boot but still produces a CI.
+    assert 1 <= res.n_boot_used <= 400
+

@@ -170,3 +170,30 @@ def test_complete_in_threshold_stats_passes():
         "referee_nondeterminism_rate": 0.0,
     }
     assert evaluate_quality_gates(ok).passed is True
+
+
+# --------------------------------------------------------------------------- #
+# Santa round 2 — non-finite / out-of-range signals must FAIL CLOSED, not pass
+# via NaN-comparison-is-always-False.
+# --------------------------------------------------------------------------- #
+def test_nan_signal_fails_closed():
+    for key in ("infrastructure_error_rate", "eligible_n",
+                "min_trials_per_cell", "referee_nondeterminism_rate"):
+        s = {
+            "infrastructure_error_rate": 0.0,
+            "eligible_n": 200,
+            "min_trials_per_cell": 10,
+            "referee_nondeterminism_rate": 0.0,
+        }
+        s[key] = float("nan")
+        assert evaluate_quality_gates(s).passed is False, key
+
+
+def test_inf_signal_fails_closed():
+    s = {
+        "infrastructure_error_rate": float("inf"),
+        "eligible_n": 200,
+        "min_trials_per_cell": 10,
+        "referee_nondeterminism_rate": 0.0,
+    }
+    assert evaluate_quality_gates(s).passed is False

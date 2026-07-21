@@ -18,6 +18,7 @@ Everything here is pure and deterministic: no live LLM, no Docker, no I/O.
 from __future__ import annotations
 
 import dataclasses
+import math
 from typing import Any, Mapping
 
 
@@ -72,12 +73,22 @@ def evaluate_quality_gates(
         "referee_nondeterminism_rate",
     )
     for key in required:
-        if stats.get(key) is None:
+        val = stats.get(key)
+        if val is None:
             failures.append({
                 "gate": f"missing_{key}",
                 "observed": None,
                 "threshold": None,
                 "reason": f"required signal {key!r} absent; failing closed",
+            })
+        elif not math.isfinite(val):
+            # NaN/inf must fail closed: NaN comparisons are always False, so an unchecked
+            # non-finite metric would slip past every threshold below.
+            failures.append({
+                "gate": f"nonfinite_{key}",
+                "observed": val,
+                "threshold": None,
+                "reason": f"signal {key!r} is non-finite ({val}); failing closed",
             })
 
     infra = stats.get("infrastructure_error_rate")

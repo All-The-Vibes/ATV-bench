@@ -175,3 +175,31 @@ def test_bundle_ci_default_is_persisted():
     # the exact interval, not a guessed one.
     assert "ci" in b["reproduce"]
     assert b["reproduce"]["ci"] == 0.95
+
+
+# ---------------------------------------------------------------------------
+# Santa round 2 — a bundle whose published value is non-finite must NOT verify.
+# (NaN - x > tol is always False, which would otherwise let NaN pass.)
+# ---------------------------------------------------------------------------
+def test_bundle_with_nan_published_does_not_verify():
+    import math
+    from atv_bench.bundle import content_id_of
+    b = build_bundle(_ratings_doc(), _matches(), _meta())
+    h0 = next(iter(b["published"]))
+    b["published"][h0] = math.nan
+    b["content_id"] = content_id_of(b)  # re-address so only the NaN is the defect
+    assert verify_bundle(b) is False
+
+
+def test_bundle_persists_cluster_ids_and_reproduces_clustered():
+    """When a bundle is published from a clustered analysis, the reproduce tuple must
+    carry the per-match cluster ids so verify_bundle can recompute the SAME clustered
+    lift offline (the point estimate is invariant to clustering, but persisting the ids
+    is what makes a clustered CI claim independently checkable)."""
+    matches = _matches()
+    # One cluster per model block (>=2 clusters so clustering is valid).
+    cluster_ids = ["c1"] * 10 + ["c2"] * 10
+    b = build_bundle(_ratings_doc(), matches,
+                     _meta(cluster_policy="by_build_artifact", cluster_ids=cluster_ids))
+    assert b["reproduce"]["cluster_ids"] == cluster_ids
+    assert verify_bundle(b) is True

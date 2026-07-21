@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from typing import Any, Mapping
 
 from atv_bench.lift import compute_lift
@@ -70,14 +71,17 @@ def _match_from_dict(d: Mapping[str, Any]) -> RatingMatch:
 
 def _published_lifts(
     matches: list[RatingMatch], baselines: Mapping[str, str], *, seed: int, n_boot: int,
-    ci: float = 0.95,
+    ci: float = 0.95, cluster_ids: Any = None,
 ) -> dict[str, float]:
     """The published per-harness lift point estimates (offline-recomputable).
 
-    ``ci`` is threaded through so the reproduce check honours the exact interval level the
-    bundle was published at, rather than assuming a default.
+    ``ci`` and ``cluster_ids`` are threaded through so the reproduce check honours the exact
+    interval level and resampling unit the bundle was published under, rather than assuming
+    defaults. (The point estimate is invariant to the resampling unit, but persisting the
+    cluster ids is what makes a *clustered-CI* claim independently checkable offline.)
     """
-    lifts = compute_lift(matches, dict(baselines), seed=seed, n_boot=n_boot, ci=ci)
+    lifts = compute_lift(matches, dict(baselines), seed=seed, n_boot=n_boot, ci=ci,
+                         cluster_ids=cluster_ids)
     return {h: float(res.lift) for h, res in lifts.items()}
 
 
@@ -110,24 +114,31 @@ def build_bundle(
     n_boot = int(meta.get("n_boot", 1000))
     ci = float(meta.get("ci", 0.95))
     baselines = dict(meta.get("baselines", {}))
+    cluster_ids = meta.get("cluster_ids")
     cluster_policy = meta.get("cluster_policy", "iid")
     versions = dict(meta.get("versions", {}))
 
     match_dicts = [_match_to_dict(m) for m in matches]
-    published = _published_lifts(matches, baselines, seed=seed, n_boot=n_boot, ci=ci)
+    published = _published_lifts(matches, baselines, seed=seed, n_boot=n_boot, ci=ci,
+                                 cluster_ids=cluster_ids)
+
+    reproduce: dict[str, Any] = {
+        "seed": seed,
+        "n_boot": n_boot,
+        "ci": ci,
+        "baselines": baselines,
+        "cluster_policy": cluster_policy,
+        "versions": versions,
+    }
+    if cluster_ids is not None:
+        # Persist the per-match cluster labels so a clustered-CI claim is reproducible.
+        reproduce["cluster_ids"] = list(cluster_ids)
 
     payload: dict[str, Any] = {
         "ratings_doc": json.loads(json.dumps(ratings_doc)),  # deep, JSON-safe copy
         "matches": match_dicts,
         "published": published,
-        "reproduce": {
-            "seed": seed,
-            "n_boot": n_boot,
-            "ci": ci,
-            "baselines": baselines,
-            "cluster_policy": cluster_policy,
-            "versions": versions,
-        },
+        "reproduce": reproduce,
         "track": track,
         "trust_tier": trust_tier,
         "rankable": rankable,
@@ -156,14 +167,19 @@ def verify_bundle(bundle: Mapping[str, Any]) -> bool:
         matches = [_match_from_dict(d) for d in bundle["matches"]]
         recomputed = _published_lifts(
             matches, rep["baselines"], seed=int(rep["seed"]), n_boot=int(rep["n_boot"]),
-            ci=float(rep.get("ci", 0.95)),
+            ci=float(rep.get("ci", 0.95)), cluster_ids=rep.get("cluster_ids"),
         )
 
         published = bundle["published"]
         if set(published) != set(recomputed):
             return False
         for h, val in recomputed.items():
-            if abs(float(published[h]) - val) > _REPRO_TOL:
+            pub = float(published[h])
+            # A non-finite published number must never verify: NaN - val > tol is always
+            # False, which would otherwise let a NaN lift pass the reproduce check.
+            if not math.isfinite(pub) or not math.isfinite(val):
+                return False
+            if abs(pub - val) > _REPRO_TOL:
                 return False
         return True
     except (KeyError, TypeError, ValueError):

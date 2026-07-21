@@ -135,6 +135,8 @@ class LiftResult:
     lift: float
     lo: float
     hi: float
+    n_boot_used: int = 0  # bootstrap replicates that actually contributed to this CI
+                          # (replicates missing the harness or its baseline are skipped)
 
 
 # ---------------------------------------------------------------------------
@@ -312,16 +314,29 @@ def compute_lift(
 
     # --- bootstrap CI ------------------------------------------------------------------- #
     # Resampling unit = row (cluster_ids is None) or whole cluster (cluster_ids supplied).
+    # A replicate that resamples to zero rows for a harness OR its bare baseline cannot
+    # rate that player from data — its theta is a ridge-pulled artifact, so that harness's
+    # lift draw is SKIPPED for that replicate (never folded into the CI). ``present_players``
+    # maps each row to the two player indices it informs, so we can detect the omission.
     rng = np.random.default_rng(seed)
     n = X.shape[0]
+    row_players = np.array(
+        [[pidx[(m.harness_a, m.model_a)], pidx[(m.harness_b, m.model_b)]] for m in matches]
+    )
     boot: dict[str, list[float]] = {h: [] for h in plan}
+
+    def _record(theta_b: np.ndarray, rows: np.ndarray) -> None:
+        present = set(int(v) for v in row_players[rows].ravel())
+        for h, p in plan.items():
+            if p["h_idx"] not in present or p["b_idx"] not in present:
+                continue  # degenerate replicate for this harness; skip its draw
+            boot[h].append(float(theta_b[p["h_idx"]] - theta_b[p["b_idx"]]))
 
     if cluster_ids is None:
         for _ in range(n_boot):
             idx = rng.integers(0, n, size=n)
             theta_b = _fit_theta(X[idx], y[idx], n_players)
-            for h, val in _lifts_from_theta(theta_b).items():
-                boot[h].append(val)
+            _record(theta_b, idx)
     else:
         cid = np.asarray(cluster_ids)
         uniq = np.unique(cid)
@@ -336,8 +351,7 @@ def compute_lift(
             chosen = rng.integers(0, n_clusters, size=n_clusters)
             rows = np.concatenate([members[uniq[c]] for c in chosen])
             theta_b = _fit_theta(X[rows], y[rows], n_players)
-            for h, val in _lifts_from_theta(theta_b).items():
-                boot[h].append(val)
+            _record(theta_b, rows)
 
     alpha = 1.0 - ci
     lo_q, hi_q = 100 * (alpha / 2), 100 * (1 - alpha / 2)
@@ -345,6 +359,10 @@ def compute_lift(
     out: dict[str, LiftResult] = {}
     for harness, p in plan.items():
         draws = np.asarray(boot[harness], dtype=float)
+        if draws.size == 0:
+            raise LiftError(
+                f"harness {harness!r}: every bootstrap replicate omitted the harness or its "
+                f"bare baseline — corpus too thin to form a CI")
         lo, hi = np.percentile(draws, [lo_q, hi_q])
         out[harness] = LiftResult(
             harness=harness,
@@ -353,6 +371,7 @@ def compute_lift(
             lift=point[harness],
             lo=float(lo),
             hi=float(hi),
+            n_boot_used=int(draws.size),
         )
     return out
 
