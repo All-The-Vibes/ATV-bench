@@ -1074,6 +1074,7 @@ def run(
     out: Path = typer.Option(None, "--out", help="Output dir for match logs + replay."),
     a_home: Path = typer.Option(None, "--a-home", help="Config root for harness A (e.g. a cloned repo) to fingerprint."),
     b_home: Path = typer.Option(None, "--b-home", help="Config root for harness B to fingerprint."),
+    persist: Path = typer.Option(None, "--persist", help="Append this match as a rating row to a JSONL lift corpus (feeds `atv-bench lift`)."),
 ) -> None:
     """Run a REAL harness-vs-harness match: each harness CLI builds its own bot headless,
     the two bots compete in a CodeClash arena (Docker), and a schema-v2 record is written.
@@ -1119,7 +1120,7 @@ def run(
 
     out_dir = out or Path("./_run")
     try:
-        env = _run_live(cfg, out_dir, a_home, b_home, json_out)
+        env = _run_live(cfg, out_dir, a_home, b_home, json_out, persist=persist)
     except RunError as err:
         _emit_run_error(err, json_out)
         return
@@ -1155,7 +1156,7 @@ def _run_demo(*, json_out: bool, out: Path | None) -> None:
     typer.echo(f"\n{d['next']}")
 
 
-def _run_live(cfg, out_dir, a_home, b_home, json_out):  # pragma: no cover - Docker + live CLIs
+def _run_live(cfg, out_dir, a_home, b_home, json_out, persist=None):  # pragma: no cover - Docker + live CLIs
     from atv_bench.run_envelope import ok_envelope
     from atv_bench.runner import (
         build_match_record, fingerprint_harness_repo, preflight_or_raise, run_live_match,
@@ -1185,6 +1186,10 @@ def _run_live(cfg, out_dir, a_home, b_home, json_out):  # pragma: no cover - Doc
         player_manifests=manifests, player_budgets=budgets,
         replay_path=str(Path(out_dir)), verified=False,
     )
+    if persist is not None:
+        from atv_bench.runner import persist_rating_row_from_record
+        persist_rating_row_from_record(rec, persist)
+        typer.echo(f"↳ appended rating row to {persist}")
     return ok_envelope(rec.to_dict())
 
 
