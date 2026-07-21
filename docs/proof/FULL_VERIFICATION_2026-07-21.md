@@ -1,6 +1,6 @@
 # Full local verification — July 21, 2026
 
-Verified commit: `6cfba6362a418b19e582a6f681cb205edb833531`
+Verified commit: `6d19f9270ac180a60cb3bbaff52dfd98ea6b1c20`
 
 ## Result
 
@@ -27,14 +27,13 @@ governance after merge, and an immutable release.
 
 | Artifact | File SHA-256 | Canonical SHA-256 |
 |---|---|---|
-| Manifest | `9307944ea47fa421ead83b28788004a26012f1674e34a23c851758d6dfea4472` | `7edae2475348c6e1500fda7bf344c4aca54d0497e5adf280ccfc3aab1f9c4770` |
-| Proof | `371e56edb03317d72f9b8ba000bd63b875f02efa457e0c51e31420418e4036fd` | `5c5fda7e2da5d5a9fed1636485f345c98eb69fdd962223c3c0af4ed8e65f3891` |
-| Launch audit | `b526bab32430b61f7b4a057fa2a6a99762e46068da5e2fdddc48648f33b66c90` | n/a |
+| Manifest | `0de3de69631a221a6dbd6453a8875a34d7ce40fdaa285d24b45cc24691246167` | `64ea38c3289bcd22848aa79228bde54c33c7ce724ab2d6467bfbe5bb2c560d29` |
+| Proof | `ce077d2756e2aea30172efafd973f6350f8ee23bc610fd5fd800aac60cc4ea86` | `58f4c93dabf7f70ca5e156648cc14ac6a8c27861befbe5c92aabedd946b25f41` |
+| Launch audit | `d97d9c7efafffabbb13095bc2ff0b4458643120e018f1bad1c7fad97e3aa30e1` | n/a |
 
 Repository state recorded by the manifest:
 
 - clean worktree;
-- HEAD tree `69643b75e2090c65d803ac5fcbaf20ba5301d40d`;
+- HEAD tree `b1f166ef0bd7e1199a116b530937e32a171a1cff`;
 - repository tree digest
-  `7e06dd4f4b2244774714253e633c50ab41c47cad120e8dd46f167d00083f808e`.
-
+  `f30a638a59299a59a7deca39092517fab370503c2deb5626d615bdf4b36f59f4`.

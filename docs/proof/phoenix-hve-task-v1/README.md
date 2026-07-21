@@ -31,5 +31,8 @@ The local raw evidence manifest binds 7,598 files and 85,162,204 bytes with
 canonical SHA-256
 `f1ff562833bcfe942c9dcd7f7c4132d97c635c1af42a4f3b9aad1744012ce29a`.
 
+The full fixed repository verification passed 29/29 commands. Its manifest is
+`0de3de69631a221a6dbd6453a8875a34d7ce40fdaa285d24b45cc24691246167`.
+
 The result is local, self-attested, unofficial, and non-rankable. It is not a
 global harness-sophistication ranking.
