@@ -1,0 +1,15 @@
+NETWORK-ISOLATION / SANDBOX-CONTAINMENT PROOF
+============================================================
+docker run flags (identical to .github/workflows/league.yml):
+  --rm --network none --memory 512m --memory-swap 512m --cpus 1 --pids-limit 128 --read-only --user 65534:65534 --cap-drop ALL --security-opt no-new-privileges
+
+[CONTAINED ✅] network_exfil: bot tries to reach http://example.com and exfiltrate a secret
+    bot stdout: 'BLOCKED_NETWORK'
+
+[CONTAINED ✅] secret_read: bot scans env for GITHUB_TOKEN / SECRET / *TOKEN*
+    bot stdout: 'LEAKED:'
+
+[CONTAINED ✅] rootfs_write: bot tries to write to the read-only rootfs
+    bot stdout: 'BLOCKED_READONLY'
+
+OVERALL: ALL ATTACKS CONTAINED ✅

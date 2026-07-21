@@ -45,6 +45,13 @@ ARENAS: dict[str, dict[str, Any]] = {
     "huskybench":   {"name": "HuskyBench",   "submission": "client/player.py",  "players": 2},
     "figgie":       {"name": "Figgie",       "submission": "main.py",           "players": 4},
     "bridge":       {"name": "Bridge",       "submission": "bridge_agent.py",   "players": 4},
+    # Full-22 coverage: the remaining playable CodeClash arenas (each submission=main.py,
+    # 2 required seats — read off vendor/CodeClash/codeclash/arenas/<a>/<a>.py).
+    "ants":         {"name": "Ants",         "submission": "main.py",           "players": 2},
+    "gomoku":       {"name": "Gomoku",       "submission": "main.py",           "players": 2},
+    "paintvolley":  {"name": "PaintVolley",  "submission": "main.py",           "players": 2},
+    "lightcycles":  {"name": "LightCycles",  "submission": "main.py",           "players": 2},
+    "dummy":        {"name": "Dummy",        "submission": "main.py",           "players": 2},
 }
 
 # Model used everywhere for parity. Harness CLI alias (claude) + litellm string (mini).

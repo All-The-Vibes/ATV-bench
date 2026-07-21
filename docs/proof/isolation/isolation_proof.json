@@ -1,0 +1,51 @@
+{
+  "all_contained": true,
+  "flags": [
+    "--rm",
+    "--network",
+    "none",
+    "--memory",
+    "512m",
+    "--memory-swap",
+    "512m",
+    "--cpus",
+    "1",
+    "--pids-limit",
+    "128",
+    "--read-only",
+    "--user",
+    "65534:65534",
+    "--cap-drop",
+    "ALL",
+    "--security-opt",
+    "no-new-privileges"
+  ],
+  "generated_by": "scripts/capture_isolation_proof.py",
+  "attacks": [
+    {
+      "attack": "network_exfil",
+      "desc": "bot tries to reach http://example.com and exfiltrate a secret",
+      "stdout": "BLOCKED_NETWORK",
+      "stderr": "",
+      "returncode": 0,
+      "contained": true
+    },
+    {
+      "attack": "secret_read",
+      "desc": "bot scans env for GITHUB_TOKEN / SECRET / *TOKEN*",
+      "stdout": "LEAKED:",
+      "stderr": "",
+      "returncode": 0,
+      "contained": true
+    },
+    {
+      "attack": "rootfs_write",
+      "desc": "bot tries to write to the read-only rootfs",
+      "stdout": "BLOCKED_READONLY",
+      "stderr": "",
+      "returncode": 0,
+      "contained": true
+    }
+  ],
+  "ts": 1784670160
+}
