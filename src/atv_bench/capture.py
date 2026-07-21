@@ -13,16 +13,32 @@ from pathlib import Path
 
 from atv_bench.fingerprint.scan import _has_secret_pattern
 
-# Bounds — a game bot is a handful of small files.
-MAX_FILES = 64
-MAX_TOTAL_BYTES = 1024 * 1024  # 1 MiB
-MAX_FILE_BYTES = 512 * 1024
-# Files we scan for secret CONTENT (text). Binary blobs are rejected outright.
-_TEXT_SUFFIXES = {".py", ".txt", ".json", ".yaml", ".yml", ".toml", ".md", ".cfg", ".ini", ""}
-# Transient build/cache artifacts a bot run can drop (bytecode caches, venvs, coverage).
+# Bounds — a multi-file arena bot (a compiled-from-source engine like chess/Kojiro or a
+# robocode robot dir) is larger than a single main.py, but still bounded. These caps stop
+# a DoS blob, not legitimate source trees.
+MAX_FILES = 400
+MAX_TOTAL_BYTES = 8 * 1024 * 1024  # 8 MiB
+MAX_FILE_BYTES = 2 * 1024 * 1024   # 2 MiB
+# The capture gate is "decodes as UTF-8 text + carries no secret", NOT a narrow extension
+# allowlist. CodeClash arenas legitimately ship bot source in many languages (C/C++ `src/`,
+# Java `robots/custom/`, Rust/OCaml `submission/`, JS `robot.js`, Redcode `warrior.red`)
+# plus text config (`.opt`, `.cfg`, `.toml`). A per-language allowlist fail-closes on all of
+# those even though they ARE the authored bot we must capture. So we DENY known-dangerous /
+# opaque binary suffixes and accept any remaining file that decodes as UTF-8 and is
+# secret-clean. Binary payloads are caught by the UTF-8 decode check regardless of suffix.
+_DENIED_SUFFIXES = {
+    # compiled / linkable binaries and archives — opaque, can hide payloads
+    ".exe", ".dll", ".dylib", ".so", ".o", ".a", ".lib", ".obj", ".class", ".jar",
+    ".bin", ".out", ".pyc", ".pyo", ".wasm", ".node",
+    # archives / images / media — not bot source, can smuggle bytes
+    ".zip", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar",
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".pdf", ".mp3", ".mp4", ".woff", ".woff2",
+}
+# Transient build/cache artifacts a bot run can drop (bytecode caches, venvs, build output).
 # These are NOT part of the authored bot — skip them rather than fail the match.
 _IGNORED_DIR_PARTS = {".git", "__pycache__", ".pytest_cache", ".mypy_cache",
-                      ".ruff_cache", "node_modules", ".venv", "venv", ".tox"}
+                      ".ruff_cache", "node_modules", ".venv", "venv", ".tox",
+                      "target", "build", "dist", ".gradle"}
 _IGNORED_SUFFIXES = {".pyc", ".pyo", ".so", ".o", ".class"}
 
 
@@ -96,14 +112,19 @@ def scan_captured_tree(root: Path) -> list[CapturedFile]:
         if total > MAX_TOTAL_BYTES:
             raise CaptureRejected(f"captured tree total size too large (> {MAX_TOTAL_BYTES})")
 
-        # Content scan (text only; binary rejected).
+        # Suffix denylist: reject known-dangerous / opaque binary types up front, by name,
+        # before we even read them (defense in depth — the UTF-8 check below is the real
+        # binary gate, but a denied suffix is an unambiguous, cheap early reject).
         suffix = path.suffix.lower()
+        if suffix in _DENIED_SUFFIXES:
+            raise CaptureRejected(f"disallowed file type in captured tree: {rel_str}")
+        # Content gate: must decode as UTF-8 text (binary payloads fail here regardless of
+        # suffix) and carry no secret shape. Any legitimate multi-language bot SOURCE
+        # (.cpp/.java/.js/.rs/.ml/.red/.opt/…) decodes as text and passes.
         try:
             text = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             raise CaptureRejected(f"binary/unreadable file not allowed: {rel_str}")
-        if suffix not in _TEXT_SUFFIXES:
-            raise CaptureRejected(f"disallowed file type in captured tree: {rel_str}")
         # A dotfile like .env is a classic secret carrier — scan it hard.
         if _is_secret_content(text):
             raise CaptureRejected(f"secret-shaped content in captured file: {rel_str}")
