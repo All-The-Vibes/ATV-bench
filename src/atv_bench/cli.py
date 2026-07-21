@@ -1198,11 +1198,42 @@ def _summarize_tournament(raw, cfg):  # pragma: no cover - shape depends on live
     return summarize_tournament(raw, cfg)
 
 
+@app.command(name="plan-schedule")
+def plan_schedule(
+    harness: list[str] = typer.Option(..., "--harness", help="Harness key (repeatable). Use 'bare:<inner>' for the bare control."),
+    game: list[str] = typer.Option(..., "--game", help="Game key (repeatable)."),
+    repeats: int = typer.Option(1, "--repeats", help="Paired repeats per (pair, game) cell."),
+    seed: int = typer.Option(0, "--seed", help="Deterministic ordering seed."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the plan as JSON."),
+) -> None:
+    """Build a side-balanced round-robin match plan (G1 scheduler, wired live).
+
+    Every unordered harness pair plays every game `--repeats` times with alternating seats.
+    Deterministic under `--seed`. This is the planning half of the live pipeline — it emits
+    the matches to run; execution + gating happen downstream (`run`, `rate --enforce-gates`).
+    """
+    import dataclasses as _dc
+
+    from atv_bench.scheduler import build_paired_schedule
+
+    matches = build_paired_schedule(harness, game, seed=seed, repeats=repeats)
+    plan = [_dc.asdict(m) for m in matches]
+    if json_out:
+        typer.echo(json.dumps(plan, indent=2))
+    else:
+        typer.echo(f"{len(plan)} matches planned "
+                   f"({len(harness)} harnesses x {len(game)} games x {repeats} repeats):")
+        for m in plan:
+            typer.echo(f"  {m['game']}: {m['harness_a']} vs {m['harness_b']} "
+                       f"(side={m['side_index']}, repeat={m['repeat_index']})")
+
+
 @app.command()
 def rate(
     store: Path = typer.Option(..., "--store", help="Corpus dir containing matches.jsonl."),
     out: Path = typer.Option(None, "--out", help="Write ratings.json here (default: <store>/ratings.json)."),
     json_out: bool = typer.Option(False, "--json", help="Also print the ratings doc to stdout."),
+    enforce_gates: bool = typer.Option(False, "--enforce-gates", help="Refuse to publish if the corpus fails the G5/G6 quality gates."),
 ) -> None:
     """Fit Tier-1 harness ratings from a match corpus and emit ratings.json.
 
@@ -1236,6 +1267,16 @@ def rate(
     if not rows:
         typer.echo("No rateable matches in corpus (need >=1 scored head-to-head record).")
         raise typer.Exit(2)
+
+    if enforce_gates:
+        from atv_bench.pipeline import corpus_stats, gate_corpus
+        report = gate_corpus(corpus_stats(rows))
+        if not report.passed:
+            typer.echo("Refusing to publish: corpus failed quality gates (G5/G6):")
+            for f in report.failures:
+                typer.echo(f"  - gate={f['gate']} observed={f.get('observed')} "
+                           f"threshold={f.get('threshold')}")
+            raise typer.Exit(6)
 
     doc = build_ratings_doc(rows, verified=True, model_overdispersion=True)
     out_path = out or (store / "ratings.json")
