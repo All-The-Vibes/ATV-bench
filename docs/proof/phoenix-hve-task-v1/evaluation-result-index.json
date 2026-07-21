@@ -1,0 +1,49 @@
+{
+  "schema": "atv.phoenix-hve-task-evaluation-result-index/v1",
+  "completed_at": "2026-07-21",
+  "experiment_digest": "df75a8992e6af166efb6e4692ee1c7c06d03dbad3fe333767755869c9769ed81",
+  "preregistration_sha256": "5b1f76f336cbbea8cadc4e366c140c7723150a6866461cc46cf38aae58a5fe43",
+  "decision": "practically_equivalent",
+  "winner": null,
+  "eligible_tasks": 20,
+  "paired_attempts": 100,
+  "harness_executions": 200,
+  "macro_average": {
+    "phoenix": 0.815,
+    "hve": 0.823571,
+    "phoenix_minus_hve": -0.008571
+  },
+  "paired_task_bootstrap_95": {
+    "low": -0.022857,
+    "high": 0.0,
+    "samples": 10000,
+    "resampling_unit": "task"
+  },
+  "reliability": {
+    "phoenix": 1.0,
+    "hve": 1.0,
+    "both_reliable_pairs": 100
+  },
+  "descriptive_pair_outcomes": {
+    "phoenix_higher": 1,
+    "hve_higher": 4,
+    "ties": 95
+  },
+  "descriptive_task_mean_signs": {
+    "phoenix_higher": 0,
+    "hve_higher": 2,
+    "ties": 18
+  },
+  "all_formal_gates_passed": true,
+  "aggregate_json_sha256": "4eca8de6e6d7ca86e2c7deea50131465de874ff1aa62995bd673de64f38826d5",
+  "generated_markdown_sha256": "8169c2e4c7facb193be8682e07fb7b91fe103c5d8302cc0e5b7a4f3fbe8896c0",
+  "experiment_file_sha256": "515bdcbb574c00c1bd4161f146397793c9b0cc24b59326690b9218fc36bf48b0",
+  "evidence_manifest": {
+    "file_count": 7598,
+    "total_bytes": 85162204,
+    "manifest_file_sha256": "e5a57b89d0a74acf649232440a1c1933ebc87acfde76156821edb65390ef336a",
+    "canonical_manifest_sha256": "f1ff562833bcfe942c9dcd7f7c4132d97c635c1af42a4f3b9aad1744012ce29a"
+  },
+  "rankable": false,
+  "official": false
+}

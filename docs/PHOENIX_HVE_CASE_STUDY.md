@@ -1,6 +1,39 @@
 # ATV-Phoenix vs hve-core local case study
 
-Status as of July 20, 2026: **inconclusive**.
+Status as of July 21, 2026:
+
+- bounded Lightcycles v5: **inconclusive**;
+- preregistered 20-task suite: **practically equivalent; no winner**.
+
+## Preregistered 20-task result
+
+The follow-up study used 20 distinct public synthetic tasks, four from each of
+five categories, with five paired attempts nested inside every task. The task—not
+the attempt—was the independent cluster.
+
+All 100 paired attempts were both-reliable and model-attested under isolated OCI
+execution with an endpoint-allowlisted Copilot proxy.
+
+| Metric | Result |
+|---|---:|
+| Phoenix macro score | 0.815000 |
+| hve-core macro score | 0.823571 |
+| Phoenix minus hve-core | -0.008571 |
+| Task-bootstrap 95% interval | [-0.022857, 0.000000] |
+| Reliability | both 100/100 |
+
+The full interval lies inside the preregistered `[-0.05, +0.05]` practical-
+equivalence region. All formal gates passed.
+
+> **Final task-suite decision: practically equivalent. No winner.**
+
+Eighteen task means tied. hve-core had higher means on
+`debugging.10-premature-rounding` and `recovery.03-queue-order`; Phoenix had no
+higher task mean. This narrow result still does not measure overall harness
+richness or sophistication because the suite consists of easy deterministic
+repair, retrieval, recovery, and arithmetic fixtures.
+
+See `docs/proof/phoenix-hve-task-v1/TASK_EVALUATION_RESULT.md`.
 
 ## Claim boundary
 
