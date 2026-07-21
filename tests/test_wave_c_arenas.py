@@ -1,17 +1,19 @@
-"""WAVE C — verify (and PIN) that the 17 non-supported CodeClash arenas stay non-live.
+"""WAVE C — the 17 non-Wave-A CodeClash arenas, classified by REAL end-to-end results.
 
-Waves C1/C2/C3 asked whether the harness driver could be generalized beyond the
-single-`main.py` contract to make any of the remaining 17 arenas playable. Each was
-re-classified against the *actual* driver requirement (the harness edits a file TREE in
-the arena's Docker workdir; the arena's own referee adjudicates; the match must be a
-strict 1-v-1 for pairwise Bradley-Terry), then every plausible candidate was handed to
-an independent adversary. All three candidates (robotrumble, robocode, cyborg) were
-refuted with concrete code evidence — see docs/arenas.md § "Wave C".
+This supersedes the earlier (incorrect) Wave C conclusion that all 17 remaining arenas
+were "unsupported / need a new referee". That was wrong: CodeClash already ships a working
+referee for every arena, the harness edits the arena's own submission (source in any
+language — the arena's Docker image compiles/runs it), and CodeClash's own `run_round`
+reduces the match to a decisive 1-v-1 winner. Reassessment + a live end-to-end matrix
+(Docker build + live harness bots + real arena adjudication, one match per arena) proved
+it: 15 of the 17 produce real scored matches and are now live; 2 are blocked ONLY by an
+upstream CodeClash bug (unguarded `max(scores)` on an empty round), not any architectural
+mismatch.
 
-This suite pins the verified negative result so a future change cannot silently flip a
-game live without confronting the refuting code fact. The refutations are grounded in
-attributes read directly off the vendored arena modules, so each check re-reads the
-arena source rather than trusting prose.
+See docs/arenas.md § "Wave C — end-to-end verification" and _e2e/FINAL_MATRIX.json.
+
+This suite pins the empirically-verified classification: the e2e-proven arenas are live,
+the two upstream-blocked arenas are not, and the census agrees.
 """
 from __future__ import annotations
 
@@ -21,122 +23,104 @@ from pathlib import Path
 
 import pytest
 
-from atv_bench.games import live_keys
+from atv_bench.games import get_game, is_live, live_keys
 
-# The verified live set after Waves A + C. Exactly the census's `supported` arenas.
-EXPECTED_LIVE = {"ants", "dummy", "gomoku", "lightcycles", "paintvolley"}
+# Wave A (single-main.py contract) — already live before Wave C.
+WAVE_A_LIVE = {"lightcycles", "ants", "dummy", "gomoku", "paintvolley"}
 
-# The 17 arenas Wave C examined and left non-live.
-WAVE_C_NON_LIVE = [
-    "robotrumble", "chess", "corewar", "robocode",
-    "battlecode23", "battlecode24", "battlecode25",
-    "halite", "halite2", "halite3",
-    "battlesnake", "bomberland", "cyborg", "scml",
-    "figgie", "bridge", "huskybench",
-]
+# Wave C arenas proven live by a REAL end-to-end scored match (Docker + live harness +
+# arena adjudication). Read off _e2e/FINAL_MATRIX.json (all passed=True).
+WAVE_C_LIVE = {
+    "corewar", "robotrumble", "battlesnake", "huskybench", "scml", "chess",
+    "halite", "halite2", "halite3", "cyborg", "bomberland",
+    "battlecode23", "battlecode24", "figgie", "bridge",
+}
+
+# Wave C arenas whose referee is reusable but which CRASH on an upstream CodeClash bug
+# (get_results does `max(scores, key=...)` with no empty guard; a round with no decisive
+# sim leaves scores empty -> ValueError). Their siblings battlecode23/24 guard it. Blocked
+# until upstream fixes it — NOT an architectural mismatch.
+WAVE_C_BLOCKED = {"robocode", "battlecode25"}
+
+ALL_LIVE = WAVE_A_LIVE | WAVE_C_LIVE  # 20 live arenas
 
 
 def _repo_root() -> Path:
     out = subprocess.check_output(
         ["git", "rev-parse", "--show-toplevel"],
-        cwd=Path(__file__).resolve().parent,
-        text=True,
+        cwd=Path(__file__).resolve().parent, text=True,
     ).strip()
     return Path(out)
 
 
-def _arena_src(arena: str) -> str:
-    root = _repo_root()
-    p = root / "vendor" / "CodeClash" / "codeclash" / "arenas" / arena / f"{arena}.py"
-    assert p.exists(), f"arena module missing: {p}"
-    return p.read_text()
+def test_live_set_is_wave_a_plus_proven_wave_c():
+    """The live set is exactly Wave A (5) + the e2e-proven Wave C arenas (15) = 20."""
+    assert set(live_keys()) == ALL_LIVE, (
+        f"live set drift: {set(live_keys()) ^ ALL_LIVE}"
+    )
+    assert len(live_keys()) == 20, f"expected 20 live, got {len(live_keys())}"
 
 
-def test_live_set_is_exactly_wave_a():
-    """Wave C added no live games. The live set is exactly the 5 supported arenas."""
-    assert set(live_keys()) == EXPECTED_LIVE, (
-        f"live set drifted from the Wave-A/C verified set: "
-        f"{set(live_keys()) ^ EXPECTED_LIVE}"
+@pytest.mark.parametrize("arena", sorted(WAVE_C_LIVE))
+def test_wave_c_proven_arena_is_live(arena):
+    """Every arena that passed a real end-to-end scored match is live with a GameSpec."""
+    from atv_bench.config import GAME_SPECS
+
+    assert is_live(arena), f"{arena} passed e2e — must be live"
+    g = get_game(arena)
+    assert g is not None and g.live
+    assert arena in GAME_SPECS, f"{arena} must have a GameSpec"
+    spec = GAME_SPECS[arena]
+    assert spec.edit_prompt.strip(), f"{arena} needs a non-empty edit_prompt"
+    # entrypoint/bot_file must be the arena's real submission path (may be a dir).
+    assert g.entrypoint == spec.bot_file, (
+        f"{arena}: games entrypoint {g.entrypoint!r} != GameSpec bot_file {spec.bot_file!r}"
     )
 
 
-@pytest.mark.parametrize("arena", WAVE_C_NON_LIVE)
-def test_wave_c_arena_not_live(arena):
-    """None of the 17 Wave-C arenas is live in games.py."""
-    from atv_bench.games import is_live
-
+@pytest.mark.parametrize("arena", sorted(WAVE_C_BLOCKED))
+def test_wave_c_upstream_blocked_arena_is_not_live(arena):
+    """robocode + battlecode25 crash on the upstream empty-scores bug — not live."""
     assert not is_live(arena), (
-        f"{arena} must NOT be live — Wave C verified it cannot be honestly adjudicated "
-        f"under the 1-v-1 per-turn driver contract (see docs/arenas.md § Wave C)."
+        f"{arena} crashes on CodeClash's unguarded max(scores) — must NOT be live until "
+        f"upstream guards the empty case (see docs/arenas.md § Wave C)."
     )
+    g = get_game(arena)
+    assert g is not None and g.live is False
 
 
-@pytest.mark.parametrize("arena", WAVE_C_NON_LIVE)
-def test_wave_c_arena_census_unsupported(arena):
-    """docs/arenas.md marks every Wave-C arena `unsupported` (robotrumble downgraded
-    from experimental)."""
-    doc = (_repo_root() / "docs" / "arenas.md").read_text().lower()
-    row = next(
-        (ln for ln in doc.splitlines()
-         if re.search(rf"\|\s*{re.escape(arena)}\s*\|", ln)),
-        None,
-    )
-    assert row is not None, f"{arena} not found as a census table row"
-    assert "unsupported" in row, f"census must mark {arena} unsupported; got: {row!r}"
+def test_submission_paths_match_codeclash_arena_modules():
+    """Each live Wave-C arena's entrypoint equals the CodeClash arena's `submission` attr
+    (read off the vendored module) — so the harness edits the file/dir the arena drives."""
+    root = _repo_root()
+    for arena in sorted(WAVE_C_LIVE):
+        mod = root / "vendor" / "CodeClash" / "codeclash" / "arenas" / arena / f"{arena}.py"
+        src = mod.read_text() if mod.exists() else ""
+        m = re.search(r'submission:\s*str\s*=\s*"([^"]+)"', src)
+        # halite2 inherits submission from HaliteArena — skip the direct-attr check there.
+        if not m and arena == "halite2":
+            continue
+        assert m, f"could not read submission= from {arena}.py"
+        submission = m.group(1)
+        g = get_game(arena)
+        # robot.js vs robot.py: robotrumble accepts either; we edit robot.py.
+        if arena == "robotrumble":
+            assert g.entrypoint in ("robot.py", "robot.js")
+            continue
+        assert g.entrypoint == submission, (
+            f"{arena}: games entrypoint {g.entrypoint!r} != arena submission {submission!r}"
+        )
 
 
-def test_robotrumble_is_many_vs_many_not_1v1():
-    """Refutation fact: robotrumble's entry point is `robot(state, unit)` — polled per
-    UNIT (a team), not one 1-v-1 decision. A single-unit adapter cannot make it a fair,
-    scorable 1-v-1 match."""
-    src = _arena_src("robotrumble")
-    # The per-unit signature the arena validates (team of units).
-    assert re.search(r"def\s+robot\s*\(\s*state\b[^)]*,\s*unit\b", src), (
-        "robotrumble must still validate the per-unit robot(state, unit) contract "
-        "that makes it many-vs-many"
-    )
-
-
-def test_robocode_has_no_1v1_assert_and_is_jvm_event_driven():
-    """Refutation fact: robocode's execute_round has no `len(agents)==2` guard and the
-    bot is an event-driven JVM Robot subclass (./robocode.sh), not a per-turn stdin loop
-    the driver can poll."""
-    src = _arena_src("robocode")
-    assert "./robocode.sh" in src, "robocode must still be driven by the JVM battle runner"
-    assert not re.search(r"len\(\s*agents\s*\)\s*==\s*2", src), (
-        "robocode still has no arena-level 1-v-1 assert — a driver cannot rely on it "
-        "being pairwise"
-    )
-    assert "robocode.Robot" in src or "onScannedRobot" in src, (
-        "robocode must still describe the event-driven Robot callback model"
-    )
-
-
-def test_cyborg_is_absolute_reward_not_pairwise():
-    """Refutation fact: cyborg scores agents by absolute reward and picks the winner via
-    max(scores) — not a decisive A-beats-B outcome, so it cannot feed Bradley-Terry even
-    if constrained to 2 players."""
-    src = _arena_src("cyborg")
-    assert "socket" in src.lower() or "runtime" in src.lower(), (
-        "cyborg must still be the env-/runtime-driven simultaneous arena"
-    )
-
-
-def test_no_new_referee_shipped_for_wave_c():
-    """Guard: Wave C did not add a bespoke referee for any non-live arena (that would be
-    out of scope + would need its own honest-adjudication proof). The only refereed
-    arena in src/atv_bench/arena/ remains lightcycles."""
+def test_no_bespoke_referee_shipped():
+    """Wave C reused CodeClash's referees — it did NOT add a per-game referee to
+    src/atv_bench/arena/ (that would be out of scope + need its own honesty proof). The
+    only shipped engine/referee remains lightcycles."""
     root = _repo_root()
     arena_dir = root / "src" / "atv_bench" / "arena"
-    # referee.py + engine.py are the single shipped (lightcycles) referee. No per-game
-    # referee modules should have appeared.
     py = {p.name for p in arena_dir.glob("*.py")}
     unexpected = py - {
         "__init__.py", "__main__.py", "engine.py", "referee.py", "render.py",
         "live_server.py",
     }
-    # sample_bots is a subdir, not counted here.
-    assert not unexpected, (
-        f"unexpected referee/engine modules in arena/ (Wave C should add none): "
-        f"{unexpected}"
-    )
+    assert not unexpected, f"unexpected referee modules (Wave C should add none): {unexpected}"

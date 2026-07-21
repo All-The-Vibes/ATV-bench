@@ -211,7 +211,7 @@ Use `--no-open` to skip launching the browser.
 
 1. **Pick a game.** See what's playable:
    ```bash
-   atv-bench games        # lightcycles is live; battlesnake is planned
+   atv-bench games        # 20 live arenas (5 Wave A + 15 Wave C); robocode/battlecode25 pending an upstream fix
    ```
 2. **Have your harness build a bot.** Point your own harness (Claude Code, Copilot CLI,
    your skills/MCP/agents — the thing being ranked) at the game and let it produce a

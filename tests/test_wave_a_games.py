@@ -96,7 +96,8 @@ def test_all_wave_a_games_live():
     keys = set(live_keys())
     expected = {"lightcycles", "ants", "dummy", "gomoku", "paintvolley"}
     assert expected <= keys, f"missing live games: {expected - keys}"
-    assert len(live_keys()) == 5, f"expected 5 live games, got {live_keys()}"
+    # Wave A's 5 are a subset of the live set; Wave C added more (see test_wave_c_arenas).
+    assert len(live_keys()) >= 5, f"expected at least the 5 Wave-A live games, got {live_keys()}"
 
 
 @pytest.mark.parametrize("game", [g[0] for g in WAVE_A] + ["lightcycles"])

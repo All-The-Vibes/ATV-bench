@@ -42,7 +42,8 @@ def test_games_json():
     payload = json.loads(result.output)
     keys = {g["key"]: g for g in payload}
     assert keys["lightcycles"]["live"] is True
-    assert keys["battlesnake"]["live"] is False
+    # robocode is non-live (reusable referee, blocked by an upstream empty-scores crash).
+    assert keys["robocode"]["live"] is False
 
 
 # --- submit game validation ------------------------------------------------
@@ -52,7 +53,7 @@ def test_submit_rejects_planned_game(tmp_path):
     bot = tmp_path / "main.py"
     bot.write_text("def move(s):\n    return 'up'\n")
     result = runner.invoke(app, [
-        "submit", str(bot), "--game", "battlesnake", "--dry-run",
+        "submit", str(bot), "--game", "robocode", "--dry-run",
         "--home", str(home), "--identity", "octocat",
         "--out", str(tmp_path / "submission.json"),
     ])

@@ -93,9 +93,19 @@ def test_enumerate_codeclash_games() -> None:
     )
 
 
-# --- Wave A: the census's five `supported` arenas must be the live set. ---------------
+# --- The census `supported` set must equal the live set (bidirectional invariant). ------
+# After Wave A (5) + Wave C e2e verification (15), the live set is 20 arenas. This is kept
+# in sync with docs/arenas.md: a game is `supported` in the census iff it is live in
+# games.py. (robocode + battlecode25 are `unsupported` — upstream empty-scores crash.)
 
-WAVE_A_LIVE = ["ants", "dummy", "gomoku", "lightcycles", "paintvolley"]
+EXPECTED_LIVE = {
+    # Wave A — single-main.py contract
+    "ants", "dummy", "gomoku", "lightcycles", "paintvolley",
+    # Wave C — reuse CodeClash's referee, proven by a real e2e scored match
+    "corewar", "robotrumble", "battlesnake", "huskybench", "scml", "chess",
+    "halite", "halite2", "halite3", "cyborg", "bomberland",
+    "battlecode23", "battlecode24", "figgie", "bridge",
+}
 
 
 def test_supported_census_arenas_are_live() -> None:
@@ -116,10 +126,11 @@ def test_supported_census_arenas_are_live() -> None:
         if row and re.search(r"\|\s*supported\s*\|", row):
             supported.append(arena)
 
-    assert set(supported) == set(WAVE_A_LIVE), (
-        f"census supported set drifted: {set(supported) ^ set(WAVE_A_LIVE)}"
+    assert set(supported) == EXPECTED_LIVE, (
+        f"census supported set drifted from live set: {set(supported) ^ EXPECTED_LIVE}"
     )
-    assert set(live_keys()) == set(WAVE_A_LIVE), (
+    assert set(live_keys()) == EXPECTED_LIVE, (
         f"live_keys() must equal census supported set; "
-        f"diff: {set(live_keys()) ^ set(WAVE_A_LIVE)}"
+        f"diff: {set(live_keys()) ^ EXPECTED_LIVE}"
     )
+

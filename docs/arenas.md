@@ -4,94 +4,108 @@ A per-arena classification of every game shipped under
 `vendor/CodeClash/codeclash/arenas/`, pinned at CodeClash commit
 `f0694c64ecf6abfca2bc867bad2de9333fef5be8`.
 
-This census exists to decide which arenas ATV-bench can adjudicate under its own
-harness contract: **a single `main.py` bot the referee drives turn-by-turn**
-(`src/atv_bench/players.py::edit_turn`, see `src/atv_bench/games.py` for the live
-set). An arena is only `supported` if a submission can be expressed as that
-one-file, per-turn, 1‑v‑1, stdin/stdout Python contract. Every classification
-below is read off the arena's own module (`<game>.py`: class attributes,
-`execute_round`, `validate_code`, and the entry-point signature it enforces) —
-not guessed.
+This census decides which arenas ATV-bench can adjudicate. **The referee already exists**
+for every arena — it ships in CodeClash. ATV-bench does not write referees; it reuses
+them. The real contract (read from `vendor/CodeClash/codeclash/arenas/arena.py::run_round`
+and `tournaments/pvp.py`, and confirmed by a live end-to-end matrix) is:
+
+- The ATV-bench harness (`claude-code` / `copilot-cli`) edits the arena's **submission** —
+  source in any language (`main.py`, a `src/` C++ tree, `robots/custom/` Java, a
+  `submission/` folder, `warrior.red` Redcode, `*_agent.py`) — inside the arena's Docker
+  workdir. The arena's own image compiles/interprets it (`make native`, `javac`, etc.).
+- CodeClash's `run_round` validates each submission, runs the arena's `execute_round`, and
+  its `get_results` reduces the match to a single decisive `RoundStats.winner`.
+- The tournament passes **exactly 2 players** for a 1‑v‑1 (ATV `build_pvp_config`), or the
+  arena's required N players (4–5 for figgie/bridge, filled with harness + bare-model
+  seats). Either way the referee returns one winner.
+
+An arena is `supported` only if a **real end-to-end match actually scored** — a Docker
+build + live harness bots + arena adjudication producing a non-crash `RoundStats` with
+validated submissions and a decisive/scored round. This is a higher bar than "the referee
+looks reusable": it was verified by running one live match per arena (see
+`_e2e/FINAL_MATRIX.json` and § "Wave C — end-to-end verification").
+
+> **History:** an earlier revision of this census wrongly concluded that all 17 non-Wave-A
+> arenas were "unsupported / would need a new referee". That was based on a too-strict
+> "single stdin `main.py`" reading and analysis without running anything. The live matrix
+> disproved it: 15 of the 17 score real matches by reusing CodeClash's existing referees.
 
 ## Columns
 
-- **protocol** — how the bot is exercised:
-  - `one-shot`: the whole submission (a compiled binary, engine, warrior, or
-    event-driven class) is run once per match; no host-driven per-turn Python loop.
-  - `iterative`: the bot is polled once per turn/tick and returns a move for the
-    current state (`do_turn`, `get_move`, `robot(state, unit)`, engine frame loop).
-  - `simultaneous`: every player is polled on the same tick and actions resolve
-    together (multi-agent / order-book / negotiation models).
-- **io** — how moves cross the boundary: `stdin-stdout`, `socket`, `http`, or
-  `files` (compiled artifacts / directories the engine consumes).
-- **support** — `supported` / `unsupported` / `experimental` against the
-  `edit_turn`/`main.py` contract.
-- **notes** — the specific code reason.
+- **protocol** — how the bot is exercised: `one-shot` (compiled/engine-driven bot run per
+  match), `iterative` (polled per turn/tick), `simultaneous` (all players act per tick).
+- **io** — how moves cross the boundary: `stdin-stdout`, `socket`, `http`, or `files`.
+- **support** — `supported` (a real e2e match scored) / `unsupported` (did not).
+- **notes** — the submission the harness edits + how the referee adjudicates + e2e result.
 
 ## Census
 
 | game | protocol | io | support | notes |
 |------|----------|-----|---------|-------|
-| ants | iterative | stdin-stdout | supported | `submission="main.py"`; `validate_code` requires `def do_turn(obs)`. `engine.py` drives one long-lived bot process, polling per turn — same shape as lightcycles. |
-| battlecode23 | one-shot | files | unsupported | `submission="src/mysubmission"`, Java bot compiled and run by the BattleCode 2023 real-time engine. Not a per-turn `main.py`; engine-/JVM-driven RTS. |
-| battlecode24 | one-shot | files | unsupported | `submission="src/mysubmission"`, Java bot for BC2024 real-time engine. Same JVM/engine model as battlecode23 — no per-turn Python contract. |
-| battlecode25 | one-shot | files | unsupported | `submission="src/mysubmission"`, Python bot but real-time engine-driven RTS (Soldiers/Moppers/Splashers + towers). Move model is engine-tick real-time, not an `edit_turn`/`main.py` poll. |
-| battlesnake | iterative | http | unsupported | Bot is an HTTP **server**: `execute_round` starts it and the engine hits `http://localhost:<port>/`. Not a `main.py` the referee calls; it's a long-running web service. (Also `planned` in `games.py`.) |
-| bomberland | simultaneous | socket | unsupported | `submission="bomberland_agent.py"`; multi-agent Bomberman via `runtime/run_bomberland.py`. All agents act per tick over the Coder One runtime socket protocol — cannot be a 1‑v‑1 per-turn `main.py`. |
-| bridge | iterative | stdin-stdout | unsupported | `submission="bridge_agent.py"`, 4-player team card game (`get_bid`/`play_card`), run with a `ThreadPoolExecutor`. Team-of-four, not 1‑v‑1; no single `main.py` edit contract. |
-| chess | one-shot | files | unsupported | `submission="src/"`; the bot is a compiled engine (`kojiro`) recompiled per round and run engine-vs-engine. A compiled binary speaking its own move protocol, not a per-turn Python `main.py`. |
-| corewar | one-shot | files | unsupported | `submission="warrior.red"`; a Redcode assembly warrior executed inside the MARS VM. No code-turn contract at all — it's assembly, not a bot loop. |
-| cyborg | simultaneous | socket | unsupported | `submission="cyborg_agent.py"`; CAGE‑3 DroneSwarm cyber-defense sim via `runtime/run_cyborg.py`. Multi-agent simultaneous environment, referee-/env-initiated — not `edit_turn`/`main.py`. |
-| dummy | iterative | stdin-stdout | supported | `submission="main.py"`; `engine.py`-driven test arena that polls the bot per round. Infra smoke-test game, fits the per-turn `main.py` contract. |
-| figgie | simultaneous | stdin-stdout | unsupported | `submission="main.py"` with `def get_action(state)`, but the description's own "Simultaneous Tick" model polls ALL 4–5 players each tick and resolves in random order. Multi-player simultaneous — not 1‑v‑1 `edit_turn`. |
-| gomoku | iterative | stdin-stdout | supported | `submission="main.py"`; `validate_code` requires `def get_move(board, color)`. Alternating turn-based 1‑v‑1, polled per turn — a clean fit for the contract. |
-| halite | iterative | stdin-stdout | unsupported | `submission="submission"` (a folder), multi-language bot compiled per round, driven by the Halite frame protocol with N>2 players. Not a single Python `main.py`; multiplayer compiled. |
-| halite2 | iterative | stdin-stdout | unsupported | `submission` is `main.<ext>` in C++/Haskell/OCaml/Rust, compiled and run over the Halite II frame protocol. Non-Python compiled, multiplayer — outside the contract. |
-| halite3 | iterative | stdin-stdout | unsupported | `submission="submission"`, compiled bot over the Halite III frame protocol. Same compiled/multiplayer shape as halite/halite2. |
-| huskybench | one-shot | files | unsupported | `submission="client/player.py"`; poker sim run with `--sim --sim-rounds` over multiple players. Multi-player poker adjudicated by the sim, not a 1‑v‑1 per-turn `main.py`. |
-| lightcycles | iterative | stdin-stdout | supported | `submission="main.py"`; `engine.py` polls each bot per tick for one of N/S/E/W. **The shipped live arena** (`games.py`) — the reference `edit_turn`/`main.py` contract. |
-| paintvolley | iterative | stdin-stdout | supported | `submission="main.py"`; per-turn action (`LEFT/RIGHT/JUMP/...`), `engine.py`-driven 1‑v‑1. Matches the per-turn `main.py` contract. |
-| robocode | one-shot | files | unsupported | `submission="robots/custom/"`; a Java class extending `robocode.Robot` whose `run()`/`onScannedRobot` callbacks ARE the tank. Event-driven JVM bot, not a per-turn stdin `main.py`. |
-| robotrumble | iterative | files | unsupported | `submission="robot.js"`, Python **or JS** `robot(state, unit)` called **per unit per turn** over a 100-turn match. Downgraded from `experimental` in Wave C (see below): the per-turn shape looked close, but `robot(state, unit)` drives a *team of units* (many-vs-many within one function surface), not a 1‑v‑1 per-turn decision. A single-unit adapter would field one unit against a full team — an unfair, undefined-scoring match — so it is not honestly adjudicable. |
-| scml | simultaneous | socket | unsupported | `submission="scml_agent.py"`; ANAC SCML OneShot supply-chain **negotiation** over `runtime/run_scml.py`. Concurrent simultaneous negotiations, env-initiated — not expressible as an `edit_turn`/`main.py` turn. |
+| ants | iterative | stdin-stdout | supported | `submission="main.py"`, `def do_turn(obs)`. `engine.py` polls the bot per turn. Wave A. |
+| battlecode23 | one-shot | files | supported | `submission="src/mysubmission"`, Java bot compiled in-arena and driven by the BC2023 engine. `get_results` counts engine wins → decisive winner. **e2e: PASS.** |
+| battlecode24 | one-shot | files | supported | `submission="src/mysubmission"`, Java bot for the BC2024 engine, compiled in-arena. **e2e: PASS.** |
+| battlecode25 | one-shot | files | unsupported | Reusable referee, but CodeClash's `get_results` does `max(scores)` with **no empty guard** (unlike bc23/24); a round with no decisive sim leaves `scores` empty → `ValueError`. **e2e: FAIL (upstream crash).** Not an architectural block — awaiting an upstream one-line fix. |
+| battlesnake | iterative | http | supported | `submission="main.py"` (or source + `run.sh`). The **arena** starts the bot's HTTP server from committed source (`PORT=… python main.py &`), plays the games, and `get_results` picks the winner by wins. The harness never hosts a server. **e2e: PASS.** |
+| bomberland | simultaneous | socket | supported | `submission="bomberland_agent.py"` (`def next_actions(game_state)`). The arena's `runtime/run_bomberland.py` hosts the socket env and drives the submitted agent. **e2e: PASS.** |
+| bridge | iterative | stdin-stdout | supported | `submission="bridge_agent.py"`, 4‑player partnership card game (`get_bid`/`play_card`). Runs with 4 seats filled by harness + bare-model variants; `get_results` scores NS vs EW. **e2e: PASS.** |
+| chess | one-shot | files | supported | `submission="src/"` C++ (Kojiro). `validate_code` compiles it in-arena with `make native`; `fastchess` plays engine-vs-engine and `get_results` counts wins. **e2e: PASS.** |
+| corewar | one-shot | files | supported | `submission="warrior.red"` Redcode, executed in the MARS VM (`pmars`). `get_results` tallies battle wins → decisive winner. **e2e: PASS.** |
+| cyborg | simultaneous | socket | supported | `submission="cyborg_agent.py"` (`def decide(obs, action_space)->int`). `runtime/run_cyborg.py` hosts the CAGE sim; `get_results` `max(scores)` over 2 agents IS a decisive pairwise winner. **e2e: PASS.** |
+| dummy | iterative | stdin-stdout | supported | `submission="main.py"`; `engine.py`-driven smoke arena. Wave A. |
+| figgie | simultaneous | stdin-stdout | supported | `submission="main.py"` (`def get_action(state)`). Requires 4–5 players; run with 4 seats filled by harness + bare-model variants. `get_results` `max(scores)` → decisive winner. **e2e: PASS.** |
+| gomoku | iterative | stdin-stdout | supported | `submission="main.py"`, `def get_move(board, color)`. Alternating 1‑v‑1. Wave A. |
+| halite | iterative | stdin-stdout | supported | `submission="submission"` (a folder), compiled-from-source bot over the Halite frame protocol. `get_results` picks the rank‑1 winner. **e2e: PASS.** |
+| halite2 | iterative | stdin-stdout | supported | `submission="submission"`, compiled multi-language bot (OCaml/C++/…) over the Halite II protocol; inherits `HaliteArena.get_results`. **e2e: PASS.** |
+| halite3 | iterative | stdin-stdout | supported | `submission="submission"`, compiled bot over the Halite III protocol; `get_results` delegates to `HaliteArena`. **e2e: PASS.** |
+| huskybench | one-shot | files | supported | `submission="client/player.py"` poker bot; the sim runs the bots and `get_results` `max(scores)` picks the chip winner. **e2e: PASS.** |
+| lightcycles | iterative | stdin-stdout | supported | `submission="main.py"`; `engine.py` polls per tick. The reference Wave A arena. |
+| paintvolley | iterative | stdin-stdout | supported | `submission="main.py"`, `def get_action(obs)`. `engine.py`-driven 1‑v‑1. Wave A. |
+| robocode | one-shot | files | unsupported | Reusable JVM referee (`robots/custom/` Java, `./robocode.sh`), but `get_results` does `max(scores)` with **no empty guard**; a round with no parseable battle result leaves `scores` empty → `ValueError`. **e2e: FAIL (upstream crash).** Awaiting an upstream fix. |
+| robotrumble | iterative | files | supported | `submission="robot.py"` (or `robot.js`), `def robot(state, unit)` — one bot commanding a team of units (like ants). `assert len(players)==2`; `get_results` picks Blue/Red by wins. **e2e: PASS.** |
+| scml | simultaneous | socket | supported | `submission="scml_agent.py"` supply-chain negotiation (`decide(observation)`). `runtime/run_scml.py` hosts the negotiation; `get_results` scores profit. **e2e: PASS.** |
 
 ## Summary
 
-- **supported (5):** ants, dummy, gomoku, lightcycles, paintvolley — all
-  `main.py`, single-player-per-turn, stdin/stdout, `engine.py`-driven. All five are
-  wired live in `games.py` (Wave A). They are the complete set of arenas that fit the
-  1‑v‑1 per-turn `edit_turn`/`main.py` contract.
-- **experimental (0):** none. robotrumble was the sole experimental arena; Wave C
-  adversarial verification downgraded it to `unsupported` (see Wave C below).
-- **unsupported (17):** everything whose move model is compiled-binary
-  (chess, corewar, robocode, battlecode*, halite*), an HTTP/socket server
-  (battlesnake, bomberland, cyborg, scml), simultaneous / multi-player polling
-  (figgie, bridge, huskybench), or many-vs-many team control (robotrumble). None can be
-  expressed as a 1‑v‑1 per-turn `edit_turn`/`main.py` contract without a new referee.
+- **supported (20):** the 5 Wave A arenas (ants, dummy, gomoku, lightcycles, paintvolley)
+  plus 15 Wave C arenas proven by a real end-to-end scored match — corewar, robotrumble,
+  battlesnake, huskybench, scml, chess, halite, halite2, halite3, cyborg, bomberland,
+  battlecode23, battlecode24, figgie, bridge. All are live in `games.py`.
+- **unsupported (2):** robocode, battlecode25 — reusable referees blocked ONLY by an
+  upstream CodeClash bug (`get_results` does `max(scores)` with no empty guard; their
+  siblings battlecode23/24 guard it). They crash on a no-decisive-sim round. Not an
+  architectural mismatch — a one-line upstream fix would flip them supported.
 
-## Wave C — verification of the 17 non-supported arenas
+## Wave C — end-to-end verification
 
-Waves C1/C2/C3 asked whether any of the 17 non-live arenas could be made live by
-generalizing the harness driver beyond the single-`main.py` contract. Each was
-re-read against the **actual** driver requirement (the harness edits a file *tree* in
-the arena's Docker workdir; the arena's own referee adjudicates; the match must be a
-strict 1‑v‑1 for pairwise Bradley-Terry) — a laxer bar than the single-`main.py`
-census — and every superficially-plausible candidate was then handed to an independent
-adversary tasked with refuting the "could go live" claim. **All three candidates were
-refuted with concrete code evidence; the live set stays at 5.**
+Waves C1/C2/C3 asked whether the 17 non-Wave-A arenas could be made live. The answer,
+proven by running real matches rather than by analysis:
 
-| candidate | initial read | adversarial verdict | refuting code fact |
-|-----------|--------------|---------------------|--------------------|
-| robotrumble | achievable (single-unit adapter) | **unsupported** | `robot(state, unit)` is called per *unit* per turn — a team of units, not one 1‑v‑1 decision. A single-unit adapter fields 1 unit vs a full team: unfair, undefined scoring. |
-| robocode | live-now (source-editable `robots/custom/`) | **unsupported** | `execute_round` has **no** `len(agents)==2` assert and the bot is an event-driven JVM `Robot` subclass (`run()`/`onScannedRobot` callbacks), not a per-turn stdin loop the driver polls. |
-| cyborg | achievable (add 1‑v‑1 assert) | **unsupported** | Each agent independently controls all 18 drones and is scored by **absolute reward**; `max(scores)→winner` is not a decisive A-beats-B outcome, so it cannot feed Bradley-Terry even with a 2-player assert. |
+1. **Reassessment** against the actual driver contract (harness edits source; the arena's
+   own image compiles/runs it; CodeClash's `run_round` returns a decisive winner; the
+   tournament supplies the required player count) showed 15 of 17 are reuse-candidates —
+   the "compiled binary", "socket server", "N>2", and "multi-unit team" objections all
+   fail once you read CodeClash's own referee code.
+2. **A live end-to-end matrix** then ran one real match per arena — Docker build + live
+   `claude-code` bots (and, for the 4‑player games, a mix of bare-model `mini` seats and
+   harnessed seats) + real arena adjudication. Result: **15 PASS, 2 FAIL**
+   (`_e2e/FINAL_MATRIX.json`). Only robocode and battlecode25 failed, both on the identical
+   upstream unguarded-`max(scores)` crash.
 
-The remaining 14 (chess, corewar, battlecode23/24/25, halite/2/3, battlesnake,
-bomberland, scml, figgie, bridge, huskybench) were unsupported on first read and not
-contested: compiled non-source artifacts, HTTP/socket servers, or N>2 / simultaneous /
-team play. See `tests/test_wave_c_arenas.py` for the pinned invariant.
+Getting there surfaced (and fixed) seven real integration defects that each would have
+produced a false "unsupported" under analysis alone:
 
-**Conclusion:** every remaining arena would require authoring a *new referee* (or a new
-rating model), which is explicitly out of scope (`IMPLEMENTATION_PLAN.md` → "New arenas
-beyond battlesnake + lightcycles" is NOT in v1) and would violate the honest-adjudication
-thesis. Wave C's deliverable is this verified negative result, not a set of fake-live games.
+| fix | defect the live run exposed |
+|-----|------------------------------|
+| capture allowlist | rejected multi-language bot source (only `.py`/text were allowed) |
+| build context | `docker build` ran from the wrong cwd for `runtime/`-COPY arenas (cyborg, bomberland) |
+| replay/log skip | a 6MB Halite `.hlt` replay tripped the per-file size cap |
+| git origin | `git init` arenas (cyborg, bomberland) had no `origin` for CodeClash's `git fetch` |
+| capture bounds | 668-file multi-language SDK seed trees exceeded the file-count cap |
+| scoped scan | the scan re-audited the trusted seed (a vendored library's sample DKIM key) instead of only the harness's changes |
+| bare-seat routing | the 4‑player games' bare `mini` seats needed the host's Portkey gateway headers |
+
+The two unsupported arenas keep a real referee and a real reason (the upstream crash), so a
+future CodeClash bump that guards the empty case flips them to supported with only a
+`games.py`/census update — no new referee. Wave C added **no** bespoke referee to
+`src/atv_bench/arena/` (still lightcycles only); every live arena reuses CodeClash's own.
