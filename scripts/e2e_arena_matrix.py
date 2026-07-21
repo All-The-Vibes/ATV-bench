@@ -183,9 +183,20 @@ def _cleanup_stale_match_containers() -> None:
         pass
 
 
+def _codeclash_root() -> Path:
+    """The CodeClash package root — the required Docker BUILD CONTEXT for arenas whose
+    Dockerfile COPYs repo-root-relative paths (cyborg, bomberland COPY
+    `codeclash/arenas/<a>/runtime/`). CodeArena.build_image runs `docker build ... .`
+    with no explicit cwd, so the process cwd must be this root for those COPYs to resolve.
+    """
+    import codeclash
+    return Path(codeclash.__file__).resolve().parent.parent
+
+
 def run_arena(arena: str) -> dict[str, Any]:
+    import os
     _cleanup_stale_match_containers()
-    out_dir = Path("_e2e") / arena
+    out_dir = (Path("_e2e") / arena).resolve()  # absolute so a chdir can't misplace it
     out_dir.mkdir(parents=True, exist_ok=True)
     started = time.time()
     result: dict[str, Any] = {"arena": arena, "players": ARENAS[arena]["players"]}
@@ -193,8 +204,12 @@ def run_arena(arena: str) -> dict[str, Any]:
     from atv_bench import integration
     from atv_bench.codeclash_env import import_codeclash
 
+    prev_cwd = os.getcwd()
     try:
         import_codeclash()
+        # Docker build context: run from the CodeClash root so repo-root-relative COPY
+        # directives (cyborg/bomberland runtime/) resolve. Harmless for other arenas.
+        os.chdir(_codeclash_root())
         integration.register()
         integration.set_harness_homes(None)
         cfg = _build_config(arena)
@@ -217,6 +232,7 @@ def run_arena(arena: str) -> dict[str, Any]:
             "seconds": round(time.time() - started),
         })
     finally:
+        os.chdir(prev_cwd)
         try:
             integration.unregister()
         except Exception:
@@ -227,6 +243,7 @@ def run_arena(arena: str) -> dict[str, Any]:
 
 
 def main(argv: list[str]) -> int:
+    _E2E = Path("_e2e").resolve()  # anchor before any per-arena chdir
     if not argv or argv[0] == "--all":
         arenas = list(ARENAS)
     else:
@@ -240,8 +257,8 @@ def main(argv: list[str]) -> int:
         v = run_arena(a)
         verdicts.append(v)
         print(f"  {'PASS' if v['passed'] else 'FAIL'} ({v['seconds']}s): {v['why']}", flush=True)
-    Path("_e2e").mkdir(exist_ok=True)
-    Path("_e2e/matrix.json").write_text(json.dumps(verdicts, indent=2))
+    _E2E.mkdir(exist_ok=True)
+    (_E2E / "matrix.json").write_text(json.dumps(verdicts, indent=2))
     passed = [v["arena"] for v in verdicts if v["passed"]]
     print(f"\n=== {len(passed)}/{len(verdicts)} PASSED: {passed}", flush=True)
     return 0
