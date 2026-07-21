@@ -168,3 +168,46 @@ def test_engine_replay_artifact_is_skipped_not_rejected(tmp_path):
     assert "MyBot.py" in rels
     assert not any(r.endswith(".hlt") for r in rels)
     assert not any(r.endswith(".log") for r in rels)
+
+# --- Scoped scan (Wave C): scan only what the harness CHANGED, not the trusted seed tree.
+# Multi-language arena seeds (Halite ~668 files) include vendored library test fixtures
+# (e.g. a sample DKIM private key) that legitimately match the secret scanner. Re-scanning
+# the untouched seed false-rejects them; we scope to the harness's changed paths. ---
+
+def test_scoped_scan_skips_secret_in_untouched_seed(tmp_path):
+    """A secret-shaped SEED file the harness did NOT touch is not re-scanned/rejected."""
+    _mk(tmp_path, "main.py", "def get_move(o): return 'N'\n")
+    _mk(tmp_path, "vendor/lib/tests/dkim.test.priv",
+        "-----BEGIN RSA PRIVATE KEY-----\nMIIas0FAKEkeyMATERIALxxxxxxxxxxxx\n-----END RSA PRIVATE KEY-----\n")
+    # Harness only changed main.py — the seed fixture is out of scope.
+    files = scan_captured_tree(tmp_path, only={"main.py"})
+    rels = {f.relpath for f in files}
+    assert rels == {"main.py"}
+
+
+def test_scoped_scan_still_rejects_secret_in_changed_file(tmp_path):
+    """A secret the harness planted in a CHANGED file is still rejected."""
+    _mk(tmp_path, "main.py", "# sk-ant-api03-SECRETSECRETSECRETSECRETSECRET\n")
+    with pytest.raises(CaptureRejected) as exc:
+        scan_captured_tree(tmp_path, only={"main.py"})
+    assert "secret" in str(exc.value).lower()
+
+
+def test_scoped_scan_rejects_symlink_even_if_unchanged(tmp_path):
+    """Symlink rejection is UNCONDITIONAL — a planted symlink is a leak/escape surface
+    regardless of whether git reports it as changed, so scoping must not bypass it."""
+    _mk(tmp_path, "main.py")
+    (tmp_path / "evil").symlink_to("/etc/passwd")
+    with pytest.raises(CaptureRejected) as exc:
+        scan_captured_tree(tmp_path, only={"main.py"})
+    assert "symlink" in str(exc.value).lower()
+
+
+def test_scoped_scan_ignores_seed_file_count(tmp_path):
+    """A huge untouched seed tree does not trip the file-count cap when scoped to the few
+    files the harness changed."""
+    _mk(tmp_path, "submission/bot.py", "print('hi')\n")
+    for i in range(200):
+        _mk(tmp_path, f"sdk/gen/file{i}.py", "x = 1\n")
+    files = scan_captured_tree(tmp_path, only={"submission/bot.py"})
+    assert {f.relpath for f in files} == {"submission/bot.py"}

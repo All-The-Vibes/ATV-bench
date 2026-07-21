@@ -78,12 +78,19 @@ def _is_secret_content(text: str) -> bool:
     return False
 
 
-def scan_captured_tree(root: Path) -> list[CapturedFile]:
+def scan_captured_tree(root: Path, only: "set[str] | None" = None) -> list[CapturedFile]:
     """Validate the captured bot tree under `root`; return the accepted files or raise.
 
     Fail-closed on: any symlink, any path escaping `root`, > MAX_FILES files,
     > MAX_TOTAL_BYTES total, a single file > MAX_FILE_BYTES, a binary blob, or any
     file whose content carries a secret shape.
+
+    `only`: if given, a set of repo-relative posix paths to restrict the scan to — the files
+    the harness actually CHANGED (see snapshot.changed_paths). Files outside this set are the
+    trusted arena seed tree (e.g. Halite's ~668-file multi-language SDK, including vendored
+    library test fixtures like a sample DKIM key) and are NOT re-scanned: the scan's job is to
+    catch what the HARNESS planted, not to re-audit CodeClash's seed. When None, scans the
+    whole tree (single-file arenas where the seed is trivial).
     """
     root = Path(root).resolve()
     accepted: list[CapturedFile] = []
@@ -108,6 +115,13 @@ def scan_captured_tree(root: Path) -> list[CapturedFile]:
         except ValueError:
             raise CaptureRejected(f"path escapes bot dir: {path}")
         rel_str = rel.as_posix()
+
+        # Scope: if `only` is given, content-scan/count ONLY files the harness changed.
+        # Untouched seed files (trusted CodeClash SDK) are skipped here. Symlink rejection
+        # above stays UNCONDITIONAL — a planted symlink anywhere is a leak/escape surface
+        # regardless of whether git reports it as "changed".
+        if only is not None and rel_str not in only:
+            continue
 
         count += 1
         if count > MAX_FILES:

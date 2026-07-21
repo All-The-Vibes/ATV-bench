@@ -118,8 +118,12 @@ class HarnessPlayerCore:
             captured_tree = original_tree
             if authoritative == AdapterStatus.EDITED:
                 # Materialized post-run tree is authoritative (ENG-3). Allowlist-scan it
-                # BEFORE it touches the container (ENG-7) — raises CaptureRejected.
-                scan_captured_tree(repo)
+                # BEFORE it touches the container (ENG-7) — raises CaptureRejected. Scope the
+                # scan to the paths the harness CHANGED (base..working ∪ untracked), so we
+                # audit what the harness planted, not the trusted multi-file arena seed tree
+                # (e.g. Halite's ~668-file SDK with vendored-library test fixtures).
+                from atv_bench.adapters.snapshot import changed_paths
+                scan_captured_tree(repo, only=set(changed_paths(repo, base)))
                 captured_tree = self._read_repo_tree(repo)
                 self.container.write_tree(captured_tree)
             # NO_EDIT / ERROR / TIMEOUT / CRASH / MALFORMED: leave the container's
