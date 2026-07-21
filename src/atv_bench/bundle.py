@@ -39,8 +39,16 @@ _REPRO_TOL = 1e-9
 
 
 def canonical_bytes(payload: Mapping[str, Any]) -> bytes:
-    """Canonical JSON bytes of a payload (sorted keys, tight separators)."""
-    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    """Canonical JSON bytes of a payload (sorted keys, tight separators).
+
+    ``allow_nan=False``: a non-finite number ANYWHERE in the payload (including nested in
+    ``ratings_doc``) raises rather than serialising to the non-standard ``NaN``/``Infinity``
+    tokens — closing the leak where a non-finite value survives the bundle round-trip and
+    still verifies.
+    """
+    return json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
 
 
 def content_id_of(payload: Mapping[str, Any]) -> str:
@@ -135,7 +143,7 @@ def build_bundle(
         reproduce["cluster_ids"] = list(cluster_ids)
 
     payload: dict[str, Any] = {
-        "ratings_doc": json.loads(json.dumps(ratings_doc)),  # deep, JSON-safe copy
+        "ratings_doc": json.loads(json.dumps(ratings_doc, allow_nan=False)),  # deep, finite, JSON-safe copy
         "matches": match_dicts,
         "published": published,
         "reproduce": reproduce,

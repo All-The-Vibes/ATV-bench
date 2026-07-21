@@ -182,12 +182,15 @@ def test_bundle_ci_default_is_persisted():
 # (NaN - x > tol is always False, which would otherwise let NaN pass.)
 # ---------------------------------------------------------------------------
 def test_bundle_with_nan_published_does_not_verify():
+    """A NaN published lift must never verify. With allow_nan=False canonicalisation the
+    tampered bundle cannot even be re-addressed, and verify_bundle returns False either
+    way (the ValueError from canonicalisation is caught and mapped to False)."""
     import math
-    from atv_bench.bundle import content_id_of
     b = build_bundle(_ratings_doc(), _matches(), _meta())
     h0 = next(iter(b["published"]))
     b["published"][h0] = math.nan
-    b["content_id"] = content_id_of(b)  # re-address so only the NaN is the defect
+    # Do not re-address: content_id_of would raise on the NaN. verify_bundle must still
+    # fail closed (returns False, never raises) rather than accept the non-finite value.
     assert verify_bundle(b) is False
 
 
@@ -203,3 +206,26 @@ def test_bundle_persists_cluster_ids_and_reproduces_clustered():
                      _meta(cluster_policy="by_build_artifact", cluster_ids=cluster_ids))
     assert b["reproduce"]["cluster_ids"] == cluster_ids
     assert verify_bundle(b) is True
+
+
+def test_bundle_rejects_nonfinite_ratings_doc():
+    """A non-finite number ANYWHERE in the payload (here, nested in ratings_doc) must not
+    survive the bundle round-trip: build_bundle canonicalises with allow_nan=False, so a
+    NaN CI bound cannot be published as a valid content-addressed artifact."""
+    import math
+    doc = _ratings_doc()
+    doc["published_ci_hi"] = math.nan  # a non-finite number smuggled into the doc
+    with pytest.raises(ValueError):
+        build_bundle(doc, _matches(), _meta())
+
+
+def test_verify_rejects_tampered_cluster_ids():
+    """If a published clustered bundle's cluster_ids are altered post-hoc, verification
+    must fail (the content address covers reproduce.cluster_ids)."""
+    matches = _matches()
+    cluster_ids = ["c1"] * 10 + ["c2"] * 10
+    b = build_bundle(_ratings_doc(), matches,
+                     _meta(cluster_policy="by_build_artifact", cluster_ids=cluster_ids))
+    assert verify_bundle(b) is True
+    b["reproduce"]["cluster_ids"] = ["c1"] * 20  # tamper without re-addressing
+    assert verify_bundle(b) is False

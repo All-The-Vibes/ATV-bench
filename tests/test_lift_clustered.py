@@ -179,23 +179,21 @@ def test_bootstrap_skips_replicates_missing_a_player():
     import numpy as np
     from atv_bench.lift import compute_lift
 
-    # Roster where a resample can omit a required player entirely: H vs bareH, and a
-    # separate opp vs bareH block, so an i.i.d. resample can drop ALL of H's rows while
-    # keeping the design non-empty. A replicate missing H (or bareH) has no data to rate
-    # that player — its "lift" is a ridge-pulled artifact, not an observation, and must be
-    # skipped rather than folded into the CI.
+    # bareH appears in exactly ONE row, so a large fraction of i.i.d. resamples omit it
+    # entirely. A replicate missing bareH has no data to rate that player — its "lift" is
+    # a ridge-pulled artifact and MUST be skipped, not folded into the CI.
     matches = []
-    for _ in range(4):
-        matches.append(RatingMatch("H", "bareH", "M", "M", 1.0))
-    matches.append(RatingMatch("H", "bareH", "M", "M", 0.0))
-    for _ in range(4):
-        matches.append(RatingMatch("opp", "bareH", "M", "M", 1.0))
-    matches.append(RatingMatch("opp", "bareH", "M", "M", 0.0))
+    for _ in range(3):
+        matches.append(RatingMatch("H", "opp", "M", "M", 1.0))
+    for _ in range(3):
+        matches.append(RatingMatch("H", "opp", "M", "M", 0.0))
+    matches.append(RatingMatch("bareH", "opp", "M", "M", 1.0))  # single bareH row
     baselines = {"H": "bareH"}
-    res = compute_lift(matches, baselines, seed=3, n_boot=400)["H"]
+    res = compute_lift(matches, baselines, seed=3, n_boot=300)["H"]
     # Every retained draw is finite (a dropped-player replicate is skipped, not NaN).
     assert np.isfinite(res.lo) and np.isfinite(res.hi)
-    # The API surfaces how many replicates were usable; some are skipped for this thin
-    # corpus, so the count is below the requested n_boot but still produces a CI.
-    assert 1 <= res.n_boot_used <= 400
+    # Skipping genuinely happened: strictly fewer usable replicates than requested. If the
+    # skip path were broken, n_boot_used would equal 300 and this would fail.
+    assert res.n_boot_used < 300
+    assert res.n_boot_used >= 1
 

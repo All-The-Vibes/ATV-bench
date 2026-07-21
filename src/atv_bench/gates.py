@@ -81,14 +81,16 @@ def evaluate_quality_gates(
                 "threshold": None,
                 "reason": f"required signal {key!r} absent; failing closed",
             })
-        elif not math.isfinite(val):
-            # NaN/inf must fail closed: NaN comparisons are always False, so an unchecked
-            # non-finite metric would slip past every threshold below.
+        elif not isinstance(val, (int, float)) or isinstance(val, bool) or not math.isfinite(val):
+            # NaN/inf/non-numeric must fail closed: NaN comparisons are always False and a
+            # non-numeric (str/None-like) value would otherwise raise on comparison — either
+            # way an unchecked signal must not slip past the thresholds below. bool is
+            # rejected too (a True/False count is a category error for these metrics).
             failures.append({
                 "gate": f"nonfinite_{key}",
                 "observed": val,
                 "threshold": None,
-                "reason": f"signal {key!r} is non-finite ({val}); failing closed",
+                "reason": f"signal {key!r} is not a finite number ({val!r}); failing closed",
             })
 
     infra = stats.get("infrastructure_error_rate")

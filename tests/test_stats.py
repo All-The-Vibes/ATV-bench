@@ -280,12 +280,43 @@ def test_bootstrap_ci_input_validation():
         bootstrap_ci([1.0, 0.0, 1.0], cluster_ids=["a", "b"], n_boot=50)
 
 
-def test_unconverged_fit_raises():
-    """intransitivity_statistic's Bradley-Terry fit must not silently use an
-    unconverged optimizer result. With a well-posed input it converges and returns a
-    finite statistic (regression pin that the added convergence guard does not trip a
-    healthy fit)."""
+def test_healthy_bt_fit_converges():
+    """Regression pin: the convergence guard does NOT trip a well-posed fit.
+    intransitivity_statistic's Bradley-Terry fit returns a finite statistic."""
     results = [("a", "b", 1.0), ("b", "c", 1.0), ("a", "c", 1.0)] * 10
     out = intransitivity_statistic(results)
     assert out["statistic"] == out["statistic"]  # not NaN
     assert 0.0 <= out["statistic"] < 1.0
+
+
+def test_unconverged_fit_raises(monkeypatch):
+    """The BT fit must FAIL (not silently use a bad result) when the optimizer reports a
+    genuine non-convergence — a non-finite solution or an exhausted iteration budget
+    (status==1). We force status==1 via a stubbed optimizer to prove the guard fires."""
+    import numpy as np
+    from scipy import optimize as _optimize
+    import atv_bench.stats as stats_mod
+
+    class _Res:
+        x = np.zeros(3)
+        status = 1  # ITERATION LIMIT — a genuine non-fit
+        message = "STUB: ITERATION LIMIT"
+
+    monkeypatch.setattr(stats_mod.optimize, "minimize", lambda *a, **k: _Res())
+    with pytest.raises(RuntimeError):
+        intransitivity_statistic([("a", "b", 1.0), ("b", "c", 1.0), ("a", "c", 1.0)])
+
+
+def test_nonfinite_fit_raises(monkeypatch):
+    """A non-finite optimizer solution must be rejected even if status looks benign."""
+    import numpy as np
+    import atv_bench.stats as stats_mod
+
+    class _Res:
+        x = np.array([np.nan, 0.0, 0.0])
+        status = 0
+        message = "STUB: converged-but-nonfinite"
+
+    monkeypatch.setattr(stats_mod.optimize, "minimize", lambda *a, **k: _Res())
+    with pytest.raises(RuntimeError):
+        intransitivity_statistic([("a", "b", 1.0), ("b", "c", 1.0), ("a", "c", 1.0)])
