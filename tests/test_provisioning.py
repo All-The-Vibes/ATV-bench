@@ -10,6 +10,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 try:  # Python 3.11+ stdlib
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover
@@ -27,8 +29,17 @@ def _repo_root() -> Path:
     return Path(out)
 
 
+@pytest.mark.integration
 def test_codeclash_importable() -> None:
-    """CodeClash and its player agent import cleanly from the vendored source."""
+    """CodeClash and its player agent import cleanly from the vendored source.
+
+    Gated as ``integration``: importing ``codeclash.agents`` pulls in the full
+    ``run`` optional-dependency stack (mini-swe-agent, litellm, ...) and requires
+    the ``vendor/CodeClash`` submodule to be initialised plus
+    ``pip install -e vendor/CodeClash``. Hermetic CI installs only ``.[dev]`` and
+    does not check out submodules, so this contract belongs in the
+    Docker/integration lane rather than the fast hermetic tripwire suite.
+    """
     from codeclash import agents  # noqa: F401
     from codeclash.agents.player import Player  # noqa: F401
 
