@@ -347,6 +347,22 @@ def compute_lift(
                 f"between-cluster variance; got {n_clusters}. A single cluster yields a "
                 "zero-width (phantom-precision) CI — refusing rather than under-covering.")
         members = {c: np.flatnonzero(cid == c) for c in uniq}
+        # Per-harness guard: a harness whose relevant rows (its own player or its bare
+        # baseline) all fall in a SINGLE cluster has no between-cluster variance to
+        # estimate even though the whole corpus has >=2 clusters — still phantom precision
+        # for THAT contrast. Refuse it explicitly rather than emit a falsely tight CI.
+        rows_present = row_players  # (n, 2) player indices per row
+        for harness, p in plan.items():
+            relevant = np.array([
+                r for r in range(n)
+                if p["h_idx"] in rows_present[r] or p["b_idx"] in rows_present[r]
+            ], dtype=int)
+            harness_clusters = np.unique(cid[relevant]).shape[0] if relevant.size else 0
+            if harness_clusters < 2:
+                raise LiftError(
+                    f"harness {harness!r}: its relevant matches span only {harness_clusters} "
+                    f"cluster(s); a clustered CI needs >=2 to price between-cluster variance "
+                    f"(single-cluster => phantom precision). Refusing.")
         for _ in range(n_boot):
             chosen = rng.integers(0, n_clusters, size=n_clusters)
             rows = np.concatenate([members[uniq[c]] for c in chosen])

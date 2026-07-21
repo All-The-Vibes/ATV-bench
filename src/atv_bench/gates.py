@@ -22,6 +22,11 @@ import math
 from typing import Any, Mapping
 
 
+def _finite_number(val: Any) -> bool:
+    """True iff ``val`` is a real, finite number (int/float, not bool, not NaN/inf)."""
+    return isinstance(val, (int, float)) and not isinstance(val, bool) and math.isfinite(val)
+
+
 # --------------------------------------------------------------------------- #
 # G6 — quality / futility gates
 # --------------------------------------------------------------------------- #
@@ -81,7 +86,7 @@ def evaluate_quality_gates(
                 "threshold": None,
                 "reason": f"required signal {key!r} absent; failing closed",
             })
-        elif not isinstance(val, (int, float)) or isinstance(val, bool) or not math.isfinite(val):
+        elif not _finite_number(val):
             # NaN/inf/non-numeric must fail closed: NaN comparisons are always False and a
             # non-numeric (str/None-like) value would otherwise raise on comparison — either
             # way an unchecked signal must not slip past the thresholds below. bool is
@@ -94,7 +99,7 @@ def evaluate_quality_gates(
             })
 
     infra = stats.get("infrastructure_error_rate")
-    if infra is not None and infra > t.max_infrastructure_error_rate:
+    if _finite_number(infra) and infra > t.max_infrastructure_error_rate:
         failures.append({
             "gate": "infrastructure_error_rate",
             "observed": infra,
@@ -102,7 +107,7 @@ def evaluate_quality_gates(
         })
 
     eligible = stats.get("eligible_n")
-    if eligible is not None and eligible < t.min_eligible_n:
+    if _finite_number(eligible) and eligible < t.min_eligible_n:
         failures.append({
             "gate": "eligible_n",
             "observed": eligible,
@@ -110,7 +115,7 @@ def evaluate_quality_gates(
         })
 
     per_cell = stats.get("min_trials_per_cell")
-    if per_cell is not None and per_cell < t.min_trials_per_cell:
+    if _finite_number(per_cell) and per_cell < t.min_trials_per_cell:
         failures.append({
             "gate": "min_trials_per_cell",
             "observed": per_cell,
@@ -118,7 +123,7 @@ def evaluate_quality_gates(
         })
 
     nondet = stats.get("referee_nondeterminism_rate")
-    if nondet is not None and nondet > t.max_referee_nondeterminism_rate:
+    if _finite_number(nondet) and nondet > t.max_referee_nondeterminism_rate:
         failures.append({
             "gate": "referee_nondeterminism_rate",
             "observed": nondet,
@@ -160,6 +165,15 @@ def decide_contrast(
     if fit_excluded:
         return {"verdict": "inconclusive",
                 "reason": "contrast is FIT_EXCLUDED; cannot attribute a winner"}
+
+    # Fail closed on unusable inputs: a NaN/inf CI bound, diff, margin, or direction
+    # stability, or a non-numeric n_policies, cannot support a defensible winner call.
+    if not all(_finite_number(v) for v in (diff, lo, hi, margin, direction_stability)):
+        return {"verdict": "inconclusive",
+                "reason": "non-finite contrast input (diff/lo/hi/margin/direction_stability)"}
+    if not isinstance(n_policies, int) or isinstance(n_policies, bool):
+        return {"verdict": "inconclusive",
+                "reason": f"n_policies must be an int; got {n_policies!r}"}
 
     within_band = lo > -margin and hi < margin
     if within_band:

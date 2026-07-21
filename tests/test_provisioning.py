@@ -47,7 +47,13 @@ def test_codeclash_importable() -> None:
 
 
 def test_submodule_pinned() -> None:
-    """vendor/CodeClash must be a real git submodule pinned to CODECLASH_PIN."""
+    """vendor/CodeClash must be a real git submodule pinned to CODECLASH_PIN.
+
+    This asserts the METADATA contract only — .gitmodules + the index gitlink — using
+    ``git ls-tree HEAD`` which reads the recorded tree and does NOT require the submodule
+    working tree to be checked out. Hermetic CI checks out without submodules, so the
+    working-tree-checkout assertion lives in the integration-gated test below.
+    """
     root = _repo_root()
     gitmodules = root / ".gitmodules"
     assert gitmodules.exists(), ".gitmodules does not exist (CodeClash is a plain clone)"
@@ -55,7 +61,7 @@ def test_submodule_pinned() -> None:
     content = gitmodules.read_text()
     assert "vendor/CodeClash" in content, ".gitmodules does not reference vendor/CodeClash"
 
-    # The submodule gitlink must be recorded at the pinned commit.
+    # The submodule gitlink must be recorded at the pinned commit (index-level; no checkout).
     ls = subprocess.run(
         ["git", "ls-tree", "HEAD", "vendor/CodeClash"],
         cwd=root,
@@ -71,7 +77,16 @@ def test_submodule_pinned() -> None:
         f"submodule gitlink is not pinned to {CODECLASH_PIN}; got: {ls.stdout!r}"
     )
 
-    # The checked-out submodule working tree must be at the pin.
+
+@pytest.mark.integration
+def test_submodule_working_tree_at_pin() -> None:
+    """The CHECKED-OUT submodule working tree must be at the pin.
+
+    Gated ``integration``: requires ``git submodule update --init`` to have populated
+    vendor/CodeClash, which hermetic CI does not do. Runs in the submodule-aware
+    import-smoke / live lanes.
+    """
+    root = _repo_root()
     head = subprocess.check_output(
         ["git", "rev-parse", "HEAD"],
         cwd=root / "vendor" / "CodeClash",

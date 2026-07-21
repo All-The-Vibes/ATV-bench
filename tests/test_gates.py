@@ -197,3 +197,34 @@ def test_inf_signal_fails_closed():
         "referee_nondeterminism_rate": 0.0,
     }
     assert evaluate_quality_gates(s).passed is False
+
+
+# --------------------------------------------------------------------------- #
+# Santa round 4 — full fail-closed robustness.
+# --------------------------------------------------------------------------- #
+def test_non_numeric_signal_fails_closed_without_raising():
+    """A non-numeric required signal (e.g. a string) must fail CLOSED gracefully, never
+    raise a TypeError from a downstream threshold comparison."""
+    s = {
+        "infrastructure_error_rate": "oops",  # non-numeric
+        "eligible_n": 200,
+        "min_trials_per_cell": 10,
+        "referee_nondeterminism_rate": 0.0,
+    }
+    rep = evaluate_quality_gates(s)  # must not raise
+    assert rep.passed is False
+
+
+def test_decide_contrast_rejects_nan_inputs():
+    """decide_contrast must not declare a winner on non-finite inputs — a NaN direction
+    stability or CI bound is unusable and must fall through to inconclusive, never A_wins."""
+    out = decide_contrast(
+        diff=1.0, lo=0.5, hi=1.5, margin=0.1,
+        direction_stability=float("nan"), n_policies=3,
+    )
+    assert out["verdict"] == "inconclusive"
+    out2 = decide_contrast(
+        diff=float("nan"), lo=float("nan"), hi=float("nan"), margin=0.1,
+        direction_stability=0.99, n_policies=3,
+    )
+    assert out2["verdict"] == "inconclusive"

@@ -200,8 +200,9 @@ def test_bundle_persists_cluster_ids_and_reproduces_clustered():
     lift offline (the point estimate is invariant to clustering, but persisting the ids
     is what makes a clustered CI claim independently checkable)."""
     matches = _matches()
-    # One cluster per model block (>=2 clusters so clustering is valid).
-    cluster_ids = ["c1"] * 10 + ["c2"] * 10
+    # Each harness's 10 matches (H: rows 0-9, K: rows 10-19) span TWO build-artifact
+    # clusters, so every per-harness contrast has >=2 clusters (the clustered CI is valid).
+    cluster_ids = (["H1"] * 5 + ["H2"] * 5) + (["K1"] * 5 + ["K2"] * 5)
     b = build_bundle(_ratings_doc(), matches,
                      _meta(cluster_policy="by_build_artifact", cluster_ids=cluster_ids))
     assert b["reproduce"]["cluster_ids"] == cluster_ids
@@ -223,9 +224,11 @@ def test_verify_rejects_tampered_cluster_ids():
     """If a published clustered bundle's cluster_ids are altered post-hoc, verification
     must fail (the content address covers reproduce.cluster_ids)."""
     matches = _matches()
-    cluster_ids = ["c1"] * 10 + ["c2"] * 10
+    cluster_ids = (["H1"] * 5 + ["H2"] * 5) + (["K1"] * 5 + ["K2"] * 5)
     b = build_bundle(_ratings_doc(), matches,
                      _meta(cluster_policy="by_build_artifact", cluster_ids=cluster_ids))
     assert verify_bundle(b) is True
-    b["reproduce"]["cluster_ids"] = ["c1"] * 20  # tamper without re-addressing
+    # Tamper to a DIFFERENT but still structurally-valid clustering (each harness keeps
+    # >=2 clusters) so the failure is the content-address mismatch, not a LiftError.
+    b["reproduce"]["cluster_ids"] = (["H1", "H2"] * 5) + (["K1", "K2"] * 5)
     assert verify_bundle(b) is False

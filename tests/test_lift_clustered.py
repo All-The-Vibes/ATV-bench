@@ -197,3 +197,26 @@ def test_bootstrap_skips_replicates_missing_a_player():
     assert res.n_boot_used < 300
     assert res.n_boot_used >= 1
 
+
+
+def test_per_harness_single_cluster_refused_in_multicluster_corpus():
+    """Even when the CORPUS has >=2 clusters, a harness whose relevant matches all sit in
+    ONE cluster has no between-cluster variance for that contrast — phantom precision.
+    compute_lift must refuse rather than emit a falsely tight per-harness CI."""
+    import pytest
+    from atv_bench.lift import compute_lift, LiftError
+
+    # H vs bareH all in cluster c1; a SEPARATE K vs bareK block in cluster c2. The corpus
+    # has 2 clusters, but H's contrast lives entirely in c1.
+    matches = []
+    cluster_ids = []
+    for _ in range(6):
+        matches.append(RatingMatch("H", "bareH", "M", "M", 1.0)); cluster_ids.append("c1")
+    for _ in range(4):
+        matches.append(RatingMatch("H", "bareH", "M", "M", 0.0)); cluster_ids.append("c1")
+    for _ in range(5):
+        matches.append(RatingMatch("K", "bareK", "M", "M", 1.0)); cluster_ids.append("c2")
+    for _ in range(5):
+        matches.append(RatingMatch("K", "bareK", "M", "M", 0.0)); cluster_ids.append("c2")
+    with pytest.raises(LiftError):
+        compute_lift(matches, {"H": "bareH"}, seed=0, n_boot=100, cluster_ids=cluster_ids)
