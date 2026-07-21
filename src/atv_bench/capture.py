@@ -13,12 +13,15 @@ from pathlib import Path
 
 from atv_bench.fingerprint.scan import _has_secret_pattern
 
-# Bounds — a multi-file arena bot (a compiled-from-source engine like chess/Kojiro or a
-# robocode robot dir) is larger than a single main.py, but still bounded. These caps stop
-# a DoS blob, not legitimate source trees.
-MAX_FILES = 400
-MAX_TOTAL_BYTES = 8 * 1024 * 1024  # 8 MiB
-MAX_FILE_BYTES = 2 * 1024 * 1024   # 2 MiB
+# Bounds — the captured tree is the WHOLE arena workspace (the harness reads it, edits in
+# place, writes it back), so for multi-language arenas it includes the seeded SDK, not just
+# the authored bot: Halite's starter ships ~668 files of C++/Python/Java/Rust/OCaml SDK.
+# These caps are a DoS backstop on the aggregate, not a "bot is small" assumption — the real
+# safety gates are PER-FILE (no binary, no secret, no symlink, MAX_FILE_BYTES). We keep the
+# per-file cap strict while allowing a large-but-bounded seed tree.
+MAX_FILES = 5000
+MAX_TOTAL_BYTES = 64 * 1024 * 1024  # 64 MiB aggregate DoS backstop
+MAX_FILE_BYTES = 2 * 1024 * 1024    # 2 MiB — a single authored source file stays small
 # The capture gate is "decodes as UTF-8 text + carries no secret", NOT a narrow extension
 # allowlist. CodeClash arenas legitimately ship bot source in many languages (C/C++ `src/`,
 # Java `robots/custom/`, Rust/OCaml `submission/`, JS `robot.js`, Redcode `warrior.red`)

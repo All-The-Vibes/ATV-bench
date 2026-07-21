@@ -57,7 +57,13 @@ def test_file_count_cap(tmp_path):
 
 
 def test_total_size_cap(tmp_path):
-    _mk(tmp_path, "big.py", "A" * (MAX_TOTAL_BYTES + 1))
+    # Many files each under MAX_FILE_BYTES, summing over MAX_TOTAL_BYTES — exercises the
+    # AGGREGATE cap specifically (a single 64MiB file would trip the per-file cap first).
+    from atv_bench.capture import MAX_FILE_BYTES
+    chunk = "A" * (MAX_FILE_BYTES - 1)
+    n = (MAX_TOTAL_BYTES // len(chunk)) + 2
+    for i in range(n):
+        _mk(tmp_path, f"big{i}.py", chunk)
     with pytest.raises(CaptureRejected) as exc:
         scan_captured_tree(tmp_path)
     assert "size" in str(exc.value).lower() or "large" in str(exc.value).lower()
