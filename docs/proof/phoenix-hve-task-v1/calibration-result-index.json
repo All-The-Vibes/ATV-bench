@@ -1,0 +1,28 @@
+{
+  "schema": "atv.phoenix-hve-task-calibration-result-index/v1",
+  "completed_at": "2026-07-21",
+  "calibration_plan_digest": "8ed128ece69b17c17548530129eed4a095dc0dd9a96b968f9a77979f3afe19a4",
+  "summary_sha256": "c8c3a0a719a61bfb0560460da37de9a8e548c3ddd40102240aac769f548f41e7",
+  "summary_file_sha256": "e36729bf38bc183362b250a3def11272346783bc65f8598c4270f9dd234395ac",
+  "decision": "selected",
+  "selected_max_ai_credits": 30,
+  "candidate_cells": [
+    {
+      "max_ai_credits": 30,
+      "status": "passed",
+      "completed_tasks": 5,
+      "failure_reasons": []
+    },
+    {
+      "max_ai_credits": 60,
+      "status": "passed",
+      "completed_tasks": 5,
+      "failure_reasons": []
+    }
+  ],
+  "paired_task_attempts": 10,
+  "harness_executions": 20,
+  "quality_scores_used": false,
+  "rankable": false,
+  "official": false
+}
