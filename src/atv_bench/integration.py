@@ -42,6 +42,34 @@ def set_harness_homes(homes: dict[str, Path | None] | None) -> None:
         _harness_homes.update(homes)
 
 
+def _ensure_container_origin(environment) -> None:
+    """Ensure the arena container's bot repo has an `origin` remote before the CodeClash
+    Player runs `git fetch origin` in its __init__.
+
+    Most arenas `git clone` their starter kit (so `origin` already exists), but a few
+    (`cyborg`, `bomberland`) `git init` a fresh repo with NO remote. CodeClash's
+    Player.__init__ unconditionally runs `git fetch origin` for the non-push path, which
+    exits 128 ("'origin' does not appear to be a git repository") and kills the match
+    before the bot is ever built. We don't push, so a self-referential `origin` (the repo
+    itself) makes that fetch a harmless no-op. This is reuse-enabling container plumbing —
+    it does not touch any arena's referee/adjudication.
+
+    Idempotent and best-effort: if `origin` already exists we leave it; any failure here
+    is swallowed so we never break the arenas that were already fine.
+    """
+    try:
+        has_origin = environment.execute("git remote get-url origin")
+        if has_origin.get("returncode", 1) == 0:
+            return  # origin already configured (cloned arenas) — don't touch it
+        # Point origin at the working tree itself; `git fetch origin` becomes a no-op.
+        environment.execute(
+            "cd $(git rev-parse --show-toplevel 2>/dev/null || echo .) && "
+            "git remote add origin \"$(pwd)\" 2>/dev/null || true"
+        )
+    except Exception:
+        pass  # best-effort; the fetch will surface a clear error if it still fails
+
+
 def run_isolated_edit_turn(
     *,
     adapter,
@@ -104,6 +132,7 @@ def register() -> None:
         player_cls = resolve_player_class(config.get("agent"))
         if player_cls is None:
             return original(config, game_context, environment)
+        _ensure_container_origin(environment)
         return player_cls(config, environment, game_context)
 
     cc.pvp.get_agent = patched_get_agent

@@ -108,3 +108,36 @@ def test_patched_get_agent_routes_harness_and_builtin_end_to_end(monkeypatch):
         assert calls["original"] == 1
     finally:
         integration.unregister()
+
+
+class _FakeEnv:
+    """Minimal environment stub recording git commands the origin-fix issues."""
+
+    def __init__(self, has_origin: bool):
+        self._has_origin = has_origin
+        self.calls: list[str] = []
+
+    def execute(self, cmd: str) -> dict:
+        self.calls.append(cmd)
+        if cmd.strip() == "git remote get-url origin":
+            return {"returncode": 0 if self._has_origin else 2, "output": ""}
+        return {"returncode": 0, "output": ""}
+
+
+def test_ensure_container_origin_adds_remote_when_missing():
+    """cyborg/bomberland `git init` with no remote; CodeClash then runs `git fetch origin`
+    (exit 128). We add a self-referential origin so the fetch is a no-op success."""
+    from atv_bench.integration import _ensure_container_origin
+
+    env = _FakeEnv(has_origin=False)
+    _ensure_container_origin(env)
+    assert any("git remote add origin" in c for c in env.calls), env.calls
+
+
+def test_ensure_container_origin_noop_when_present():
+    """Cloned arenas already have origin — we must NOT touch it."""
+    from atv_bench.integration import _ensure_container_origin
+
+    env = _FakeEnv(has_origin=True)
+    _ensure_container_origin(env)
+    assert not any("git remote add origin" in c for c in env.calls), env.calls
