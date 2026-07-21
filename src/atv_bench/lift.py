@@ -106,9 +106,22 @@ class BareModelAdapter:
     The wrapped adapter's own env is overridden with a ``bare_run_env`` per run: same model
     CLI, zero harness scaffolding. A fingerprint taken of that run's HOME is empty across
     every scaffolding field (``manifest_is_bare`` True) — the bare control the lift subtracts.
+
+    Exposes the ``HarnessAdapter`` surface (``name`` + ``available``) so the negative control
+    is resolvable by name (``bare:<inner>``) and runs on real match data, not synthetic thetas
+    (PR #19 follow-up 2). ``name`` is the composite key ``bare:<inner.name>``; ``available``
+    delegates to the wrapped leaf — a bare run is possible exactly when its CLI is.
     """
 
     inner: Any
+
+    @property
+    def name(self) -> str:
+        return f"bare:{getattr(self.inner, 'name', 'unknown')}"
+
+    def available(self) -> bool:
+        avail = getattr(self.inner, "available", None)
+        return bool(avail()) if callable(avail) else False
 
     def run(self, req: Any) -> Any:
         with bare_run_env() as env:
