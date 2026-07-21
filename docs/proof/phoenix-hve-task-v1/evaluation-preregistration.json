@@ -1,0 +1,158 @@
+{
+  "analysis_policy": {
+    "bootstrap_samples": 10000,
+    "bootstrap_seed": 20260721,
+    "confidence": 0.95,
+    "equivalence_min_both_reliable_per_task": 4,
+    "equivalence_min_both_reliable_suite_rate": 0.9,
+    "reliability_alpha": 0.05,
+    "superiority_equivalence_margin": 0.05,
+    "superiority_min_at_least_one_reliable_per_task": 4,
+    "superiority_min_at_least_one_reliable_suite_rate": 0.9
+  },
+  "attempts_per_task": 5,
+  "budget": {
+    "max_ai_credits": 30,
+    "same_for_both_harnesses": true,
+    "timeout_seconds": 900
+  },
+  "calibration": {
+    "plan_digest": "8ed128ece69b17c17548530129eed4a095dc0dd9a96b968f9a77979f3afe19a4",
+    "selected_max_ai_credits": 30,
+    "summary_sha256": "c8c3a0a719a61bfb0560460da37de9a8e548c3ddd40102240aac769f548f41e7"
+  },
+  "claim_scope": "exact 20 public synthetic tasks under pinned commits/model/budget only; not a global harness sophistication ranking",
+  "execution_backend": "oci",
+  "experiment_digest": "df75a8992e6af166efb6e4692ee1c7c06d03dbad3fe333767755869c9769ed81",
+  "frozen_at": "2026-07-21",
+  "model": {
+    "provider_signed": false,
+    "requested": "gpt-5.4",
+    "selection_source": "explicit_cli"
+  },
+  "oci_images": {
+    "hve": {
+      "build_spec_sha256": "a2afd332372228ca610c8470d078b9a0e85862085c3f5619188f8746f14ffe51",
+      "image_id": "sha256:497a1f29dd234c3fa538817fc7efb5eb9cc3df473f286ed47d38e815f1df6b20",
+      "proxy_build_spec_sha256": "6c540f01c0b0b74ab6c43b63abc08f81ae4ad395b2715a55218ac9a532bac3c4",
+      "proxy_image_id": "sha256:dc7bc0755dad0b0c5b5bab7379c329a7cfda6df99c6db41048a617c3a3c93592"
+    },
+    "phoenix": {
+      "build_spec_sha256": "e7c5ad4b47278d3286d459927ff9cd2537faaed5d8c46a2ecbf950cadf9fe010",
+      "image_id": "sha256:b918b4dfcc06d4ce97d9af55cdd8e8f407e0bc36475f905348660db07ea0a534",
+      "proxy_build_spec_sha256": "6c540f01c0b0b74ab6c43b63abc08f81ae4ad395b2715a55218ac9a532bac3c4",
+      "proxy_image_id": "sha256:dc7bc0755dad0b0c5b5bab7379c329a7cfda6df99c6db41048a617c3a3c93592"
+    }
+  },
+  "preregistration_sha256": "5b1f76f336cbbea8cadc4e366c140c7723150a6866461cc46cf38aae58a5fe43",
+  "sample_size_assumption_sha256": "f3eb3109eff64e23bc9bef0ae319243c6ad74ec3443556f2d99132798af4598c",
+  "schedule_sha256": "1df9ce09c1ab05f44d688ec2e4c505023e0711e264b76e7ed44bc21ea3c672c4",
+  "schema": "atv.phoenix-hve-task-preregistration/v1",
+  "selection_sha256": "5b2fdc11722d266ebf6443975fabdd5867787b36ec33f5b6d1b8390df54b665a",
+  "source_commits": {
+    "hve_commit": "5c15a03c78da2408527693e0fc3b3e387bf99cb2",
+    "phoenix_commit": "233e8e1e968bbc0b1dc446d7830efa82489bf118"
+  },
+  "tasks": [
+    {
+      "category": "context-retrieval",
+      "task_digest": "66811adf696f78d732d87691a89af26ba52d52a4c3b4de8854c0000e78bbf6a4",
+      "task_id": "pilot.context-retrieval.01-service-owner"
+    },
+    {
+      "category": "context-retrieval",
+      "task_digest": "22e739e38027d15e3d088087f79aa4549996565b0123cb641ae6e04339d1ce6c",
+      "task_id": "pilot.context-retrieval.03-retention-days"
+    },
+    {
+      "category": "context-retrieval",
+      "task_digest": "0be4344d69ee3020e0821000471f51ddd1c02a3f5c74d78a81dae352271036f3",
+      "task_id": "pilot.context-retrieval.09-runbook-command"
+    },
+    {
+      "category": "context-retrieval",
+      "task_digest": "b16551b41228a307365e4d550bd61dadf02977719c3a2253802b73538246c57e",
+      "task_id": "pilot.context-retrieval.10-artifact-format"
+    },
+    {
+      "category": "debugging",
+      "task_digest": "685b0cae2751a2e42d5491345154c514471c974a2d97ebf96f5b2b5a45e346d7",
+      "task_id": "pilot.debugging.02-stale-cache"
+    },
+    {
+      "category": "debugging",
+      "task_digest": "e668141f1de1f4087dd66b84f798c5caf4497723321d8aa7df911213928596db",
+      "task_id": "pilot.debugging.03-inverted-flag"
+    },
+    {
+      "category": "debugging",
+      "task_digest": "45fafffd186fccbf94dd1ff19a0e366b099a209b53db50143ff99ce96f5cce1d",
+      "task_id": "pilot.debugging.07-path-normalization"
+    },
+    {
+      "category": "debugging",
+      "task_digest": "76b0bda02e96c48fec55a4b07e39d79a225328d342560ca84f0671c445628653",
+      "task_id": "pilot.debugging.10-premature-rounding"
+    },
+    {
+      "category": "greenfield",
+      "task_digest": "5d9297749041b8ba1e27800beadad306664d138bc331351a0190b3a9a7fdc7d9",
+      "task_id": "pilot.greenfield.02-product-factors"
+    },
+    {
+      "category": "greenfield",
+      "task_digest": "ab29a933185c9e000ee01b114504b110723a2555a5151ebc0a6c6f53caf9dad7",
+      "task_id": "pilot.greenfield.05-temperature-range"
+    },
+    {
+      "category": "greenfield",
+      "task_digest": "3a22ee3ccb9c9d260cdf72149a65c22c26f1ce8a2556e67cd5c4eb02daa6eb78",
+      "task_id": "pilot.greenfield.08-join-segments"
+    },
+    {
+      "category": "greenfield",
+      "task_digest": "c395eaddb9287d644933356674ad3e240d93b9205ef0a0a9ffcd61370b36abb5",
+      "task_id": "pilot.greenfield.09-weighted-total"
+    },
+    {
+      "category": "recovery",
+      "task_digest": "f618e0f0034e4f82590f3fb5a3f021ee29e2b0d0cd40f2753b03f901f1c4ee2a",
+      "task_id": "pilot.recovery.02-ledger-balance"
+    },
+    {
+      "category": "recovery",
+      "task_digest": "3576f95fd8aa7a8db2ce32c688a4060175a168b1e7db3629f7ab4d28e6933dc1",
+      "task_id": "pilot.recovery.03-queue-order"
+    },
+    {
+      "category": "recovery",
+      "task_digest": "51225d85e808baf8cfcb6c766430ac3f60b4fc69a21e080fbbda835644163374",
+      "task_id": "pilot.recovery.06-retry-state"
+    },
+    {
+      "category": "recovery",
+      "task_digest": "9fa1c149765cece48c481a5b750c528ed4e1ba60b665349ceebca4efa26cb642",
+      "task_id": "pilot.recovery.10-restored-mode"
+    },
+    {
+      "category": "repair",
+      "task_digest": "eb0e36e2522f2044d9d45f1e2895c5d1d3f718ef2e9155d0ef5283d248655022",
+      "task_id": "pilot.repair.01-service-status"
+    },
+    {
+      "category": "repair",
+      "task_digest": "48ea45b944166778d45ee39f59a8d3fc02d3947c37af95f74610981c471701d3",
+      "task_id": "pilot.repair.02-request-timeout"
+    },
+    {
+      "category": "repair",
+      "task_digest": "c36b2fd124d2390c4a80aa0cd42f33eee9e3f7c5eb78473a06cc07eeb307c668",
+      "task_id": "pilot.repair.04-feature-enabled"
+    },
+    {
+      "category": "repair",
+      "task_digest": "5f30f5dc16830a68dce47031ad7bc33a1d0c824defc303221c1a3798b61a1f4d",
+      "task_id": "pilot.repair.10-output-format"
+    }
+  ]
+}
