@@ -39,7 +39,12 @@ _DENIED_SUFFIXES = {
 _IGNORED_DIR_PARTS = {".git", "__pycache__", ".pytest_cache", ".mypy_cache",
                       ".ruff_cache", "node_modules", ".venv", "venv", ".tox",
                       "target", "build", "dist", ".gradle"}
-_IGNORED_SUFFIXES = {".pyc", ".pyo", ".so", ".o", ".class"}
+# Compiled bytecode/objects AND engine-generated game output (replays, sim logs). A game
+# engine run inside the workdir drops replays/logs (Halite `.hlt` replays can be multi-MB,
+# CoreWar/others drop `.log`) — these are NOT authored bot source, so SKIP them rather than
+# count them against the size cap or reject them. Only the authored source is the bot.
+_IGNORED_SUFFIXES = {".pyc", ".pyo", ".so", ".o", ".class",
+                     ".hlt", ".log", ".replay", ".trace"}
 
 
 class CaptureRejected(Exception):

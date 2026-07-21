@@ -147,3 +147,18 @@ def test_secret_in_source_file_still_rejected(tmp_path):
     with pytest.raises(CaptureRejected) as exc:
         scan_captured_tree(tmp_path)
     assert "secret" in str(exc.value).lower()
+
+
+def test_engine_replay_artifact_is_skipped_not_rejected(tmp_path):
+    """A game engine run in the workdir drops replays/logs (Halite `.hlt` can be multi-MB).
+    These are engine output, not authored bot — SKIP them, don't fail the match on the size
+    cap. Real matrix run surfaced a 6MB `.hlt` erroring the whole halite match."""
+    _mk(tmp_path, "MyBot.py", "def main(): pass\n")
+    big_replay = tmp_path / "1784597837-271413169.hlt"
+    big_replay.write_text("x" * (3 * 1024 * 1024))  # 3MB replay, over MAX_FILE_BYTES
+    (tmp_path / "sim_0.log").write_text("turn log\n")
+    files = scan_captured_tree(tmp_path)
+    rels = {f.relpath for f in files}
+    assert "MyBot.py" in rels
+    assert not any(r.endswith(".hlt") for r in rels)
+    assert not any(r.endswith(".log") for r in rels)
