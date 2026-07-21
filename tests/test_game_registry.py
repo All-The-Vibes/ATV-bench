@@ -10,6 +10,8 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
+
 # The 22 CodeClash arenas (dirs under vendor/CodeClash/codeclash/arenas).
 CODECLASH_ARENAS = [
     "ants",
@@ -75,8 +77,14 @@ def test_protocol_census_complete() -> None:
         )
 
 
+@pytest.mark.integration
 def test_enumerate_codeclash_games() -> None:
-    """The number of arena directories must equal 22, pinning the census scope."""
+    """The number of arena directories must equal 22, pinning the census scope.
+
+    Gated ``integration``: reads the vendored ``vendor/CodeClash/codeclash/arenas``
+    working tree, which requires ``git submodule update --init``. Hermetic CI does not
+    check out submodules, so this content check runs in the submodule-aware lane.
+    """
     root = _repo_root()
     arenas_dir = root / "vendor" / "CodeClash" / "codeclash" / "arenas"
     assert arenas_dir.is_dir(), f"arenas dir missing: {arenas_dir}"

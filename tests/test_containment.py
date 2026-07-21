@@ -166,8 +166,12 @@ def test_adapter_resource_cap_memory(tmp_path):
 
 
 @pytest.mark.skipif(
-    not CAPS.can_cap_nproc,
-    reason=f"host cannot cap nproc: {CAPS.rlimit_reason}",
+    not (CAPS.can_cap_nproc and CAPS.can_deny_egress),
+    reason=(
+        "host cannot cap nproc or deny egress; this test uses deny_egress=True so a "
+        "private userns uid makes RLIMIT_NPROC meaningful, so BOTH capabilities are "
+        f"required (nproc: {CAPS.rlimit_reason}; egress: {CAPS.egress_reason})"
+    ),
 )
 def test_adapter_resource_cap_nproc(tmp_path):
     """A fork-bomb child is contained by the process-count cap.

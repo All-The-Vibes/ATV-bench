@@ -89,9 +89,14 @@ def test_wave_c_upstream_blocked_arena_is_not_live(arena):
     assert g is not None and g.live is False
 
 
+@pytest.mark.integration
 def test_submission_paths_match_codeclash_arena_modules():
     """Each live Wave-C arena's entrypoint equals the CodeClash arena's `submission` attr
-    (read off the vendored module) — so the harness edits the file/dir the arena drives."""
+    (read off the vendored module) — so the harness edits the file/dir the arena drives.
+
+    Gated ``integration``: reads vendored CodeClash arena modules under vendor/CodeClash,
+    which require the submodule to be checked out (absent in hermetic CI).
+    """
     root = _repo_root()
     for arena in sorted(WAVE_C_LIVE):
         mod = root / "vendor" / "CodeClash" / "codeclash" / "arenas" / arena / f"{arena}.py"
