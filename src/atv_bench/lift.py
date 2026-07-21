@@ -194,7 +194,17 @@ def _fit_theta(X: np.ndarray, y: np.ndarray, n_players: int, ridge: float = 1e-4
         pr = _sigmoid(X @ beta)
         return X.T @ (pr - y) + 2 * ridge * beta
 
-    res = optimize.minimize(negll, np.zeros(n_free), jac=grad, method="L-BFGS-B")
+    res = optimize.minimize(negll, np.zeros(n_free), jac=grad, method="L-BFGS-B",
+                            options={"maxiter": 500})
+    # Convergence is judged on two genuine failure signals, NOT on ``res.success``:
+    # L-BFGS-B reports ABNORMAL_TERMINATION_IN_LNSRCH (success=False, status=2) on a
+    # flat/degenerate-but-solved objective (e.g. an all-zero null control) where the
+    # returned optimum is correct. A real non-fit is either (a) a non-finite solution
+    # (numerical blow-up) or (b) exhausting the iteration budget (status==1, never
+    # reached the optimum). Both are fatal; a benign line-search stop near the optimum is
+    # not.
+    if not np.all(np.isfinite(res.x)) or res.status == 1:
+        raise LiftError(f"theta fit did not converge (status={res.status}): {res.message}")
     full = np.zeros(n_players)
     full[1:] = res.x
     full -= full.mean()
@@ -315,8 +325,13 @@ def compute_lift(
     else:
         cid = np.asarray(cluster_ids)
         uniq = np.unique(cid)
-        members = {c: np.flatnonzero(cid == c) for c in uniq}
         n_clusters = uniq.shape[0]
+        if n_clusters < 2:
+            raise LiftError(
+                "clustered lift bootstrap needs >=2 unique clusters to estimate "
+                f"between-cluster variance; got {n_clusters}. A single cluster yields a "
+                "zero-width (phantom-precision) CI — refusing rather than under-covering.")
+        members = {c: np.flatnonzero(cid == c) for c in uniq}
         for _ in range(n_boot):
             chosen = rng.integers(0, n_clusters, size=n_clusters)
             rows = np.concatenate([members[uniq[c]] for c in chosen])

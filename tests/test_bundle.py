@@ -156,3 +156,22 @@ def test_invalid_track_raises():
 def test_invalid_trust_tier_raises():
     with pytest.raises(ValueError):
         build_bundle(_ratings_doc(), _matches(), _meta(trust_tier="blockchain"))
+
+
+# ---------------------------------------------------------------------------
+# Santa round 1 — reproduce tuple must persist CI level and cluster policy so a
+# clustered CI claim is offline-reproducible.
+# ---------------------------------------------------------------------------
+def test_bundle_persists_ci_level():
+    b = build_bundle(_ratings_doc(), _matches(), _meta(ci=0.90))
+    assert b["reproduce"]["ci"] == 0.90
+    # Content id still verifies with the new field embedded.
+    assert verify_bundle(b) is True
+
+
+def test_bundle_ci_default_is_persisted():
+    b = build_bundle(_ratings_doc(), _matches(), _meta())
+    # Default CI is recorded explicitly (not left implicit), so a verifier reproduces
+    # the exact interval, not a guessed one.
+    assert "ci" in b["reproduce"]
+    assert b["reproduce"]["ci"] == 0.95

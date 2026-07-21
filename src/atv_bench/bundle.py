@@ -69,10 +69,15 @@ def _match_from_dict(d: Mapping[str, Any]) -> RatingMatch:
 
 
 def _published_lifts(
-    matches: list[RatingMatch], baselines: Mapping[str, str], *, seed: int, n_boot: int
+    matches: list[RatingMatch], baselines: Mapping[str, str], *, seed: int, n_boot: int,
+    ci: float = 0.95,
 ) -> dict[str, float]:
-    """The published per-harness lift point estimates (offline-recomputable)."""
-    lifts = compute_lift(matches, dict(baselines), seed=seed, n_boot=n_boot)
+    """The published per-harness lift point estimates (offline-recomputable).
+
+    ``ci`` is threaded through so the reproduce check honours the exact interval level the
+    bundle was published at, rather than assuming a default.
+    """
+    lifts = compute_lift(matches, dict(baselines), seed=seed, n_boot=n_boot, ci=ci)
     return {h: float(res.lift) for h, res in lifts.items()}
 
 
@@ -103,12 +108,13 @@ def build_bundle(
 
     seed = int(meta.get("seed", 0))
     n_boot = int(meta.get("n_boot", 1000))
+    ci = float(meta.get("ci", 0.95))
     baselines = dict(meta.get("baselines", {}))
     cluster_policy = meta.get("cluster_policy", "iid")
     versions = dict(meta.get("versions", {}))
 
     match_dicts = [_match_to_dict(m) for m in matches]
-    published = _published_lifts(matches, baselines, seed=seed, n_boot=n_boot)
+    published = _published_lifts(matches, baselines, seed=seed, n_boot=n_boot, ci=ci)
 
     payload: dict[str, Any] = {
         "ratings_doc": json.loads(json.dumps(ratings_doc)),  # deep, JSON-safe copy
@@ -117,6 +123,7 @@ def build_bundle(
         "reproduce": {
             "seed": seed,
             "n_boot": n_boot,
+            "ci": ci,
             "baselines": baselines,
             "cluster_policy": cluster_policy,
             "versions": versions,
@@ -148,7 +155,8 @@ def verify_bundle(bundle: Mapping[str, Any]) -> bool:
         rep = bundle["reproduce"]
         matches = [_match_from_dict(d) for d in bundle["matches"]]
         recomputed = _published_lifts(
-            matches, rep["baselines"], seed=int(rep["seed"]), n_boot=int(rep["n_boot"])
+            matches, rep["baselines"], seed=int(rep["seed"]), n_boot=int(rep["n_boot"]),
+            ci=float(rep.get("ci", 0.95)),
         )
 
         published = bundle["published"]

@@ -135,3 +135,38 @@ def test_decide_reason_is_present_and_stringy():
     ):
         v = decide_contrast(**kw)
         assert isinstance(v["reason"], str) and v["reason"]
+
+
+# --------------------------------------------------------------------------- #
+# Santa round 1 — quality gates must FAIL CLOSED on missing signals.
+# --------------------------------------------------------------------------- #
+def test_empty_stats_blob_fails_closed():
+    """An empty stats blob must NOT pass publication gating. Missing load-bearing
+    signals are unknowable, and the rulebook is fail-closed: absence of evidence is
+    not evidence of quality."""
+    report = evaluate_quality_gates({})
+    assert report.passed is False
+    assert any(f["gate"].startswith("missing") or "missing" in f.get("reason", "")
+               for f in report.failures)
+
+
+def test_partial_stats_blob_fails_closed():
+    """A blob missing even one required signal fails closed."""
+    incomplete = {
+        "infrastructure_error_rate": 0.0,
+        "eligible_n": 200,
+        "min_trials_per_cell": 10,
+        # referee_nondeterminism_rate missing
+    }
+    assert evaluate_quality_gates(incomplete).passed is False
+
+
+def test_complete_in_threshold_stats_passes():
+    """Regression pin: a complete, in-threshold blob still passes."""
+    ok = {
+        "infrastructure_error_rate": 0.0,
+        "eligible_n": 200,
+        "min_trials_per_cell": 10,
+        "referee_nondeterminism_rate": 0.0,
+    }
+    assert evaluate_quality_gates(ok).passed is True

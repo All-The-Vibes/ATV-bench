@@ -50,18 +50,35 @@ def evaluate_quality_gates(
 ) -> QualityGateReport:
     """Evaluate futility/quality gates over already-computed corpus statistics.
 
-    ``stats`` keys (all optional; a missing key is treated as *not violating* that gate so a
-    partial stats blob never fails spuriously):
+    ``stats`` must supply every load-bearing signal — the rulebook is FAIL-CLOSED, so a
+    missing signal is a ``missing_signal`` failure, never a silent pass (absence of
+    evidence is not evidence of quality):
       * ``infrastructure_error_rate``   float in [0,1]
       * ``eligible_n``                  int, count of eligible scored trials
       * ``min_trials_per_cell``         int, the MINIMUM per-cell trial count observed
       * ``referee_nondeterminism_rate`` float in [0,1]
 
-    Returns a report; ``passed`` is True only when every present signal is within threshold.
-    Each failure records ``{gate, observed, threshold}``.
+    Returns a report; ``passed`` is True only when every required signal is present AND
+    within threshold. Each failure records ``{gate, observed, threshold}`` (or, for an
+    absent signal, ``{gate: 'missing_<name>', reason: ...}``).
     """
     t = thresholds or GateThresholds()
     failures: list[dict[str, Any]] = []
+
+    required = (
+        "infrastructure_error_rate",
+        "eligible_n",
+        "min_trials_per_cell",
+        "referee_nondeterminism_rate",
+    )
+    for key in required:
+        if stats.get(key) is None:
+            failures.append({
+                "gate": f"missing_{key}",
+                "observed": None,
+                "threshold": None,
+                "reason": f"required signal {key!r} absent; failing closed",
+            })
 
     infra = stats.get("infrastructure_error_rate")
     if infra is not None and infra > t.max_infrastructure_error_rate:

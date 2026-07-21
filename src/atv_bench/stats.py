@@ -40,6 +40,8 @@ def bootstrap_ci(
     where the i.i.d. row bootstrap under-covers.
     """
     values = np.asarray(values, dtype=float)
+    if values.shape[0] == 0:
+        raise ValueError("bootstrap_ci: values is empty; cannot bootstrap a CI")
     rng = np.random.default_rng(seed)
     n = values.shape[0]
     alpha = 1.0 - ci
@@ -52,10 +54,19 @@ def bootstrap_ci(
             boot[b] = statistic(values[idx])
     else:
         cluster_ids = np.asarray(cluster_ids)
+        if cluster_ids.shape[0] != n:
+            raise ValueError(
+                f"bootstrap_ci: cluster_ids length {cluster_ids.shape[0]} != "
+                f"number of values {n}")
         uniq = np.unique(cluster_ids)
+        n_clusters = uniq.shape[0]
+        if n_clusters < 2:
+            raise ValueError(
+                "bootstrap_ci: clustered bootstrap needs >=2 unique clusters to estimate "
+                f"between-cluster variance; got {n_clusters}. A single cluster yields a "
+                "zero-width (phantom-precision) CI — refusing rather than under-covering.")
         # Pre-index rows per cluster so each replicate just concatenates.
         members = {c: np.flatnonzero(cluster_ids == c) for c in uniq}
-        n_clusters = uniq.shape[0]
         boot = np.empty(n_boot)
         for b in range(n_boot):
             chosen = rng.integers(0, n_clusters, size=n_clusters)
@@ -161,7 +172,14 @@ def _bradley_terry_fit(items: list[str], wins: dict[tuple[str, str], float],
         ll -= 1e-6 * float(theta @ theta)
         return -ll
 
-    res = optimize.minimize(negll, np.zeros(k), method="L-BFGS-B")
+    res = optimize.minimize(negll, np.zeros(k), method="L-BFGS-B",
+                            options={"maxiter": 500})
+    # Fail only on a genuine non-fit — a non-finite solution or an exhausted iteration
+    # budget (status==1). L-BFGS-B's ABNORMAL_TERMINATION_IN_LNSRCH (status==2) on a flat
+    # optimum is benign and must not be treated as non-convergence.
+    if not np.all(np.isfinite(res.x)) or res.status == 1:
+        raise RuntimeError(
+            f"Bradley-Terry fit did not converge (status={res.status}): {res.message}")
     theta = res.x - res.x.mean()
     return {it: float(theta[idx[it]]) for it in items}
 

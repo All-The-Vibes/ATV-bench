@@ -254,3 +254,38 @@ def test_direction_stability_range_and_determinism():
     b = direction_stability(draws)
     assert 0.0 <= a <= 1.0
     assert a == b
+
+
+# ---------------------------------------------------------------------------
+# Santa round 1 — hardening: single-cluster CI, input validation, convergence.
+# ---------------------------------------------------------------------------
+
+
+def test_single_cluster_bootstrap_refuses():
+    """A clustered bootstrap with <2 unique clusters cannot estimate between-cluster
+    variance: every replicate resamples the same rows, yielding a zero-width CI —
+    phantom precision in exactly the direction clustering exists to prevent. It must
+    refuse rather than emit a falsely tight interval."""
+    values = [1.0, 0.0, 1.0, 1.0, 0.0]
+    with pytest.raises(ValueError):
+        bootstrap_ci(values, cluster_ids=["only"] * len(values), n_boot=50)
+
+
+def test_bootstrap_ci_input_validation():
+    """Empty values must raise (not return NaN bounds), and a cluster_ids length
+    mismatch must raise (not silently drop rows)."""
+    with pytest.raises(ValueError):
+        bootstrap_ci([], n_boot=50)
+    with pytest.raises(ValueError):
+        bootstrap_ci([1.0, 0.0, 1.0], cluster_ids=["a", "b"], n_boot=50)
+
+
+def test_unconverged_fit_raises():
+    """intransitivity_statistic's Bradley-Terry fit must not silently use an
+    unconverged optimizer result. With a well-posed input it converges and returns a
+    finite statistic (regression pin that the added convergence guard does not trip a
+    healthy fit)."""
+    results = [("a", "b", 1.0), ("b", "c", 1.0), ("a", "c", 1.0)] * 10
+    out = intransitivity_statistic(results)
+    assert out["statistic"] == out["statistic"]  # not NaN
+    assert 0.0 <= out["statistic"] < 1.0

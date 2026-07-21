@@ -150,3 +150,19 @@ def test_clustered_bootstrap_is_seed_deterministic():
     b = compute_lift(matches, baselines, seed=42, n_boot=200, cluster_ids=cluster_ids)
     assert a["gstack"].lo == b["gstack"].lo
     assert a["gstack"].hi == b["gstack"].hi
+
+
+# --------------------------------------------------------------------------- #
+# Santa round 1 — a single-cluster clustered lift must refuse, not emit a
+# zero-width (phantom-precision) CI.
+# --------------------------------------------------------------------------- #
+def test_single_cluster_lift_refuses():
+    import pytest
+    from atv_bench.lift import LiftError
+
+    matches = [RatingMatch("gstack", "bare", "M", "M", 1.0) for _ in range(6)]
+    matches += [RatingMatch("gstack", "bare", "M", "M", 0.0) for _ in range(4)]
+    baselines = {"gstack": "bare"}
+    with pytest.raises(LiftError):
+        compute_lift(matches, baselines, seed=1, n_boot=100,
+                     cluster_ids=["single"] * len(matches))
