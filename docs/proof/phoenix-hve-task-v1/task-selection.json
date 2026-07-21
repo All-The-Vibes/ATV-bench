@@ -1,0 +1,165 @@
+{
+  "schema": "atv.phoenix-hve-task-selection/v1",
+  "tasks": [
+    {
+      "category": "greenfield",
+      "official_review_eligible": false,
+      "path": "tasks/pilot/greenfield_02_product_factors",
+      "review_level": "machine-dual-review",
+      "task_digest": "5d9297749041b8ba1e27800beadad306664d138bc331351a0190b3a9a7fdc7d9",
+      "task_id": "pilot.greenfield.02-product-factors"
+    },
+    {
+      "category": "greenfield",
+      "official_review_eligible": false,
+      "path": "tasks/pilot/greenfield_05_temperature_range",
+      "review_level": "machine-dual-review",
+      "task_digest": "ab29a933185c9e000ee01b114504b110723a2555a5151ebc0a6c6f53caf9dad7",
+      "task_id": "pilot.greenfield.05-temperature-range"
+    },
+    {
+      "category": "greenfield",
+      "official_review_eligible": false,
+      "path": "tasks/pilot/greenfield_08_join_segments",
+      "review_level": "machine-dual-review",
+      "task_digest": "3a22ee3ccb9c9d260cdf72149a65c22c26f1ce8a2556e67cd5c4eb02daa6eb78",
+      "task_id": "pilot.greenfield.08-join-segments"
+    },
+    {
+      "category": "greenfield",
+      "official_review_eligible": false,
+      "path": "tasks/pilot/greenfield_09_weighted_total",
+      "review_level": "machine-dual-review",
+      "task_digest": "c395eaddb9287d644933356674ad3e240d93b9205ef0a0a9ffcd61370b36abb5",
+      "task_id": "pilot.greenfield.09-weighted-total"
+    },
+    {
+      "category": "repair",
+      "official_review_eligible": false,
+      "path": "tasks/pilot/repair_01_service_status",
+      "review_level": "machine-dual-review",
+      "task_digest": "eb0e36e2522f2044d9d45f1e2895c5d1d3f718ef2e9155d0ef5283d248655022",
+      "task_id": "pilot.repair.01-service-status"
+    },
+    {
+      "category": "repair",
+      "official_review_eligible": false,
+      "path": "tasks/pilot/repair_02_request_timeout",
+      "review_level": "machine-dual-review",
+      "task_digest": "48ea45b944166778d45ee39f59a8d3fc02d3947c37af95f74610981c471701d3",
+      "task_id": "pilot.repair.02-request-timeout"
+    },
+    {
+      "category": "repair",
+      "official_review_eligible": false,
+      "path": "tasks/pilot/repair_04_feature_enabled",
+      "review_level": "machine-dual-review",
+      "task_digest": "c36b2fd124d2390c4a80aa0cd42f33eee9e3f7c5eb78473a06cc07eeb307c668",
+      "task_id": "pilot.repair.04-feature-enabled"
+    },
+    {
+      "category": "repair",
+      "official_review_eligible": false,
+      "path": "tasks/pilot/repair_10_output_format",
+      "review_level": "machine-dual-review",
+      "task_digest": "5f30f5dc16830a68dce47031ad7bc33a1d0c824defc303221c1a3798b61a1f4d",
+      "task_id": "pilot.repair.10-output-format"
+    },
+    {
+      "category": "debugging",
+      "official_review_eligible": false,
+      "path": "tasks/pilot/debugging_02_stale_cache",
+      "review_level": "machine-dual-review",
+      "task_digest": "685b0cae2751a2e42d5491345154c514471c974a2d97ebf96f5b2b5a45e346d7",
+      "task_id": "pilot.debugging.02-stale-cache"
+    },
+    {
+      "category": "debugging",
+      "official_review_eligible": false,
+      "path": "tasks/pilot/debugging_03_inverted_flag",
+      "review_level": "machine-dual-review",
+      "task_digest": "e668141f1de1f4087dd66b84f798c5caf4497723321d8aa7df911213928596db",
+      "task_id": "pilot.debugging.03-inverted-flag"
+    },
+    {
+      "category": "debugging",
+      "official_review_eligible": false,
+      "path": "tasks/pilot/debugging_07_path_normalization",
+      "review_level": "machine-dual-review",
+      "task_digest": "45fafffd186fccbf94dd1ff19a0e366b099a209b53db50143ff99ce96f5cce1d",
+      "task_id": "pilot.debugging.07-path-normalization"
+    },
+    {
+      "category": "debugging",
+      "official_review_eligible": false,
+      "path": "tasks/pilot/debugging_10_premature_rounding",
+      "review_level": "machine-dual-review",
+      "task_digest": "76b0bda02e96c48fec55a4b07e39d79a225328d342560ca84f0671c445628653",
+      "task_id": "pilot.debugging.10-premature-rounding"
+    },
+    {
+      "category": "recovery",
+      "official_review_eligible": false,
+      "path": "tasks/pilot/recovery_02_ledger_balance",
+      "review_level": "machine-dual-review",
+      "task_digest": "f618e0f0034e4f82590f3fb5a3f021ee29e2b0d0cd40f2753b03f901f1c4ee2a",
+      "task_id": "pilot.recovery.02-ledger-balance"
+    },
+    {
+      "category": "recovery",
+      "official_review_eligible": false,
+      "path": "tasks/pilot/recovery_03_queue_order",
+      "review_level": "machine-dual-review",
+      "task_digest": "3576f95fd8aa7a8db2ce32c688a4060175a168b1e7db3629f7ab4d28e6933dc1",
+      "task_id": "pilot.recovery.03-queue-order"
+    },
+    {
+      "category": "recovery",
+      "official_review_eligible": false,
+      "path": "tasks/pilot/recovery_06_retry_state",
+      "review_level": "machine-dual-review",
+      "task_digest": "51225d85e808baf8cfcb6c766430ac3f60b4fc69a21e080fbbda835644163374",
+      "task_id": "pilot.recovery.06-retry-state"
+    },
+    {
+      "category": "recovery",
+      "official_review_eligible": false,
+      "path": "tasks/pilot/recovery_10_restored_mode",
+      "review_level": "machine-dual-review",
+      "task_digest": "9fa1c149765cece48c481a5b750c528ed4e1ba60b665349ceebca4efa26cb642",
+      "task_id": "pilot.recovery.10-restored-mode"
+    },
+    {
+      "category": "context-retrieval",
+      "official_review_eligible": false,
+      "path": "tasks/pilot/context_retrieval_01_service_owner",
+      "review_level": "machine-dual-review",
+      "task_digest": "66811adf696f78d732d87691a89af26ba52d52a4c3b4de8854c0000e78bbf6a4",
+      "task_id": "pilot.context-retrieval.01-service-owner"
+    },
+    {
+      "category": "context-retrieval",
+      "official_review_eligible": false,
+      "path": "tasks/pilot/context_retrieval_03_retention_days",
+      "review_level": "machine-dual-review",
+      "task_digest": "22e739e38027d15e3d088087f79aa4549996565b0123cb641ae6e04339d1ce6c",
+      "task_id": "pilot.context-retrieval.03-retention-days"
+    },
+    {
+      "category": "context-retrieval",
+      "official_review_eligible": false,
+      "path": "tasks/pilot/context_retrieval_09_runbook_command",
+      "review_level": "machine-dual-review",
+      "task_digest": "0be4344d69ee3020e0821000471f51ddd1c02a3f5c74d78a81dae352271036f3",
+      "task_id": "pilot.context-retrieval.09-runbook-command"
+    },
+    {
+      "category": "context-retrieval",
+      "official_review_eligible": false,
+      "path": "tasks/pilot/context_retrieval_10_artifact_format",
+      "review_level": "machine-dual-review",
+      "task_digest": "b16551b41228a307365e4d550bd61dadf02977719c3a2253802b73538246c57e",
+      "task_id": "pilot.context-retrieval.10-artifact-format"
+    }
+  ]
+}
