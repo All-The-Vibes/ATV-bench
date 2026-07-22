@@ -1074,6 +1074,7 @@ def run(
     out: Path = typer.Option(None, "--out", help="Output dir for match logs + replay."),
     a_home: Path = typer.Option(None, "--a-home", help="Config root for harness A (e.g. a cloned repo) to fingerprint."),
     b_home: Path = typer.Option(None, "--b-home", help="Config root for harness B to fingerprint."),
+    persist: Path = typer.Option(None, "--persist", help="Append this match as a rating row to a JSONL lift corpus (feeds `atv-bench lift`)."),
 ) -> None:
     """Run a REAL harness-vs-harness match: each harness CLI builds its own bot headless,
     the two bots compete in a CodeClash arena (Docker), and a schema-v2 record is written.
@@ -1119,7 +1120,7 @@ def run(
 
     out_dir = out or Path("./_run")
     try:
-        env = _run_live(cfg, out_dir, a_home, b_home, json_out)
+        env = _run_live(cfg, out_dir, a_home, b_home, json_out, persist=persist)
     except RunError as err:
         _emit_run_error(err, json_out)
         return
@@ -1155,7 +1156,7 @@ def _run_demo(*, json_out: bool, out: Path | None) -> None:
     typer.echo(f"\n{d['next']}")
 
 
-def _run_live(cfg, out_dir, a_home, b_home, json_out):  # pragma: no cover - Docker + live CLIs
+def _run_live(cfg, out_dir, a_home, b_home, json_out, persist=None):  # pragma: no cover - Docker + live CLIs
     from atv_bench.run_envelope import ok_envelope
     from atv_bench.runner import (
         build_match_record, fingerprint_harness_repo, preflight_or_raise, run_live_match,
@@ -1185,6 +1186,17 @@ def _run_live(cfg, out_dir, a_home, b_home, json_out):  # pragma: no cover - Doc
         player_manifests=manifests, player_budgets=budgets,
         replay_path=str(Path(out_dir)), verified=False,
     )
+    if persist is not None:
+        from atv_bench.run_envelope import RunError
+        from atv_bench.runner import persist_rating_row_from_record
+        try:
+            persist_rating_row_from_record(rec, persist)
+        except ValueError as exc:
+            # a malformed outcome (missing/blank/foreign winner) must surface as a stable
+            # RunError, not a raw ValueError leaking out of the command.
+            raise RunError("policy_denied", f"cannot persist rating row: {exc}",
+                           fix="the match outcome is malformed; re-run the match") from exc
+        typer.echo(f"↳ appended rating row to {persist}")
     return ok_envelope(rec.to_dict())
 
 
@@ -1193,11 +1205,42 @@ def _summarize_tournament(raw, cfg):  # pragma: no cover - shape depends on live
     return summarize_tournament(raw, cfg)
 
 
+@app.command(name="plan-schedule")
+def plan_schedule(
+    harness: list[str] = typer.Option(..., "--harness", help="Harness key (repeatable). Use 'bare:<inner>' for the bare control."),
+    game: list[str] = typer.Option(..., "--game", help="Game key (repeatable)."),
+    repeats: int = typer.Option(1, "--repeats", help="Paired repeats per (pair, game) cell."),
+    seed: int = typer.Option(0, "--seed", help="Deterministic ordering seed."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the plan as JSON."),
+) -> None:
+    """Build a side-balanced round-robin match plan (G1 scheduler, wired live).
+
+    Every unordered harness pair plays every game `--repeats` times with alternating seats.
+    Deterministic under `--seed`. This is the planning half of the live pipeline — it emits
+    the matches to run; execution + gating happen downstream (`run`, `rate --enforce-gates`).
+    """
+    import dataclasses as _dc
+
+    from atv_bench.scheduler import build_paired_schedule
+
+    matches = build_paired_schedule(harness, game, seed=seed, repeats=repeats)
+    plan = [_dc.asdict(m) for m in matches]
+    if json_out:
+        typer.echo(json.dumps(plan, indent=2))
+    else:
+        typer.echo(f"{len(plan)} matches planned "
+                   f"({len(harness)} harnesses x {len(game)} games x {repeats} repeats):")
+        for m in plan:
+            typer.echo(f"  {m['game']}: {m['harness_a']} vs {m['harness_b']} "
+                       f"(side={m['side_index']}, repeat={m['repeat_index']})")
+
+
 @app.command()
 def rate(
     store: Path = typer.Option(..., "--store", help="Corpus dir containing matches.jsonl."),
     out: Path = typer.Option(None, "--out", help="Write ratings.json here (default: <store>/ratings.json)."),
     json_out: bool = typer.Option(False, "--json", help="Also print the ratings doc to stdout."),
+    enforce_gates: bool = typer.Option(False, "--enforce-gates", help="Refuse to publish if the corpus fails the G5/G6 quality gates."),
 ) -> None:
     """Fit Tier-1 harness ratings from a match corpus and emit ratings.json.
 
@@ -1215,6 +1258,8 @@ def rate(
         raise typer.Exit(2)
 
     rows = []
+    total_records = 0
+    infra_failures = 0
     for line in matches_file.read_text().splitlines():
         line = line.strip()
         if not line:
@@ -1224,13 +1269,37 @@ def rate(
         except json.JSONDecodeError as e:
             typer.echo(f"Cannot rate: malformed matches.jsonl line: {e}")
             raise typer.Exit(2)
+        total_records += 1
         row = _rating_row_from_match(m)
         if row is not None:
             rows.append(row)
+        elif _is_infrastructure_failure(m):
+            # ONLY genuine crashes/forfeits/malformed records count toward the infra rate —
+            # NOT a valid-but-not-yet-scored record, which would poison the gate on a mixed
+            # corpus. A record that is neither rateable nor an explicit failure is ignored.
+            infra_failures += 1
 
     if not rows:
         typer.echo("No rateable matches in corpus (need >=1 scored head-to-head record).")
         raise typer.Exit(2)
+
+    if enforce_gates:
+        from atv_bench.pipeline import corpus_stats, gate_corpus
+        # Measure the infra-error rate over ALL records, counting only genuine failures. The
+        # referee-nondeterminism rate is NOT measurable from a single corpus pass (it needs a
+        # re-run-agreement probe), so it is deliberately NOT supplied here — corpus_stats
+        # omits it and evaluate_quality_gates FAILS CLOSED on the missing signal. Publishing a
+        # gated board therefore requires a real nondeterminism measurement, not a fabricated
+        # 0.0 (a fabricated clean value would silently disable that gate).
+        infra_rate = (infra_failures / total_records) if total_records else 1.0
+        stats = corpus_stats(rows, infrastructure_error_rate=infra_rate)
+        report = gate_corpus(stats)
+        if not report.passed:
+            typer.echo("Refusing to publish: corpus failed quality gates (G5/G6):")
+            for f in report.failures:
+                typer.echo(f"  - gate={f['gate']} observed={f.get('observed')} "
+                           f"threshold={f.get('threshold')}")
+            raise typer.Exit(6)
 
     doc = build_ratings_doc(rows, verified=True, model_overdispersion=True)
     out_path = out or (store / "ratings.json")
@@ -1377,25 +1446,61 @@ def lift(
         typer.echo(json.dumps(doc, indent=2))
 
 
+def _is_infrastructure_failure(m: dict) -> bool:
+    """True if a match record is a genuine infrastructure failure (crash/forfeit/malformed).
+
+    Used by `rate --enforce-gates` to measure the infra-error rate HONESTLY: a record that is
+    simply not-yet-scored is NOT an infra failure (counting it would poison the gate on a
+    mixed corpus). We recognize the explicit failure shapes the pipeline emits: a CRASH
+    record (`loser`/`opponent` keys, no players), or a schema-v2 outcome whose winner is a
+    crash/forfeit token.
+    """
+    if m.get("crashed") or m.get("infrastructure_error"):
+        return True
+    # CRASH-artifact shape (publish.py): {loser, opponent, match_id}, no scored head-to-head.
+    if "loser" in m and "opponent" in m and "players" not in m:
+        return True
+    outcome = m.get("outcome")
+    if isinstance(outcome, dict):
+        winner = str(outcome.get("winner", "")).lower()
+        if any(tok in winner for tok in ("crash", "forfeit", "error")):
+            return True
+    return False
+
+
 def _rating_row_from_match(m: dict) -> dict | None:
     """Extract (harness_a, harness_b, model_a, model_b, score_a) from a match record.
 
     Returns None when the record cannot supply a two-player scored head-to-head. Supports
     both the flat rating-row shape and the schema-v2 match record (players[] + outcome).
+
+    Fails closed like runner.match_record_to_rating_row: a MISSING or None winner is NOT a
+    silent draw (returns None — unrateable), and two players sharing a harness key are
+    rejected (ambiguous attribution). Only an explicit ``draw``/``tie`` scores 0.5.
     """
     if all(k in m for k in ("harness_a", "harness_b", "model_a", "model_b", "score_a")):
+        # flat rating row: reject a missing/blank harness id and identical-harness self-play
+        # (both make attribution meaningless), consistent with the schema-v2 path below.
+        ha, hb = str(m.get("harness_a") or "").strip(), str(m.get("harness_b") or "").strip()
+        if not ha or not hb or ha == hb:
+            return None
         return m
     players = m.get("players")
-    if not players or len(players) < 2:
-        return None
+    if not players or len(players) != 2:
+        return None  # head-to-head contract: exactly two players, else unrateable
     pa, pb = players[0], players[1]
+    ha, hb = str(pa.get("harness") or "").strip(), str(pb.get("harness") or "").strip()
+    if not ha or not hb or ha == hb:
+        return None  # missing/blank harness id or identical-harness self-play: unrateable
     outcome = m.get("outcome") or {}
+    if "winner" not in outcome or outcome.get("winner") is None:
+        return None  # unscored/malformed — never a fabricated draw
     winner = outcome.get("winner")
     if winner in ("a", "A", 0, pa.get("harness")):
         score_a = 1.0
     elif winner in ("b", "B", 1, pb.get("harness")):
         score_a = 0.0
-    elif winner in ("draw", "tie", None):
+    elif winner in ("draw", "tie"):
         score_a = 0.5
     else:
         return None

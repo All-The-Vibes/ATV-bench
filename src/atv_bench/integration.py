@@ -135,9 +135,14 @@ def run_isolated_edit_turn(
 def resolve_player_class(agent_key: str):
     """Return the HarnessPlayer class for a harness key, or None for a builtin key.
 
-    None signals "fall through to CodeClash's own get_agent" (dummy/mini).
+    Accepts leaf builder keys (``claude-code``/``copilot-cli``) and the composite bare
+    control ``bare:<inner>`` where ``<inner>`` is a builder harness. None signals "fall
+    through to CodeClash's own get_agent" (dummy/mini).
     """
-    if agent_key not in BUILDER_HARNESSES:
+    if not agent_key:
+        return None
+    inner = agent_key[len("bare:"):] if agent_key.startswith("bare:") else agent_key
+    if inner not in BUILDER_HARNESSES:
         return None
     if agent_key not in _player_class_cache:
         _player_class_cache[agent_key] = _make_harness_player(agent_key)
@@ -204,9 +209,14 @@ def unregister() -> None:
 
 
 def _make_harness_player(adapter_key: str):
-    """Build a CodeClash Player subclass bound to a harness adapter."""
+    """Build a CodeClash Player subclass bound to a harness adapter.
+
+    ``adapter_key`` may be a leaf key (``claude-code``) or the composite bare control
+    ``bare:<inner>`` — ``resolve_adapter`` handles both, so the ~0-lift negative control runs
+    through the SAME live pipeline as a real harness (just under a stripped HOME).
+    """
     cc = import_codeclash()
-    adapter_cls = ADAPTERS[adapter_key]
+    from atv_bench.adapters.contract import resolve_adapter
 
     class HarnessPlayer(cc.Player):
         def run(self) -> None:
@@ -216,7 +226,7 @@ def _make_harness_player(adapter_key: str):
             # the production seam so the adapter subprocess never inherits host $HOME.
             home = _harness_homes.get(adapter_key)
             run_isolated_edit_turn(
-                adapter=adapter_cls(),
+                adapter=resolve_adapter(adapter_key),
                 container=_DockerTreeContainer(self.environment, self._workdir()),
                 home=home,
                 goal=self.game_context.prompts.get("edit", "Improve the bot."),

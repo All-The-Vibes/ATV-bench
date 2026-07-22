@@ -423,3 +423,39 @@ ADAPTERS: dict[str, type[HarnessAdapter]] = {
     ClaudeCodeAdapter.name: ClaudeCodeAdapter,
     CopilotCliAdapter.name: CopilotCliAdapter,
 }
+
+# Composite-adapter prefix: `bare:<inner>` resolves to the bare-model negative control
+# wrapping the named leaf adapter (PR #19 follow-up 2). Kept as a string constant so the
+# resolver and any callers agree on the one spelling.
+BARE_PREFIX = "bare:"
+
+
+def resolve_adapter(key: str):
+    """Resolve an adapter KEY to an adapter instance.
+
+    * A plain leaf key (``claude-code`` / ``copilot-cli``) → that leaf adapter instance.
+    * A composite ``bare:<inner>`` → ``BareModelAdapter`` wrapping the resolved inner leaf —
+      the ~0-lift negative control, now runnable by name on real match data instead of only
+      via synthetic thetas.
+
+    Fails closed with an actionable message on an unknown leaf or unknown inner harness.
+    """
+    if key.startswith(BARE_PREFIX):
+        inner_key = key[len(BARE_PREFIX):]
+        inner_cls = ADAPTERS.get(inner_key)
+        if inner_cls is None:
+            raise ValueError(
+                f"unknown inner harness {inner_key!r} for composite {key!r}; "
+                f"available: {', '.join(sorted(ADAPTERS))}"
+            )
+        # Imported lazily to avoid a package import cycle (lift imports isolation/rating).
+        from atv_bench.lift import BareModelAdapter
+
+        return BareModelAdapter(inner=inner_cls())
+    cls = ADAPTERS.get(key)
+    if cls is None:
+        raise ValueError(
+            f"unknown adapter {key!r}; available: {', '.join(sorted(ADAPTERS))} "
+            f"(or 'bare:<inner>' for the bare-model control)"
+        )
+    return cls()
