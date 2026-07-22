@@ -181,3 +181,28 @@ def test_scorecard_escapes_malicious_names(tmp_path):
     assert "<script>alert(1)</script>" not in body
     assert "<img src=x onerror" not in body
     assert "&lt;script&gt;" in body  # escaped form present
+
+
+def test_seat_bias_not_flagged_as_referee_nondeterminism(tmp_path):
+    """A harness with a real, DETERMINISTIC seat bias (always wins as player_a, always loses as
+    player_b) must NOT be counted as referee nondeterminism — same seating is consistent, so the
+    referee is deterministic and a powered corpus stays credible."""
+    def execute(*, harness_a, harness_b, game, model, seed, index):
+        # deterministic by seat: harness (claude-code) always wins when it is seat A.
+        score_a = 1.0 if harness_a == "claude-code" else 1.0  # player_a always wins => seat bias
+        return {"harness_a": harness_a, "harness_b": harness_b, "model_a": model,
+                "model_b": model, "score_a": score_a, "game": game, "match_id": f"{game}-{index}"}
+    from atv_bench.quickstart import _measure_referee_nondeterminism
+    from atv_bench.runner import load_rating_rows
+    res = run_quickstart_eval(
+        harness="claude-code", model="sonnet",
+        games=["lightcycles", "chess", "ants"], repeats=20,
+        store=tmp_path / "league", execute=execute,
+    )
+    rows = load_rating_rows(tmp_path / "league" / "rating_matches.jsonl")
+    # same-orientation cells are internally consistent => 0.0 nondeterminism (not 1.0)
+    assert _measure_referee_nondeterminism(rows, "claude-code") == 0.0
+    # and the deterministic seat-biased corpus is NOT failed on a phantom nondeterminism gate
+    assert res.gate_report is not None
+    nondet_fail = any("nondeterminism" in f.get("gate", "") for f in res.gate_report.failures)
+    assert not nondet_fail, res.gate_report.to_dict()

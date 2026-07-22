@@ -1495,7 +1495,7 @@ def _render_score_summary(res) -> str:
     lines.append("  Per-game (harness win-rate vs its bare control):")
     for g in sorted(res.per_game, key=lambda x: x.game):
         flag = "  [insufficient N]" if g.insufficient else ""
-        filled = round(g.win_rate * 10)
+        filled = max(0, min(10, round(g.win_rate * 10)))
         bar = "#" * filled + "." * (10 - filled)
         lines.append(f"    {g.game:<14} {bar} {g.win_rate*100:5.1f}%  (n={g.n}){flag}")
     if res.failures:

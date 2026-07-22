@@ -83,22 +83,29 @@ def _row_harness_score(row: dict[str, Any], harness: str) -> float | None:
 
 
 def _measure_referee_nondeterminism(rows, harness) -> float | None:
-    """Observed referee-nondeterminism rate from REPEATED matchups.
+    """Observed referee-nondeterminism rate from REPEATED, SAME-ORIENTATION matchups.
 
-    Groups rows by their (unordered pair, game) cell. For any cell with >=2 trials, the trusted
-    deterministic referee should return the same harness-score every time; the fraction of
-    multi-trial cells whose harness-scores DISAGREE is the measured nondeterminism rate. Returns
-    None when there is no repeated cell to measure (nothing observed → the gate fails closed on
-    the absent signal rather than fabricating a clean 0.0).
+    Groups rows by their ORDERED (player_a, player_b, game) cell — NOT the unordered pair. The
+    trusted deterministic referee should return the same result for the exact same seating every
+    time; the fraction of such multi-trial cells whose raw score_a values DISAGREE is the
+    measured nondeterminism rate.
+
+    Ordered seating matters: a seat-balanced schedule alternates the harness between seat A and
+    seat B, and a harness with a real seat bias (e.g. first-move advantage) legitimately scores
+    differently by seat. Bucketing by the UNORDERED pair would mislabel that genuine seat signal
+    as referee flakiness and wrongly fail the credibility gate. Returns None when there is no
+    repeated same-orientation cell to measure (nothing observed → gate fails closed).
     """
     from collections import defaultdict
 
     cells: dict[tuple, list[float]] = defaultdict(list)
     for r in rows:
-        s = _row_harness_score(r, harness)
-        if s is not None:
-            pair = tuple(sorted((str(r.get("harness_a")), str(r.get("harness_b")))))
-            cells[(pair, str(r.get("game", "")))].append(s)
+        ha, hb = str(r.get("harness_a")), str(r.get("harness_b"))
+        if harness not in (ha, hb):
+            continue
+        # raw score_a in the ORDERED seating (no orientation flip): identical seatings must
+        # yield an identical referee result.
+        cells[(ha, hb, str(r.get("game", "")))].append(float(r.get("score_a", 0.5)))
     multi = [scores for scores in cells.values() if len(scores) >= 2]
     if not multi:
         return None

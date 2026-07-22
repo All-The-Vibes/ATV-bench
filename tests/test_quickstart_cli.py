@@ -86,7 +86,7 @@ def test_quickstart_human_shows_scores_and_link(monkeypatch, tmp_path):
     assert "lightcycles" in out and "chess" in out  # per-game rows
     assert "lift" in out.lower()                     # overall metric
     assert "provisional" in out.lower() or "not" in out.lower()  # gate verdict surfaced
-    assert "index.html" in out or "board" in out.lower()          # link
+    assert "scorecard.html" in out or "Leaderboard:" in out       # the actual scorecard link
 
 
 def test_quickstart_model_flag_bypasses_picker(monkeypatch, tmp_path):
