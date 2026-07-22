@@ -1,0 +1,62 @@
+{
+  "harness": "claude-code",
+  "baseline": "bare:claude-code",
+  "model": "sonnet",
+  "games": [
+    "dummy",
+    "lightcycles"
+  ],
+  "n_matches": 4,
+  "credible": false,
+  "overall": {
+    "lift": -1.098317811549857,
+    "lo": -7.841349763859456,
+    "hi": 0.0,
+    "n_boot_used": 500
+  },
+  "per_game": [
+    {
+      "game": "dummy",
+      "n": 2,
+      "win_rate": 0.5,
+      "lift": null,
+      "lo": null,
+      "hi": null,
+      "insufficient": true
+    },
+    {
+      "game": "lightcycles",
+      "n": 2,
+      "win_rate": 0.0,
+      "lift": null,
+      "lo": null,
+      "hi": null,
+      "insufficient": true
+    }
+  ],
+  "gate": {
+    "passed": false,
+    "failures": [
+      {
+        "gate": "missing_referee_nondeterminism_rate",
+        "observed": null,
+        "threshold": null,
+        "reason": "required signal 'referee_nondeterminism_rate' absent; failing closed"
+      },
+      {
+        "gate": "eligible_n",
+        "observed": 4,
+        "threshold": 50
+      },
+      {
+        "gate": "min_trials_per_cell",
+        "observed": 2,
+        "threshold": 5
+      }
+    ]
+  },
+  "failures": [],
+  "board_path": "/home/sschofield/repos/atv-bench/.claude/worktrees/quickstart-e2e/docs/proof/quickstart-e2e/live-run/_board",
+  "board_url": "file:///home/sschofield/repos/atv-bench/.claude/worktrees/quickstart-e2e/docs/proof/quickstart-e2e/live-run/scorecard.html",
+  "corpus_path": "/home/sschofield/repos/atv-bench/.claude/worktrees/quickstart-e2e/docs/proof/quickstart-e2e/live-run/rating_matches.jsonl"
+}

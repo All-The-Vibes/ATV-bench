@@ -1,0 +1,4 @@
+{"game": "lightcycles", "game_version": "lightcycles@1", "harness_a": "claude-code", "harness_b": "bare:claude-code", "match_id": "lightcycles-0", "model_a": "sonnet", "model_b": "sonnet", "score_a": 0.0}
+{"game": "dummy", "game_version": "dummy@1", "harness_a": "claude-code", "harness_b": "bare:claude-code", "match_id": "dummy-1", "model_a": "sonnet", "model_b": "sonnet", "score_a": 0.0}
+{"game": "dummy", "game_version": "dummy@1", "harness_a": "bare:claude-code", "harness_b": "claude-code", "match_id": "dummy-2", "model_a": "sonnet", "model_b": "sonnet", "score_a": 0.0}
+{"game": "lightcycles", "game_version": "lightcycles@1", "harness_a": "bare:claude-code", "harness_b": "claude-code", "match_id": "lightcycles-3", "model_a": "sonnet", "model_b": "sonnet", "score_a": 1.0}

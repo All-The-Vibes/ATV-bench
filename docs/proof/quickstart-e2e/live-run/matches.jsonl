@@ -1,0 +1,4 @@
+{"match_id": "lightcycles-0", "outcome": "b_wins", "player_a": "claude-code", "player_b": "bare:claude-code"}
+{"match_id": "dummy-1", "outcome": "b_wins", "player_a": "claude-code", "player_b": "bare:claude-code"}
+{"match_id": "dummy-2", "outcome": "b_wins", "player_a": "bare:claude-code", "player_b": "claude-code"}
+{"match_id": "lightcycles-3", "outcome": "a_wins", "player_a": "bare:claude-code", "player_b": "claude-code"}

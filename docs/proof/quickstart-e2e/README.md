@@ -54,5 +54,11 @@ canned/stub tests:
 ## Fixtures / evidence
 
 - `codex-exec-json-transcript.txt` — a real `codex exec --json` transcript (the model-less shape).
-- `live-lift-result.json` — a real claude-vs-bare `quickstart_result.json` (added when the live
-  lift run completes).
+- `live-run/` — a REAL captured claude-code-vs-bare evaluation (`scripts/live_quickstart_smoke.py
+  --harness claude-code --model sonnet --game dummy --game lightcycles --repeats 2`):
+  - `quickstart_result.json` — 4 real matches scored; overall lift **-1.098**; per-game dummy 0.5,
+    lightcycles 0.0; `credible=False` with the correct fail-closed gate reasons
+    (`missing_referee_nondeterminism_rate`, `eligible_n`, `min_trials_per_cell` — a 4-match corpus
+    is legitimately too thin to rank).
+  - `scorecard.html` + `scorecard-live.png` — the rendered leaderboard from that real run.
+  - `rating_matches.jsonl` / `matches.jsonl` — the persisted corpus.
