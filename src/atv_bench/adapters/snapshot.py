@@ -66,3 +66,25 @@ def capture_diff(repo: Path, base: str) -> str:
             chunks.append(proc.stdout)
 
     return tracked + "".join(chunks)
+
+
+def changed_paths(repo: Path, base: str) -> list[str]:
+    """Repo-relative paths the harness CHANGED since `base`: tracked (committed + staged +
+    unstaged) UNION untracked-not-ignored. This is the exact surface the harness authored —
+    NOT the trusted seed tree. Used to scope the capture allowlist scan to what the harness
+    actually wrote, so we never re-scan (and false-reject) seed SDK fixtures like a vendored
+    library's test key.
+    """
+    repo = Path(repo)
+    out: set[str] = set()
+    tracked = _git(repo, "diff", "--name-only", base).stdout.split("\n")
+    for rel in tracked:
+        rel = rel.strip()
+        if rel:
+            out.add(rel)
+    others = _git(repo, "ls-files", "--others", "--exclude-standard").stdout.split("\n")
+    for rel in others:
+        rel = rel.strip()
+        if rel:
+            out.add(rel)
+    return sorted(out)

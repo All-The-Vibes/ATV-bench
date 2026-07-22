@@ -47,13 +47,13 @@ jobs:
     environment: league-match
     steps:
       - name: Checkout league code (NOT the untrusted PR head, no creds)
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
           ref: ${{ github.event.repository.default_branch }}
 
       - name: Stage the submitted bot as DATA (never executed here on the host)
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           # The PR head is untrusted. We check it out into a SEPARATE path and copy
           # ONLY the bot file into submission/. It is never run on the host — only
@@ -268,7 +268,7 @@ jobs:
           PY
 
       - name: Upload result + trusted meta (the ONLY outputs of this job)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: match-result
           # Both the bot-controlled result AND the trusted meta travel to the publish

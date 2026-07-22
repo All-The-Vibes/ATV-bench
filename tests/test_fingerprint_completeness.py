@@ -92,14 +92,18 @@ def test_schema_keys_include_tools_and_nested_skills_and_runtime():
 
 
 def test_claude_manifest_has_exactly_the_schema_keys(tmp_path):
-    _full_claude_fixture(tmp_path)
-    m = probe.probe_claude_code(tmp_path).manifest
+    home = tmp_path / ".claude"
+    home.mkdir()
+    _full_claude_fixture(home)
+    m = probe.probe_claude_code(home).manifest
     assert set(m) == set(FINGERPRINT_SCHEMA_KEYS)
 
 
 def test_claude_completeness_every_surface_present_or_accounted(tmp_path):
-    _full_claude_fixture(tmp_path)
-    m = probe.probe_claude_code(tmp_path).manifest
+    home = tmp_path / ".claude"
+    home.mkdir()
+    _full_claude_fixture(home)
+    m = probe.probe_claude_code(home).manifest
     unknown_fields = {u["field"] for u in m["unknown"]}
     for surface in REQUIRED_SURFACES:
         assert _surface_accounted(m, surface, unknown_fields), \
@@ -107,8 +111,10 @@ def test_claude_completeness_every_surface_present_or_accounted(tmp_path):
 
 
 def test_claude_nested_skills_are_captured(tmp_path):
-    _full_claude_fixture(tmp_path)
-    m = probe.probe_claude_code(tmp_path).manifest
+    home = tmp_path / ".claude"
+    home.mkdir()
+    _full_claude_fixture(home)
+    m = probe.probe_claude_code(home).manifest
     # Nested plugin skills are captured in nested_skills (v2 surface)
     assert "ce-plan" in m["nested_skills"]
     assert "ce-debug" in m["nested_skills"]
@@ -121,8 +127,10 @@ def test_claude_nested_skills_are_captured(tmp_path):
 
 
 def test_claude_tools_captured_with_source(tmp_path):
-    _full_claude_fixture(tmp_path)
-    m = probe.probe_claude_code(tmp_path).manifest
+    home = tmp_path / ".claude"
+    home.mkdir()
+    _full_claude_fixture(home)
+    m = probe.probe_claude_code(home).manifest
     # tools is a list of {name, source, enabled} leak-safe entries
     assert m["tools"], "tools surface empty despite permissions in settings"
     names = {t["name"] for t in m["tools"]}
@@ -136,8 +144,10 @@ def test_claude_tools_captured_with_source(tmp_path):
 
 
 def test_runtime_surface_is_honest(tmp_path):
-    _full_claude_fixture(tmp_path)
-    m = probe.probe_claude_code(tmp_path).manifest
+    home = tmp_path / ".claude"
+    home.mkdir()
+    _full_claude_fixture(home)
+    m = probe.probe_claude_code(home).manifest
     # cli_version is a dict {version, path, sha256} or records unknown_runtime honestly
     assert isinstance(m["cli_version"], dict)
     assert isinstance(m["unknown_runtime"], list)

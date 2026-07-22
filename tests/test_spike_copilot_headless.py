@@ -55,7 +55,7 @@ def test_claude_code_headless_edit(tmp_path):
     )
     # stdin closed => proves no TTY needed
     result = adapter.run(req)
-    assert result.status == AdapterStatus.OK, result.log
+    assert result.status in {AdapterStatus.OK, AdapterStatus.EDITED}, result.log
     assert '"down"' in (repo / "bot.py").read_text()
     assert result.diff.strip(), "expected a non-empty diff"
     assert result.model != "unknown", "expected model tag for leaderboard labeling"
@@ -73,13 +73,14 @@ def test_copilot_cli_headless_mechanism(tmp_path):
     )
     result = adapter.run(req)
     # The headless MECHANISM is what this spike validates: non-interactive, no TTY,
-    # clean exit, env-token auth. Either it edited (OK) or org policy blocked it
+    # clean exit, env-token auth. Either it edited (OK/EDITED) or org policy blocked it
     # (POLICY_DENIED, a documented fallback-ladder outcome). Both prove mechanism;
     # a TTY/crash failure would not.
     assert result.status in {
         AdapterStatus.OK,
+        AdapterStatus.EDITED,
         AdapterStatus.POLICY_DENIED,
         AdapterStatus.NO_EDIT,
     }, result.log
-    if result.status == AdapterStatus.OK:
+    if result.status in {AdapterStatus.OK, AdapterStatus.EDITED}:
         assert '"down"' in (repo / "bot.py").read_text()

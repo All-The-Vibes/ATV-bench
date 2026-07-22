@@ -68,3 +68,19 @@ def test_prompt_version_and_game_version_present():
     )
     assert cfg["_meta"]["game_version"]
     assert cfg["_meta"]["prompt_version"]
+
+
+# --- Wave A: the four main.py-contract arenas get their own GAME_SPECS entries. -------
+
+@pytest.mark.parametrize("game,cc_name,entrypoint", [
+    ("ants", "Ants", "do_turn"),
+    ("dummy", "Dummy", None),
+    ("gomoku", "Gomoku", "get_move"),
+    ("paintvolley", "PaintVolley", "get_action"),
+])
+def test_wave_a_resolve_game(game, cc_name, entrypoint):
+    spec = resolve_game(game)
+    assert spec.codeclash_name == cc_name
+    assert spec.bot_file == "main.py"
+    if entrypoint is not None:
+        assert entrypoint.lower() in spec.edit_prompt.lower()

@@ -25,6 +25,7 @@ from atv_bench.adapters.contract import (
     HarnessAdapter,
 )
 from atv_bench.adapters.snapshot import capture_diff, seed_base
+from atv_bench.adapters.contract import derive_status
 from atv_bench.capture import scan_captured_tree
 
 
@@ -60,6 +61,7 @@ class HarnessPlayerCore:
         player_id: str | None = None,
         game: str = "lightcycles",
         prompt_version: str = "edit@1",
+        env: dict | None = None,
     ) -> None:
         self.adapter = adapter
         self.container = container
@@ -70,6 +72,7 @@ class HarnessPlayerCore:
         self.player_id = player_id
         self.game = game
         self.prompt_version = prompt_version
+        self.env = env
         self.last_result: AdapterResult | None = None
         self.last_diff: str = ""
 
@@ -101,20 +104,30 @@ class HarnessPlayerCore:
 
             req = AdapterRequest(
                 repo_path=str(repo), goal=self.goal, model=self.model,
-                budget=self.budget, bot_file=self.bot_file,
+                budget=self.budget, bot_file=self.bot_file, env=self.env,
             )
             result = self.adapter.run(req)
             diff = capture_diff(repo, base)  # provenance/display only
 
+            # Authoritative edit/forfeit decision: trust the snapshot UNION
+            # (base..HEAD ∪ staged ∪ working-tree ∪ untracked), NOT result.status.
+            # A harness that COMMITS its edit leaves a clean working tree, so
+            # result.status could be advisory/wrong — the union is ground truth.
+            authoritative = derive_status(str(repo), base)
+
             captured_tree = original_tree
-            if result.status == AdapterStatus.OK:
+            if authoritative == AdapterStatus.EDITED:
                 # Materialized post-run tree is authoritative (ENG-3). Allowlist-scan it
-                # BEFORE it touches the container (ENG-7) — raises CaptureRejected.
-                scan_captured_tree(repo)
+                # BEFORE it touches the container (ENG-7) — raises CaptureRejected. Scope the
+                # scan to the paths the harness CHANGED (base..working ∪ untracked), so we
+                # audit what the harness planted, not the trusted multi-file arena seed tree
+                # (e.g. Halite's ~668-file SDK with vendored-library test fixtures).
+                from atv_bench.adapters.snapshot import changed_paths
+                scan_captured_tree(repo, only=set(changed_paths(repo, base)))
                 captured_tree = self._read_repo_tree(repo)
                 self.container.write_tree(captured_tree)
-            # NO_EDIT / ERROR / TIMEOUT: leave the container's original tree (forfeit),
-            # never crash.
+            # NO_EDIT / ERROR / TIMEOUT / CRASH / MALFORMED: leave the container's
+            # original tree (forfeit), never crash.
 
         self.last_result, self.last_diff = result, diff
         if key is not None:

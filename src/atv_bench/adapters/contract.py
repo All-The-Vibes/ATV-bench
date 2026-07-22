@@ -19,16 +19,30 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
+
+from atv_bench.adapters.snapshot import capture_diff
+from atv_bench.containment import ContainmentError, contained_run
+from atv_bench.logscan import scrub_log
 
 
 class AdapterStatus(str, enum.Enum):
     OK = "ok"
+    EDITED = "edited"  # union-derived: harness produced a real edit (committed/staged/unstaged/untracked)
     NO_EDIT = "no_edit"
     ERROR = "error"
     TIMEOUT = "timeout"
+    CRASH = "crash"  # subprocess died by signal / uncaught exception (fit-excluded)
+    MALFORMED = "malformed"  # turn output unparseable / structurally invalid (fit-excluded)
     BUDGET_EXHAUSTED = "budget_exhausted"
     POLICY_DENIED = "policy_denied"  # auth ok, org policy blocks (fallback-ladder signal)
+
+
+# Outcomes that must be dropped from the rating fit and logged to unknown[]
+# (they are not scoreable wins/draws/losses — the harness never produced a valid turn).
+FIT_EXCLUDED_STATUSES = frozenset(
+    {AdapterStatus.CRASH, AdapterStatus.TIMEOUT, AdapterStatus.MALFORMED}
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -48,9 +62,31 @@ class AdapterRequest:
     model: str = "auto"
     budget: Budget = dataclasses.field(default_factory=Budget)
     bot_file: str = "bot.py"
+    # Optional isolated subprocess environment (per-run HOME/XDG). When None,
+    # adapters inherit the host environment.
+    env: Optional[dict] = None
+    # Section 2.5 containment. LLM adapters need egress to reach their provider
+    # API, so egress deny defaults OFF here. The subprocess still runs through the
+    # containment boundary (contained_run) with an RLIMIT_CPU backstop derived
+    # from the budget, so a runaway harness can't burn unbounded CPU. A cap-killed
+    # subprocess exits non-zero → classify_outcome scores it CRASH.
+    #
+    # mem_limit (RLIMIT_AS) and nproc_limit (RLIMIT_NPROC) default OFF for the LLM
+    # CLIs: those CLIs are Node/V8, which reserve an enormous *virtual* address
+    # space up front (any finite RLIMIT_AS kills node) and spawn worker threads
+    # (RLIMIT_NPROC is per-real-uid across the whole host, so an absolute cap can
+    # starve thread creation). Both caps stay available opt-in — e.g. for captured
+    # pure-Python bot execution, where they're safe and meaningful.
+    deny_egress: bool = False
+    mem_limit: Optional[int] = None
+    nproc_limit: Optional[int] = None
 
     def to_dict(self) -> dict[str, Any]:
         d = dataclasses.asdict(self)
+        d.pop("env", None)
+        # Containment knobs are runtime-only, not part of the design schema.
+        for k in ("deny_egress", "mem_limit", "nproc_limit"):
+            d.pop(k, None)
         return d
 
 
@@ -72,11 +108,16 @@ class AdapterResult:
     usage: Usage
     model: str = "unknown"  # underlying model actually used (thesis-integrity tagging)
 
+    @property
+    def fit_exclude(self) -> bool:
+        """True for CRASH/TIMEOUT/MALFORMED — dropped from the rating fit, logged to unknown[]."""
+        return self.status in FIT_EXCLUDED_STATUSES
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "status": self.status.value,
             "diff": self.diff,
-            "log": self.log,
+            "log": scrub_log(self.log),
             "usage": self.usage.to_dict(),
             "model": self.model,
         }
@@ -93,6 +134,88 @@ def git_diff(repo_path: str) -> str:
         text=True,
     )
     return out.stdout
+
+
+def _head_sha(repo_path: str) -> str | None:
+    """Record HEAD at start-of-run so status can be derived from the base..HEAD union.
+
+    Returns None if the repo has no commits / isn't a git repo (fall back to `git diff`).
+    """
+    proc = subprocess.run(
+        ["git", "-C", repo_path, "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+    )
+    sha = proc.stdout.strip()
+    return sha if proc.returncode == 0 and sha else None
+
+
+def derive_status(repo_path: str, base: str) -> AdapterStatus:
+    """Authoritative edit/no-edit decision via the snapshot UNION, not plain `git diff`.
+
+    Reflects base..HEAD ∪ staged ∪ working-tree ∪ untracked (via snapshot.capture_diff),
+    so a harness that COMMITS its edit (clean working tree) is EDITED, never a false
+    NO_EDIT forfeit (ENG-A). Genuinely empty union ⇒ NO_EDIT.
+    """
+    from atv_bench.adapters.snapshot import capture_diff
+
+    union = capture_diff(Path(repo_path), base)
+    return AdapterStatus.EDITED if union.strip() else AdapterStatus.NO_EDIT
+
+
+def classify_outcome(
+    *,
+    returncode: int | None = None,
+    crashed: bool = False,
+    timed_out: bool = False,
+    malformed: bool = False,
+) -> AdapterStatus:
+    """Map a non-win failure mode to a distinct, fit-excluded status.
+
+    Priority: timeout > crash > malformed > (returncode<0 ⇒ crash) > ERROR.
+    These are separate from win/draw/loss and from NO_EDIT so the rating engine can
+    drop them (fit_exclude) and log to unknown[].
+    """
+    if timed_out:
+        return AdapterStatus.TIMEOUT
+    if crashed:
+        return AdapterStatus.CRASH
+    if malformed:
+        return AdapterStatus.MALFORMED
+    if returncode is not None and returncode < 0:
+        return AdapterStatus.CRASH  # killed by signal
+    return AdapterStatus.ERROR
+
+
+def _run_harness_subprocess(
+    cmd: list[str],
+    req: "AdapterRequest",
+    *,
+    env: Optional[dict],
+) -> subprocess.CompletedProcess:
+    """Run an adapter CLI inside the Section 2.5 containment boundary.
+
+    Resource caps (RLIMIT_AS/NPROC/CPU) and optional egress deny are applied to
+    the SAME subprocess that already carries the isolated HOME env (Section 2), so
+    a poisoned harness can't fork/memory-bomb or exfiltrate. A cap-killed child
+    exits non-zero -> derive CRASH via ``classify_outcome``.
+
+    Raises ``subprocess.TimeoutExpired`` (translated from ``ContainmentError``) so
+    each adapter's existing timeout handling continues to score TIMEOUT.
+    """
+    try:
+        return contained_run(
+            cmd,
+            env=env,
+            cwd=req.repo_path,
+            deny_egress=req.deny_egress,
+            mem_limit=req.mem_limit,
+            nproc_limit=req.nproc_limit,
+            cpu_limit=req.budget.max_seconds,
+            timeout=req.budget.max_seconds,
+        )
+    except ContainmentError as exc:
+        raise subprocess.TimeoutExpired(cmd, req.budget.max_seconds) from exc
 
 
 def parse_copilot_model(jsonl: str) -> str:
@@ -162,6 +285,7 @@ class ClaudeCodeAdapter(HarnessAdapter):
 
     def run(self, req: AdapterRequest) -> AdapterResult:
         start = time.time()
+        base = _head_sha(req.repo_path)
         cmd = [
             "claude",
             "-p",
@@ -174,12 +298,10 @@ class ClaudeCodeAdapter(HarnessAdapter):
         if req.model and req.model != "auto":
             cmd += ["--model", req.model]
         try:
-            proc = subprocess.run(
+            proc = _run_harness_subprocess(
                 cmd,
-                cwd=req.repo_path,
-                capture_output=True,
-                text=True,
-                timeout=req.budget.max_seconds,
+                req,
+                env=req.env if req.env is not None else None,
             )
         except subprocess.TimeoutExpired:
             return AdapterResult(
@@ -190,7 +312,7 @@ class ClaudeCodeAdapter(HarnessAdapter):
             )
 
         elapsed = time.time() - start
-        diff = git_diff(req.repo_path)
+        diff = capture_diff(Path(req.repo_path), base) if base else git_diff(req.repo_path)
         model_used = "unknown"
         tokens = 0
         try:
@@ -211,7 +333,9 @@ class ClaudeCodeAdapter(HarnessAdapter):
                 usage=Usage(seconds=elapsed),
                 model=model_used,
             )
-        status = AdapterStatus.OK if diff.strip() else AdapterStatus.NO_EDIT
+        status = derive_status(req.repo_path, base) if base else (
+            AdapterStatus.EDITED if diff.strip() else AdapterStatus.NO_EDIT
+        )
         return AdapterResult(
             status=status,
             diff=diff,
@@ -239,6 +363,7 @@ class CopilotCliAdapter(HarnessAdapter):
 
     def run(self, req: AdapterRequest) -> AdapterResult:
         start = time.time()
+        base = _head_sha(req.repo_path)
         cmd = [
             "copilot",
             "-p",
@@ -250,16 +375,9 @@ class CopilotCliAdapter(HarnessAdapter):
         ]
         if req.model and req.model != "auto":
             cmd += ["--model", req.model]
-        env = dict(os.environ)
+        env = dict(req.env) if req.env is not None else dict(os.environ)
         try:
-            proc = subprocess.run(
-                cmd,
-                cwd=req.repo_path,
-                capture_output=True,
-                text=True,
-                timeout=req.budget.max_seconds,
-                env=env,
-            )
+            proc = _run_harness_subprocess(cmd, req, env=env)
         except subprocess.TimeoutExpired:
             return AdapterResult(
                 status=AdapterStatus.TIMEOUT,
@@ -280,7 +398,7 @@ class CopilotCliAdapter(HarnessAdapter):
                 usage=Usage(seconds=elapsed),
                 model=model_used,
             )
-        diff = git_diff(req.repo_path)
+        diff = capture_diff(Path(req.repo_path), base) if base else git_diff(req.repo_path)
         if proc.returncode != 0 and not diff.strip():
             return AdapterResult(
                 status=AdapterStatus.ERROR,
@@ -289,7 +407,9 @@ class CopilotCliAdapter(HarnessAdapter):
                 usage=Usage(seconds=elapsed),
                 model=model_used,
             )
-        status = AdapterStatus.OK if diff.strip() else AdapterStatus.NO_EDIT
+        status = derive_status(req.repo_path, base) if base else (
+            AdapterStatus.EDITED if diff.strip() else AdapterStatus.NO_EDIT
+        )
         return AdapterResult(
             status=status,
             diff=diff,
@@ -303,3 +423,39 @@ ADAPTERS: dict[str, type[HarnessAdapter]] = {
     ClaudeCodeAdapter.name: ClaudeCodeAdapter,
     CopilotCliAdapter.name: CopilotCliAdapter,
 }
+
+# Composite-adapter prefix: `bare:<inner>` resolves to the bare-model negative control
+# wrapping the named leaf adapter (PR #19 follow-up 2). Kept as a string constant so the
+# resolver and any callers agree on the one spelling.
+BARE_PREFIX = "bare:"
+
+
+def resolve_adapter(key: str):
+    """Resolve an adapter KEY to an adapter instance.
+
+    * A plain leaf key (``claude-code`` / ``copilot-cli``) → that leaf adapter instance.
+    * A composite ``bare:<inner>`` → ``BareModelAdapter`` wrapping the resolved inner leaf —
+      the ~0-lift negative control, now runnable by name on real match data instead of only
+      via synthetic thetas.
+
+    Fails closed with an actionable message on an unknown leaf or unknown inner harness.
+    """
+    if key.startswith(BARE_PREFIX):
+        inner_key = key[len(BARE_PREFIX):]
+        inner_cls = ADAPTERS.get(inner_key)
+        if inner_cls is None:
+            raise ValueError(
+                f"unknown inner harness {inner_key!r} for composite {key!r}; "
+                f"available: {', '.join(sorted(ADAPTERS))}"
+            )
+        # Imported lazily to avoid a package import cycle (lift imports isolation/rating).
+        from atv_bench.lift import BareModelAdapter
+
+        return BareModelAdapter(inner=inner_cls())
+    cls = ADAPTERS.get(key)
+    if cls is None:
+        raise ValueError(
+            f"unknown adapter {key!r}; available: {', '.join(sorted(ADAPTERS))} "
+            f"(or 'bare:<inner>' for the bare-model control)"
+        )
+    return cls()

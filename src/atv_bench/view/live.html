@@ -163,7 +163,36 @@
   });
 
   es.addEventListener('board', (e) => {
-    const board = JSON.parse(e.data);
+    renderBoard(JSON.parse(e.data));
+    es.close();
+  });
+
+  // Integrity gate (Section 6): mirror index.html — an UNVERIFIED board doc renders
+  // NO rank (no #1, no medal, no "leads"/"beats"), only the integrity-gate reframe.
+  // The gate is the product working, not a broken board. live_server feeds a
+  // verified-by-omission demo store today; this closes the leak if verified=false
+  // data ever reaches the live board.
+  function renderUnranked() {
+    const boardEl = document.getElementById('board');
+    const rowsEl = document.getElementById('rows');
+    rowsEl.innerHTML = '';
+    const state = document.createElement('div');
+    state.className = 'row';
+    const msg = document.createElement('span'); msg.className = 'who';
+    const h = document.createElement('b'); h.textContent = 'unranked (integrity gate)';
+    const p = document.createElement('span'); p.className = 'chip';
+    p.textContent = ' — No — numbers are gated because we won’t publish what we ' +
+      'can’t verify. This corpus is not a ranked number yet: it is gated for ' +
+      'integrity until every surface verifies. The gate is the product working.';
+    state.appendChild(h); state.appendChild(p);
+    rowsEl.appendChild(state);
+    document.getElementById('insights').innerHTML = '';
+    boardEl.classList.add('show');
+  }
+
+  function renderBoard(board) {
+    // Section 6 typed-rank guard AT THE DOM BOUNDARY: verified===false -> no rank ever.
+    if (board.verified === false) { renderUnranked(); return; }
     const rowsEl = document.getElementById('rows');
     rowsEl.innerHTML = '';
     for (const r of board.rows) {
@@ -186,8 +215,10 @@
       const li = document.createElement('li'); li.textContent = line; ul.appendChild(li);
     }
     document.getElementById('board').classList.add('show');
-    es.close();
-  });
+  }
+
+  // allow tests/screenshots to inject a board doc without a live SSE match.
+  if (window.__BOARD_FIXTURE__) { renderBoard(window.__BOARD_FIXTURE__); }
 
   es.onerror = () => { if (!started) hud.textContent = 'Waiting for match feed…'; };
 })();

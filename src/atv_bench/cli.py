@@ -817,7 +817,13 @@ def demo_match_cmd(
                                help="Terminal mode: after the match, build the leaderboard + insights."),
     seed: int = typer.Option(0, "--seed", help="Trusted engine seed (reproducible match)."),
 ) -> None:
-    """Play two harness bots head-to-head in Tron with a live feed, then show the board.
+    """Full head-to-head demo experience (prefer `run --demo` for a quick look).
+
+    Use `run --demo` for the fast, agent-friendly one-shot demo envelope. Use this
+    `demo-match` when you want the rich three-act experience with a live feed;
+    use `play` to pit your own two bots, and `board` to view the leaderboard alone.
+
+    Play two harness bots head-to-head in Tron with a live feed, then show the board.
 
     The demo in three acts: (1) two named harnesses enter, (2) a live turn-by-turn Tron
     feed, (3) the leaderboard + gstack insights. With no bot paths it uses two distinct
@@ -937,16 +943,26 @@ def demo_match_cmd(
         doc = json.loads((site / "leaderboard.json").read_text())
         rows = doc.get("rows", [])
 
-        typer.echo("\n=== Leaderboard ===")
-        for r in rows:
-            typer.echo(
-                f"  #{r.get('rank')}  {round(float(r.get('elo', 0)))} ELO  "
-                f"@{r.get('identity')} ({r.get('harness_name')})  "
-                f"— {r.get('fingerprint_summary', '')}"
-            )
-        typer.echo("\n=== Insights ===")
-        for line in build_insights(rows):
-            typer.echo(f"  • {line}")
+        # Section 6 typed-rank guard: an unverified board never prints a rank. Route the
+        # gate through the single renderer so a free-text rank leak is impossible here.
+        from atv_bench.render import render_ranking, UnrankedView
+
+        gate = render_ranking({"ratings": {"verified": doc.get("verified", True)}},
+                              verified=doc.get("verified", True))
+        if isinstance(gate, UnrankedView):
+            typer.echo("\n=== Leaderboard ===")
+            typer.echo(str(gate))
+        else:
+            typer.echo("\n=== Leaderboard ===")
+            for r in rows:
+                typer.echo(
+                    f"  #{r.get('rank')}  {round(float(r.get('elo', 0)))} ELO  "
+                    f"@{r.get('identity')} ({r.get('harness_name')})  "
+                    f"— {r.get('fingerprint_summary', '')}"
+                )
+            typer.echo("\n=== Insights ===")
+            for line in build_insights(rows):
+                typer.echo(f"  • {line}")
         typer.echo(f"\n  Static board written to: {site / 'index.html'}")
     finally:
         shutil.rmtree(tmp_store, ignore_errors=True)
@@ -1058,6 +1074,7 @@ def run(
     out: Path = typer.Option(None, "--out", help="Output dir for match logs + replay."),
     a_home: Path = typer.Option(None, "--a-home", help="Config root for harness A (e.g. a cloned repo) to fingerprint."),
     b_home: Path = typer.Option(None, "--b-home", help="Config root for harness B to fingerprint."),
+    persist: Path = typer.Option(None, "--persist", help="Append this match as a rating row to a JSONL lift corpus (feeds `atv-bench lift`)."),
 ) -> None:
     """Run a REAL harness-vs-harness match: each harness CLI builds its own bot headless,
     the two bots compete in a CodeClash arena (Docker), and a schema-v2 record is written.
@@ -1103,7 +1120,7 @@ def run(
 
     out_dir = out or Path("./_run")
     try:
-        env = _run_live(cfg, out_dir, a_home, b_home, json_out)
+        env = _run_live(cfg, out_dir, a_home, b_home, json_out, persist=persist)
     except RunError as err:
         _emit_run_error(err, json_out)
         return
@@ -1139,7 +1156,7 @@ def _run_demo(*, json_out: bool, out: Path | None) -> None:
     typer.echo(f"\n{d['next']}")
 
 
-def _run_live(cfg, out_dir, a_home, b_home, json_out):  # pragma: no cover - Docker + live CLIs
+def _run_live(cfg, out_dir, a_home, b_home, json_out, persist=None):  # pragma: no cover - Docker + live CLIs
     from atv_bench.run_envelope import ok_envelope
     from atv_bench.runner import (
         build_match_record, fingerprint_harness_repo, preflight_or_raise, run_live_match,
@@ -1150,26 +1167,348 @@ def _run_live(cfg, out_dir, a_home, b_home, json_out):  # pragma: no cover - Doc
     homes = {cfg.a: a_home, cfg.b: b_home}
     raw = run_live_match(cfg, output_dir=Path(out_dir), homes=homes)
 
-    # Fingerprint each harness (leak-safe) for the record identity.
+    # Fingerprint each harness (leak-safe) for the record identity + moat surface.
     fps: dict[str, str] = {}
+    manifests: dict[str, dict] = {}
     for h, home in homes.items():
         try:
-            sha, _manifest = fingerprint_harness_repo(h, home)
+            sha, manifest = fingerprint_harness_repo(h, home)
             fps[h] = sha
+            manifests[h] = manifest
         except Exception:
             fps[h] = "0" * 64
 
+    from atv_bench.runner import summarize_budgets
     outcome, models = _summarize_tournament(raw, cfg)
+    budgets = summarize_budgets(raw, cfg)
     rec = build_match_record(
         cfg, outcome=outcome, player_models=models, player_fingerprints=fps,
+        player_manifests=manifests, player_budgets=budgets,
         replay_path=str(Path(out_dir)), verified=False,
     )
+    if persist is not None:
+        from atv_bench.run_envelope import RunError
+        from atv_bench.runner import persist_rating_row_from_record
+        try:
+            persist_rating_row_from_record(rec, persist)
+        except ValueError as exc:
+            # a malformed outcome (missing/blank/foreign winner) must surface as a stable
+            # RunError, not a raw ValueError leaking out of the command.
+            raise RunError("policy_denied", f"cannot persist rating row: {exc}",
+                           fix="the match outcome is malformed; re-run the match") from exc
+        typer.echo(f"↳ appended rating row to {persist}")
     return ok_envelope(rec.to_dict())
 
 
 def _summarize_tournament(raw, cfg):  # pragma: no cover - shape depends on live run
     from atv_bench.runner import summarize_tournament
     return summarize_tournament(raw, cfg)
+
+
+@app.command(name="plan-schedule")
+def plan_schedule(
+    harness: list[str] = typer.Option(..., "--harness", help="Harness key (repeatable). Use 'bare:<inner>' for the bare control."),
+    game: list[str] = typer.Option(..., "--game", help="Game key (repeatable)."),
+    repeats: int = typer.Option(1, "--repeats", help="Paired repeats per (pair, game) cell."),
+    seed: int = typer.Option(0, "--seed", help="Deterministic ordering seed."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the plan as JSON."),
+) -> None:
+    """Build a side-balanced round-robin match plan (G1 scheduler, wired live).
+
+    Every unordered harness pair plays every game `--repeats` times with alternating seats.
+    Deterministic under `--seed`. This is the planning half of the live pipeline — it emits
+    the matches to run; execution + gating happen downstream (`run`, `rate --enforce-gates`).
+    """
+    import dataclasses as _dc
+
+    from atv_bench.scheduler import build_paired_schedule
+
+    matches = build_paired_schedule(harness, game, seed=seed, repeats=repeats)
+    plan = [_dc.asdict(m) for m in matches]
+    if json_out:
+        typer.echo(json.dumps(plan, indent=2))
+    else:
+        typer.echo(f"{len(plan)} matches planned "
+                   f"({len(harness)} harnesses x {len(game)} games x {repeats} repeats):")
+        for m in plan:
+            typer.echo(f"  {m['game']}: {m['harness_a']} vs {m['harness_b']} "
+                       f"(side={m['side_index']}, repeat={m['repeat_index']})")
+
+
+@app.command()
+def rate(
+    store: Path = typer.Option(..., "--store", help="Corpus dir containing matches.jsonl."),
+    out: Path = typer.Option(None, "--out", help="Write ratings.json here (default: <store>/ratings.json)."),
+    json_out: bool = typer.Option(False, "--json", help="Also print the ratings doc to stdout."),
+    enforce_gates: bool = typer.Option(False, "--enforce-gates", help="Refuse to publish if the corpus fails the G5/G6 quality gates."),
+) -> None:
+    """Fit Tier-1 harness ratings from a match corpus and emit ratings.json.
+
+    Loads the corpus, fits the penalized hierarchical Bradley-Terry model (base model
+    factored out where the design identifies it, an honest harness+model BUNDLE where it
+    is model-locked), and writes theta, theta_model_adjusted (or bundle_unit), clustered +
+    FDR-corrected pairwise CIs, data_sufficiency, attributed, verified, and the unknown[]
+    list of non-publishable model tags.
+    """
+    from atv_bench.rating import build_ratings_doc
+
+    matches_file = store / "matches.jsonl"
+    if not matches_file.exists():
+        typer.echo(f"Cannot rate: no matches.jsonl in {store}")
+        raise typer.Exit(2)
+
+    rows = []
+    total_records = 0
+    infra_failures = 0
+    for line in matches_file.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            m = json.loads(line)
+        except json.JSONDecodeError as e:
+            typer.echo(f"Cannot rate: malformed matches.jsonl line: {e}")
+            raise typer.Exit(2)
+        total_records += 1
+        row = _rating_row_from_match(m)
+        if row is not None:
+            rows.append(row)
+        elif _is_infrastructure_failure(m):
+            # ONLY genuine crashes/forfeits/malformed records count toward the infra rate —
+            # NOT a valid-but-not-yet-scored record, which would poison the gate on a mixed
+            # corpus. A record that is neither rateable nor an explicit failure is ignored.
+            infra_failures += 1
+
+    if not rows:
+        typer.echo("No rateable matches in corpus (need >=1 scored head-to-head record).")
+        raise typer.Exit(2)
+
+    if enforce_gates:
+        from atv_bench.pipeline import corpus_stats, gate_corpus
+        # Measure the infra-error rate over ALL records, counting only genuine failures. The
+        # referee-nondeterminism rate is NOT measurable from a single corpus pass (it needs a
+        # re-run-agreement probe), so it is deliberately NOT supplied here — corpus_stats
+        # omits it and evaluate_quality_gates FAILS CLOSED on the missing signal. Publishing a
+        # gated board therefore requires a real nondeterminism measurement, not a fabricated
+        # 0.0 (a fabricated clean value would silently disable that gate).
+        infra_rate = (infra_failures / total_records) if total_records else 1.0
+        stats = corpus_stats(rows, infrastructure_error_rate=infra_rate)
+        report = gate_corpus(stats)
+        if not report.passed:
+            typer.echo("Refusing to publish: corpus failed quality gates (G5/G6):")
+            for f in report.failures:
+                typer.echo(f"  - gate={f['gate']} observed={f.get('observed')} "
+                           f"threshold={f.get('threshold')}")
+            raise typer.Exit(6)
+
+    doc = build_ratings_doc(rows, verified=True, model_overdispersion=True)
+    out_path = out or (store / "ratings.json")
+    out_path.write_text(json.dumps(doc, indent=2))
+    typer.echo(f"Wrote {out_path} — {len(doc['harnesses'])} harnesses, "
+               f"attributed={doc['attributed']}, model_locked={doc.get('model_locked')}, "
+               f"unknown={doc['unknown']}")
+    if json_out:
+        typer.echo(json.dumps(doc, indent=2))
+
+
+def _cluster_key_from_match(m: dict) -> str:
+    """Cluster key = game x (unordered build-artifact pair).
+
+    Nested games sharing a harness build-artifact are intra-cluster correlated, so the lift
+    bootstrap must resample the CLUSTER, not the row (gap G2). We key on the two players'
+    fingerprint_sha256 (the artifact identity) when present, falling back to harness names,
+    scoped by game so cross-game rows never share a cluster.
+    """
+    game = m.get("game") or m.get("game_version") or "game"
+    players = m.get("players") or []
+    ids = []
+    for p in players[:2]:
+        ids.append(str(p.get("fingerprint_sha256") or p.get("harness") or "?"))
+    if len(ids) < 2:
+        ids = [str(m.get("harness_a", "?")), str(m.get("harness_b", "?"))]
+    return f"{game}::" + "~".join(sorted(ids))
+
+
+def _load_rating_matches(store: Path, *, with_clusters: bool = False):
+    """Load matches.jsonl from a corpus dir into RatingMatch rows (shared by rate/lift).
+
+    When ``with_clusters`` is True, returns ``(matches, cluster_ids)`` with ``cluster_ids``
+    aligned to ``matches`` (one key per row). Otherwise returns just ``matches``.
+    """
+    from atv_bench.rating import RatingMatch
+
+    matches_file = store / "matches.jsonl"
+    if not matches_file.exists():
+        typer.echo(f"Cannot rate: no matches.jsonl in {store}")
+        raise typer.Exit(2)
+    out = []
+    clusters: list[str] = []
+    for line in matches_file.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            m = json.loads(line)
+        except json.JSONDecodeError as e:
+            typer.echo(f"Cannot rate: malformed matches.jsonl line: {e}")
+            raise typer.Exit(2)
+        row = _rating_row_from_match(m)
+        if row is not None:
+            out.append(RatingMatch(
+                harness_a=row["harness_a"], harness_b=row["harness_b"],
+                model_a=row["model_a"], model_b=row["model_b"],
+                score_a=float(row["score_a"]),
+            ))
+            if with_clusters:
+                clusters.append(_cluster_key_from_match(m))
+    if with_clusters:
+        return out, clusters
+    return out
+
+
+@app.command(name="lift")
+def lift(
+    store: Path = typer.Option(..., "--store", help="Corpus dir containing matches.jsonl."),
+    baseline: list[str] = typer.Option(
+        ..., "--baseline",
+        help="Bare baseline mapping HARNESS=BARE_HARNESS (repeatable). The bare control "
+             "must have matches on the same base model as HARNESS."),
+    out: Path = typer.Option(None, "--out", help="Write lift.json here (default: <store>/lift.json)."),
+    seed: int = typer.Option(0, "--seed", help="Bootstrap seed."),
+    n_boot: int = typer.Option(1000, "--n-boot", help="Bootstrap replicates for the CI."),
+    json_out: bool = typer.Option(False, "--json", help="Also print the lift doc to stdout."),
+    cluster: bool = typer.Option(
+        True, "--cluster/--no-cluster",
+        help="Resample whole build-artifact clusters (game x artifact pair) instead of "
+             "individual matches, so nested games do not inflate CI precision (gap G2)."),
+) -> None:
+    """Emit harness LIFT over the bare model — the headline product metric (Section 5.5).
+
+    For each --baseline HARNESS=BARE mapping, computes lift = theta(M+HARNESS) - theta(M BARE)
+    on the shared base model M, with a percentile-bootstrap CI. Lifts are comparable across
+    harnesses on DIFFERENT base models because each subtracts its own bare baseline. Refuses
+    (exit 2) when a declared bare baseline was never run on the harness's base model.
+    """
+    from atv_bench.lift import LiftError, compute_lift
+
+    if cluster:
+        matches, cluster_ids = _load_rating_matches(store, with_clusters=True)
+    else:
+        matches, cluster_ids = _load_rating_matches(store), None
+    if not matches:
+        typer.echo("No rateable matches in corpus (need >=1 scored head-to-head record).")
+        raise typer.Exit(2)
+
+    baselines: dict[str, str] = {}
+    for spec in baseline:
+        if "=" not in spec:
+            typer.echo(f"Bad --baseline {spec!r}: expected HARNESS=BARE_HARNESS")
+            raise typer.Exit(2)
+        h, bare = spec.split("=", 1)
+        baselines[h.strip()] = bare.strip()
+
+    try:
+        results = compute_lift(matches, baselines, seed=seed, n_boot=n_boot,
+                               cluster_ids=cluster_ids)
+    except LiftError as e:
+        typer.echo(f"Cannot compute lift: {e}")
+        raise typer.Exit(2)
+
+    doc = {
+        "seed": seed,
+        "n_boot": n_boot,
+        "resampling_unit": "cluster" if cluster else "match",
+        "lifts": [
+            {
+                "harness": r.harness,
+                "bare_harness": r.bare_harness,
+                "base_model": r.base_model,
+                "lift": r.lift,
+                "ci": {"lo": r.lo, "hi": r.hi},
+            }
+            for r in results.values()
+        ],
+    }
+    out_path = out or (store / "lift.json")
+    out_path.write_text(json.dumps(doc, indent=2))
+    # Section 6: emit lift through the single typed renderer so LIFT is the headline
+    # metric and no rank leaks. Lift is inherently verified (each harness is its own control).
+    from atv_bench.render import render_ranking
+    ratings_stub = {
+        "verified": True,
+        "harnesses": [{"harness": r.harness, "theta": None, "bundle_unit": True}
+                      for r in results.values()],
+        "unknown": [],
+    }
+    typer.echo(str(render_ranking({"ratings": ratings_stub, "lifts": doc}, verified=True)))
+    typer.echo(f"Wrote {out_path} — {len(doc['lifts'])} lift(s)")
+    if json_out:
+        typer.echo(json.dumps(doc, indent=2))
+
+
+def _is_infrastructure_failure(m: dict) -> bool:
+    """True if a match record is a genuine infrastructure failure (crash/forfeit/malformed).
+
+    Used by `rate --enforce-gates` to measure the infra-error rate HONESTLY: a record that is
+    simply not-yet-scored is NOT an infra failure (counting it would poison the gate on a
+    mixed corpus). We recognize the explicit failure shapes the pipeline emits: a CRASH
+    record (`loser`/`opponent` keys, no players), or a schema-v2 outcome whose winner is a
+    crash/forfeit token.
+    """
+    if m.get("crashed") or m.get("infrastructure_error"):
+        return True
+    # CRASH-artifact shape (publish.py): {loser, opponent, match_id}, no scored head-to-head.
+    if "loser" in m and "opponent" in m and "players" not in m:
+        return True
+    outcome = m.get("outcome")
+    if isinstance(outcome, dict):
+        winner = str(outcome.get("winner", "")).lower()
+        if any(tok in winner for tok in ("crash", "forfeit", "error")):
+            return True
+    return False
+
+
+def _rating_row_from_match(m: dict) -> dict | None:
+    """Extract (harness_a, harness_b, model_a, model_b, score_a) from a match record.
+
+    Returns None when the record cannot supply a two-player scored head-to-head. Supports
+    both the flat rating-row shape and the schema-v2 match record (players[] + outcome).
+
+    Fails closed like runner.match_record_to_rating_row: a MISSING or None winner is NOT a
+    silent draw (returns None — unrateable), and two players sharing a harness key are
+    rejected (ambiguous attribution). Only an explicit ``draw``/``tie`` scores 0.5.
+    """
+    if all(k in m for k in ("harness_a", "harness_b", "model_a", "model_b", "score_a")):
+        # flat rating row: reject a missing/blank harness id and identical-harness self-play
+        # (both make attribution meaningless), consistent with the schema-v2 path below.
+        ha, hb = str(m.get("harness_a") or "").strip(), str(m.get("harness_b") or "").strip()
+        if not ha or not hb or ha == hb:
+            return None
+        return m
+    players = m.get("players")
+    if not players or len(players) != 2:
+        return None  # head-to-head contract: exactly two players, else unrateable
+    pa, pb = players[0], players[1]
+    ha, hb = str(pa.get("harness") or "").strip(), str(pb.get("harness") or "").strip()
+    if not ha or not hb or ha == hb:
+        return None  # missing/blank harness id or identical-harness self-play: unrateable
+    outcome = m.get("outcome") or {}
+    if "winner" not in outcome or outcome.get("winner") is None:
+        return None  # unscored/malformed — never a fabricated draw
+    winner = outcome.get("winner")
+    if winner in ("a", "A", 0, pa.get("harness")):
+        score_a = 1.0
+    elif winner in ("b", "B", 1, pb.get("harness")):
+        score_a = 0.0
+    elif winner in ("draw", "tie"):
+        score_a = 0.5
+    else:
+        return None
+    return {
+        "harness_a": pa.get("harness"), "harness_b": pb.get("harness"),
+        "model_a": pa.get("model", "unknown"), "model_b": pb.get("model", "unknown"),
+        "score_a": score_a,
+    }
 
 
 if __name__ == "__main__":

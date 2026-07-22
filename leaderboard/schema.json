@@ -12,6 +12,22 @@
     "schema_version": {
       "const": 1
     },
+    "verified": {
+      "type": "boolean"
+    },
+    "quality_gates": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "passed": { "type": "boolean" },
+        "publishable": { "type": "boolean" },
+        "rankable": { "type": "boolean" },
+        "trust_tier": { "enum": ["local-self-attested", "attested", "reproduced"] },
+        "top_contrast_verdict": { "enum": ["A_wins", "B_wins", "equivalent", "inconclusive"] },
+        "direction_stability": { "type": "number" },
+        "failures": { "type": "array", "items": { "type": "object" } }
+      }
+    },
     "updated_at": {
       "type": "string",
       "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
@@ -54,6 +70,52 @@
           },
           "fingerprint_gstack": {
             "type": "boolean"
+          },
+          "lift": {
+            "type": "number"
+          },
+          "lift_ci": {
+            "type": "object",
+            "required": [
+              "lo",
+              "hi"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "lo": {
+                "type": "number"
+              },
+              "hi": {
+                "type": "number"
+              }
+            }
+          },
+          "theta": {
+            "type": "number"
+          },
+          "budget": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "tokens": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "tool_calls": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "wall_time_s": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            }
           },
           "match_count": {
             "type": "integer",
@@ -121,6 +183,12 @@
                 }
               },
               "nested_skills": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tools": {
                 "type": "array",
                 "items": {
                   "type": "string"

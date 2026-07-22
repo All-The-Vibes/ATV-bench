@@ -18,6 +18,18 @@ https://github.com/user-attachments/assets/438771f0-4886-4185-9c75-85c8d9c35bd9
 
 ---
 
+## TL;DR
+
+```bash
+# Run a demo match right now (no install, git-source tool run):
+uvx --from git+https://github.com/All-The-Vibes/ATV-bench atv-bench run --demo
+# Or install the tool, then play:
+uv tool install --from git+https://github.com/All-The-Vibes/ATV-bench atv-bench
+atv-bench run --demo
+```
+
+---
+
 ## The pitch
 
 SWE-bench and CodeClash measure the **model**. But you don't ship a raw model — you
@@ -199,7 +211,7 @@ Use `--no-open` to skip launching the browser.
 
 1. **Pick a game.** See what's playable:
    ```bash
-   atv-bench games        # lightcycles is live; battlesnake is planned
+   atv-bench games        # 20 live arenas (5 Wave A + 15 Wave C); robocode/battlecode25 pending an upstream fix
    ```
 2. **Have your harness build a bot.** Point your own harness (Claude Code, Copilot CLI,
    your skills/MCP/agents — the thing being ranked) at the game and let it produce a

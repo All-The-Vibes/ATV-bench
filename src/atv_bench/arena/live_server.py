@@ -38,12 +38,16 @@ def _live_html() -> str:
     return (here / "view" / "live.html").read_text(encoding="utf-8")
 
 
-def _build_board(a_name: str, b_name: str, result: dict, a_label: str, b_label: str) -> dict:
+def _build_board(a_name: str, b_name: str, result: dict, a_label: str, b_label: str,
+                 *, verified: bool = True) -> dict:
     """Record the just-played match into a throwaway store and build Act 3.
 
-    Returns {"rows": [...], "insights": [...]} — the same rows the static board shows,
-    plus the heuristic insight lines. The winner is whatever the match adjudicated; the
-    fingerprint labels are harness-neutral sample-bot metadata (never the adjudicator).
+    Returns {"rows": [...], "insights": [...], "verified": bool} — the same rows the
+    static board shows, plus the heuristic insight lines and the integrity `verified`
+    flag. The live board (view/live.html) gates rank on `verified`: verified=false
+    renders the integrity-gate reframe and NO rank. The demo store is verified by
+    construction, so the default is True (behavior unchanged); the flag is threaded so
+    the gate is reachable, not dead code, if unverified data ever reaches the board.
     """
     import shutil
     import tempfile
@@ -64,7 +68,7 @@ def _build_board(a_name: str, b_name: str, result: dict, a_label: str, b_label: 
         site = build_site(str(out_dir), store_dir=str(tmp_store), updated_at=now)
         doc = json.loads((site / "leaderboard.json").read_text())
         rows = doc.get("rows", [])
-        return {"rows": rows, "insights": build_insights(rows)}
+        return {"rows": rows, "insights": build_insights(rows), "verified": verified}
     finally:
         shutil.rmtree(tmp_store, ignore_errors=True)
         shutil.rmtree(out_dir, ignore_errors=True)
@@ -80,7 +84,7 @@ class LiveMatchServer:
     """
 
     def __init__(self, *, a_bot: str, b_bot: str, a_name: str, b_name: str,
-                 seed: int = 0, turn_delay: float = 0.12) -> None:
+                 seed: int = 0, turn_delay: float = 0.12, verified: bool = True) -> None:
         self.a_bot = a_bot
         self.b_bot = b_bot
         self.a_name = a_name
@@ -89,6 +93,7 @@ class LiveMatchServer:
         self.b_label = Path(b_bot).stem
         self.seed = seed
         self.turn_delay = turn_delay
+        self.verified = verified
         self._httpd: http.server.ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -125,7 +130,8 @@ class LiveMatchServer:
 
         write("result", {"outcome": result.get("outcome"),
                          "player_a": self.a_name, "player_b": self.b_name})
-        board = _build_board(self.a_name, self.b_name, result, self.a_label, self.b_label)
+        board = _build_board(self.a_name, self.b_name, result, self.a_label, self.b_label,
+                             verified=self.verified)
         write("board", board)
 
     # -- HTTP ------------------------------------------------------------------
@@ -203,7 +209,7 @@ class LiveMatchServer:
 
 def serve_live_match(*, a_bot: str, b_bot: str, a_name: str, b_name: str,
                      seed: int = 0, turn_delay: float = 0.12,
-                     open_browser: bool = True, echo=print) -> LiveMatchServer:
+                     open_browser: bool = True, echo=print, verified: bool = True) -> LiveMatchServer:
     """Start the live server, optionally open a browser, and block until interrupted.
 
     Returns the running server (already serving). With open_browser=True this launches
@@ -212,7 +218,7 @@ def serve_live_match(*, a_bot: str, b_bot: str, a_name: str, b_name: str,
     headless/tests).
     """
     srv = LiveMatchServer(a_bot=a_bot, b_bot=b_bot, a_name=a_name, b_name=b_name,
-                          seed=seed, turn_delay=turn_delay)
+                          seed=seed, turn_delay=turn_delay, verified=verified)
     srv.start()
     echo(f"  Live match: {srv.url}/  (Ctrl-C to stop)")
     if not open_browser:

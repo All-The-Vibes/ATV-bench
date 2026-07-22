@@ -6,9 +6,47 @@ not actionable messages.
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from atv_bench.errors import AtvError, ErrorCode
+
+
+def _fields(rendered: str) -> dict[str, str]:
+    """Parse a rendered error into its labeled sections."""
+    fields: dict[str, str] = {}
+    for line in rendered.splitlines():
+        if ":" in line:
+            key, _, val = line.partition(":")
+            fields[key.strip().lower()] = val.strip()
+    return fields
+
+
+def test_unified_error_render():
+    """AtvError and RunError share ONE formatter shape: problem + cause + fix +
+    exit code, so a user sees the same structure regardless of which subsystem
+    raised the error (DX-3)."""
+    from atv_bench.errors import render_error
+    from atv_bench.run_envelope import RunError
+
+    atv = AtvError(ErrorCode.GH_NOT_AUTHED, cause="not logged in")
+    run = RunError("timeout", "the match timed out", fix="retry with more time")
+
+    a = render_error(atv)
+    r = render_error(run)
+
+    for rendered in (a, r):
+        low = rendered.lower()
+        assert "problem:" in low, rendered
+        assert "fix:" in low, rendered
+        assert "exit" in low, rendered  # exit code surfaced
+
+    # cause is included when present
+    assert "not logged in" in a
+    # both carry a numeric exit code
+    assert re.search(r"exit\s*\d", a.lower())
+    assert re.search(r"exit\s*\d", r.lower())
 
 
 def test_error_renders_problem_cause_fix_link():

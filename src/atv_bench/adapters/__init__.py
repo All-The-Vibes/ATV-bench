@@ -10,4 +10,5 @@ from atv_bench.adapters.contract import (  # noqa: F401
     HarnessAdapter,
     Usage,
     git_diff,
+    resolve_adapter,
 )

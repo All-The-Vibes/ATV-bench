@@ -1,9 +1,10 @@
-# Real harness-vs-harness — wire the Phase 1 spine + airtight fingerprint
+# Real harness-vs-harness — wire the Phase 1 spine + declared-config fingerprint
 
 Implements the locked `/office-hours` design end-to-end: a **real** harness-vs-harness
 benchmark where each coding-agent harness (Claude Code, GitHub Copilot CLI) builds its
 own bot **headless**, the two bots compete in a **CodeClash Docker arena**, and the
-**harness** — not just the model — is fingerprinted airtight. No hand-written bots, no
+**harness** — not just the model — is captured as a declared-config fingerprint with an
+explicit `unknown[]` ledger. No hand-written bots, no
 faked model strings.
 
 ## Proof it's real (not mocked)

@@ -47,6 +47,28 @@ LEADERBOARD_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
     "properties": {
         "schema_version": {"const": SCHEMA_VERSION},
+        # Integrity gate (Section 6): when present and false, the viewer refuses to render
+        # any rank and shows the integrity-gate reframe instead. Omitted -> verified board.
+        "verified": {"type": "boolean"},
+        # G6/G9 gap-fill: optional publication-gate report + trust tier + top-contrast
+        # verdict. Honest-optional; omitted when the emitter has no gate report.
+        "quality_gates": {
+            "type": "object",
+            "additionalProperties": True,
+            "properties": {
+                "passed": {"type": "boolean"},
+                "publishable": {"type": "boolean"},
+                "rankable": {"type": "boolean"},
+                "trust_tier": {
+                    "enum": ["local-self-attested", "attested", "reproduced"]
+                },
+                "top_contrast_verdict": {
+                    "enum": ["A_wins", "B_wins", "equivalent", "inconclusive"]
+                },
+                "direction_stability": {"type": "number"},
+                "failures": {"type": "array", "items": {"type": "object"}},
+            },
+        },
         "updated_at": {
             "type": "string",
             # ISO-8601 UTC (Z)
@@ -69,6 +91,28 @@ LEADERBOARD_SCHEMA: dict[str, Any] = {
                     "rated": {"type": "boolean"},
                     "low_confidence": {"type": "boolean"},
                     "fingerprint_gstack": {"type": "boolean"},
+                    # Section 5.5 harness LIFT over the bare model, with its CI, plus the
+                    # secondary per-bundle theta. Optional: only a VERIFIED board with a
+                    # bare baseline present carries them; a baseline-less row omits them.
+                    "lift": {"type": "number"},
+                    "lift_ci": {
+                        "type": "object",
+                        "required": ["lo", "hi"],
+                        "additionalProperties": False,
+                        "properties": {"lo": {"type": "number"}, "hi": {"type": "number"}},
+                    },
+                    "theta": {"type": "number"},
+                    # Section 4 BudgetVector — tokens / tool_calls / wall_time_s. Each field
+                    # is nullable (never fabricated when an adapter did not measure it).
+                    "budget": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "tokens": {"type": ["integer", "null"]},
+                            "tool_calls": {"type": ["integer", "null"]},
+                            "wall_time_s": {"type": ["number", "null"]},
+                        },
+                    },
                     "match_count": {"type": "integer", "minimum": 0},
                     "status": {"type": "string"},
                     "wins": {"type": "integer", "minimum": 0},
@@ -91,6 +135,7 @@ LEADERBOARD_SCHEMA: dict[str, Any] = {
                         "properties": {
                             "skills": {"type": "array", "items": {"type": "string"}},
                             "nested_skills": {"type": "array", "items": {"type": "string"}},
+                            "tools": {"type": "array", "items": {"type": "string"}},
                             "mcps": {"type": "array", "items": {"type": "string"}},
                             "plugins": {"type": "array", "items": {"type": "string"}},
                             "unknown": {
@@ -168,6 +213,21 @@ def _sanitized_unknown_entry(entry: Any) -> dict[str, str]:
     return {"field": field, "reason": reason}
 
 
+def _is_safe_fingerprint_name(field: str, name: str) -> bool:
+    """Leak-safety check for one fingerprint name.
+
+    Most fields are plain slugs (is_safe_name). `nested_skills` legitimately carry a
+    `plugin:skill` form (Section 4 schema-v2), so each colon-separated segment is scanned
+    with the SAME allowlist scanner — the whole name is safe iff every segment is a safe
+    slug (1 or 2 segments only). This admits `gstack:land` without weakening the scanner
+    for any other field.
+    """
+    if field == "nested_skills" and ":" in name:
+        parts = name.split(":")
+        return len(parts) == 2 and all(is_safe_name(p) for p in parts)
+    return is_safe_name(name)
+
+
 def _sanitized_details(fp: dict[str, Any]) -> dict[str, Any]:
     """Re-validate a merged fingerprint for leak-safety on the trusted publish path (F2).
 
@@ -182,12 +242,12 @@ def _sanitized_details(fp: dict[str, Any]) -> dict[str, Any]:
         _sanitized_unknown_entry(e) for e in (fp.get("unknown", []) or [])
     ]
     clean: dict[str, list[str]] = {}
-    for field in ("skills", "nested_skills", "mcps", "plugins"):
+    for field in ("skills", "nested_skills", "tools", "mcps", "plugins"):
         raw = fp.get(field, [])
         kept: list[str] = []
         if isinstance(raw, list):
             for name in raw:
-                if isinstance(name, str) and is_safe_name(name):
+                if isinstance(name, str) and _is_safe_fingerprint_name(field, name):
                     kept.append(name)
                 else:
                     unknown.append({"field": field, "reason": "name_failed_safety_scan"})
@@ -222,11 +282,22 @@ def build_leaderboard_doc(
     submissions: dict[str, dict[str, Any]],
     *,
     updated_at: str,
+    verified: bool | None = None,
+    lifts: dict[str, Any] | None = None,
+    budgets: dict[str, Any] | None = None,
+    quality_gates: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compose the published leaderboard document.
 
     `submissions[name]` carries: fingerprint (probe manifest), identity (GitHub
     login), bot_sha256, pr_url, logs_url. ELO comes from `matches`.
+
+    `lifts` (Section 5.5): optional {harness_name -> LiftResult} from `lift.compute_lift`;
+    when a row's harness has a lift result, its LIFT (over the bare model) + CI + secondary
+    theta become part of the row. `budgets` (Section 4): optional {identity -> BudgetVector}
+    from the match records; the row surfaces tokens / tool_calls / wall_time_s. Both are
+    honest-optional — a row without lift/budget data simply omits those keys (the viewer
+    renders only what is present), so an unverified/baseline-less board is unchanged.
     """
     board = compute_leaderboard(matches, entrants=list(submissions),
                                 anchors=[ANCHOR_IDENTITY])
@@ -265,7 +336,7 @@ def build_leaderboard_doc(
         fp = sub["fingerprint"]
         low_confidence = _low_conf(name)
         details = _sanitized_details(fp)
-        rows.append({
+        row: dict[str, Any] = {
             "rank": rank,
             "elo": b["elo"],
             "rated": b["rated"],
@@ -286,8 +357,78 @@ def build_leaderboard_doc(
             "fingerprint_probe_version": _safe_str_field(fp, "probe_version", "unknown"),
             "pr_url": sub["pr_url"],
             "logs_url": sub["logs_url"],
-        })
-    return {"schema_version": SCHEMA_VERSION, "updated_at": updated_at, "rows": rows}
+        }
+        _attach_lift(row, lifts, row["harness_name"], fp)
+        _attach_budget(row, budgets, sub["identity"], row["harness_name"])
+        rows.append(row)
+    doc: dict[str, Any] = {"schema_version": SCHEMA_VERSION, "updated_at": updated_at, "rows": rows}
+    if verified is not None:
+        doc["verified"] = verified
+    if quality_gates is not None:
+        # G6/G9 surfacing (honest-optional): the publication-gate report + trust tier.
+        # Threaded verbatim so the viewer renders publishability/trust_tier without the
+        # emitter inventing schema fields. Absent when the caller has no gate report.
+        doc["quality_gates"] = quality_gates
+    return doc
+
+
+def _attach_lift(
+    row: dict[str, Any], lifts: dict[str, Any] | None, harness: str, fp: dict[str, Any]
+) -> None:
+    """Attach Section-5.5 LIFT (over the bare model) + CI + secondary theta to a row.
+
+    Sourced from `lift.compute_lift` (a {harness -> LiftResult}); the row is keyed by its
+    published harness name. Only finite values publish (a NaN/inf lift is dropped rather than
+    bricking the viewer's number formatting). theta may come from the LiftResult or the probe
+    manifest — whichever the caller threaded — and is always the SECONDARY metric.
+    """
+    if not lifts:
+        return
+    res = lifts.get(harness)
+    if res is None:
+        return
+    lift = getattr(res, "lift", None)
+    lo = getattr(res, "lo", None)
+    hi = getattr(res, "hi", None)
+    if not (isinstance(lift, (int, float)) and math.isfinite(lift)):
+        return
+    row["lift"] = float(lift)
+    if isinstance(lo, (int, float)) and isinstance(hi, (int, float)) and math.isfinite(lo) and math.isfinite(hi):
+        row["lift_ci"] = {"lo": float(lo), "hi": float(hi)}
+    theta = getattr(res, "theta", None)
+    if theta is None:
+        theta = fp.get("theta")
+    if isinstance(theta, (int, float)) and math.isfinite(theta):
+        row["theta"] = float(theta)
+
+
+def _attach_budget(
+    row: dict[str, Any], budgets: dict[str, Any] | None, identity: str, harness: str
+) -> None:
+    """Attach a Section-4 BudgetVector (tokens / tool_calls / wall_time_s) to a row.
+
+    Keyed by identity first (a per-entrant budget), then harness. Values are copied as-is
+    (nullable — never fabricated). A malformed/absent budget simply omits the key.
+    """
+    if not budgets:
+        return
+    bv = budgets.get(identity)
+    if bv is None:
+        bv = budgets.get(harness)
+    if bv is None:
+        return
+    tokens = getattr(bv, "tokens", None) if not isinstance(bv, dict) else bv.get("tokens")
+    tool_calls = getattr(bv, "tool_calls", None) if not isinstance(bv, dict) else bv.get("tool_calls")
+    wall = getattr(bv, "wall_time_s", None) if not isinstance(bv, dict) else bv.get("wall_time_s")
+    budget: dict[str, Any] = {}
+    if isinstance(tokens, int):
+        budget["tokens"] = tokens
+    if isinstance(tool_calls, int):
+        budget["tool_calls"] = tool_calls
+    if isinstance(wall, (int, float)) and math.isfinite(wall):
+        budget["wall_time_s"] = float(wall)
+    if budget:
+        row["budget"] = budget
 
 
 def build_insights(rows: list[dict[str, Any]]) -> list[str]:

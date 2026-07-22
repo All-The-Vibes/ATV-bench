@@ -6,6 +6,9 @@ requires-python = ">=3.11"
 dependencies = [
   "typer>=0.12",
   "jsonschema>=4.0",
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "filelock>=3.12",
 ]
 
 [project.optional-dependencies]
@@ -18,7 +21,21 @@ dev = ["pytest>=8.0", "playwright>=1.40", "pyyaml>=6.0"]
 #       flask jinja2 markupsafe scipy unidiff trueskill cdifflib typer zstandard
 # `run` (host-subprocess harness-vs-harness) requires this extra + Docker; the
 # fingerprint / submit / board / play surfaces do not.
-run = ["codeclash"]
+run = [
+  "codeclash @ git+https://github.com/CodeClash-ai/CodeClash@f0694c64ecf6abfca2bc867bad2de9333fef5be8",
+  "mini-swe-agent>=2.4,<3",
+  "litellm<1.80",
+  "python-dotenv",
+  "ghapi",
+  "flask",
+  "jinja2",
+  "markupsafe",
+  "unidiff",
+  "trueskill",
+  "cdifflib",
+  "typer",
+  "zstandard",
+]
 
 [project.scripts]
 atv-bench = "atv_bench.cli:app"
@@ -26,6 +43,11 @@ atv-bench = "atv_bench.cli:app"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+# The `run` extra pins CodeClash by git URL (it is a research repo never published
+# to PyPI). Hatchling requires this opt-in to allow such direct references.
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/atv_bench"]
@@ -41,4 +63,6 @@ markers = [
   "spike: end-to-end spike tests that invoke real CLIs (may be slow / need auth)",
   "live: requires live CLI auth and network",
   "integration: gated tests needing Docker/containers/secrets (not run on every push)",
+  "e2e: full harness-vs-harness end-to-end runs (needs vendored CodeClash + Playwright)",
+  "drift: pins against the vendored CodeClash internal API surface at CODECLASH_PIN",
 ]
