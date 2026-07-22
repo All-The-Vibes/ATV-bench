@@ -133,3 +133,46 @@ def test_rate_without_enforce_gates_publishes_thin_corpus(tmp_path):
     r = runner.invoke(app, ["rate", "--store", str(store)])  # no --enforce-gates
     assert r.exit_code == 0, r.output
     assert (store / "ratings.json").exists()
+
+
+def test_rating_row_from_match_schema_v2_fail_closed():
+    """_rating_row_from_match aligns with the fixed seam: a missing/None winner is NOT a
+    silent draw (returns None, unrateable), identical-harness self-play is rejected, and only
+    an explicit draw/tie scores 0.5."""
+    from atv_bench.cli import _rating_row_from_match
+
+    base = {"players": [{"harness": "claude-code", "model": "sonnet"},
+                        {"harness": "bare:claude-code", "model": "sonnet"}]}
+    # explicit draw -> 0.5
+    assert _rating_row_from_match({**base, "outcome": {"winner": "draw"}})["score_a"] == 0.5
+    # winner A / B
+    assert _rating_row_from_match({**base, "outcome": {"winner": "claude-code"}})["score_a"] == 1.0
+    assert _rating_row_from_match({**base, "outcome": {"winner": "bare:claude-code"}})["score_a"] == 0.0
+    # missing/None winner -> unrateable (None), NOT a fabricated draw
+    assert _rating_row_from_match({**base, "outcome": {}}) is None
+    assert _rating_row_from_match({**base, "outcome": {"winner": None}}) is None
+    # identical-harness self-play -> rejected (None)
+    selfplay = {"players": [{"harness": "claude-code", "model": "sonnet"},
+                            {"harness": "claude-code", "model": "sonnet"}],
+                "outcome": {"winner": "claude-code"}}
+    assert _rating_row_from_match(selfplay) is None
+
+
+def test_rate_enforce_gates_fails_closed_on_missing_nondeterminism(tmp_path):
+    """rate --enforce-gates must NOT fabricate referee_nondeterminism_rate. With no measured
+    value it is absent, so the gate fails closed on the missing signal (never a silent pass)."""
+    store = tmp_path / "corpus"
+    store.mkdir()
+    # A powered corpus (>=50 rows, >=5 per cell) so ONLY the missing nondeterminism signal
+    # can block — proving the gate is load-bearing, not eligible_n.
+    rows = []
+    for i in range(60):
+        rows.append({"player_a": "claude-code", "player_b": "bare:claude-code",
+                     "match_id": f"m{i}", "outcome": "a_wins",
+                     "harness_a": "claude-code", "harness_b": "bare:claude-code",
+                     "model_a": "sonnet", "model_b": "sonnet",
+                     "score_a": 1.0 if i % 2 else 0.0, "game": "lightcycles"})
+    (store / "matches.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    r = runner.invoke(app, ["rate", "--store", str(store), "--enforce-gates"])
+    assert r.exit_code != 0
+    assert "referee_nondeterminism_rate" in r.output

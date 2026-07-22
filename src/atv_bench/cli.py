@@ -1273,9 +1273,10 @@ def rate(
         row = _rating_row_from_match(m)
         if row is not None:
             rows.append(row)
-        else:
-            # a record that cannot yield a scored head-to-head is an infrastructure
-            # failure (crash/forfeit/malformed) — counted so the gate sees a real rate.
+        elif _is_infrastructure_failure(m):
+            # ONLY genuine crashes/forfeits/malformed records count toward the infra rate —
+            # NOT a valid-but-not-yet-scored record, which would poison the gate on a mixed
+            # corpus. A record that is neither rateable nor an explicit failure is ignored.
             infra_failures += 1
 
     if not rows:
@@ -1284,17 +1285,14 @@ def rate(
 
     if enforce_gates:
         from atv_bench.pipeline import corpus_stats, gate_corpus
-        # Measure the infra-error rate over ALL records (scored + failed), not just the
-        # scored rows — the failures are exactly the records that did not score. The
-        # referee-nondeterminism rate is not measurable from a single corpus pass, so it is
-        # supplied as 0.0 ONLY when there is no evidence of nondeterminism to surface here;
-        # a dedicated re-run-agreement probe (out of scope for `rate`) would measure it.
+        # Measure the infra-error rate over ALL records, counting only genuine failures. The
+        # referee-nondeterminism rate is NOT measurable from a single corpus pass (it needs a
+        # re-run-agreement probe), so it is deliberately NOT supplied here — corpus_stats
+        # omits it and evaluate_quality_gates FAILS CLOSED on the missing signal. Publishing a
+        # gated board therefore requires a real nondeterminism measurement, not a fabricated
+        # 0.0 (a fabricated clean value would silently disable that gate).
         infra_rate = (infra_failures / total_records) if total_records else 1.0
-        stats = corpus_stats(
-            rows,
-            infrastructure_error_rate=infra_rate,
-            referee_nondeterminism_rate=0.0,
-        )
+        stats = corpus_stats(rows, infrastructure_error_rate=infra_rate)
         report = gate_corpus(stats)
         if not report.passed:
             typer.echo("Refusing to publish: corpus failed quality gates (G5/G6):")
@@ -1448,11 +1446,37 @@ def lift(
         typer.echo(json.dumps(doc, indent=2))
 
 
+def _is_infrastructure_failure(m: dict) -> bool:
+    """True if a match record is a genuine infrastructure failure (crash/forfeit/malformed).
+
+    Used by `rate --enforce-gates` to measure the infra-error rate HONESTLY: a record that is
+    simply not-yet-scored is NOT an infra failure (counting it would poison the gate on a
+    mixed corpus). We recognize the explicit failure shapes the pipeline emits: a CRASH
+    record (`loser`/`opponent` keys, no players), or a schema-v2 outcome whose winner is a
+    crash/forfeit token.
+    """
+    if m.get("crashed") or m.get("infrastructure_error"):
+        return True
+    # CRASH-artifact shape (publish.py): {loser, opponent, match_id}, no scored head-to-head.
+    if "loser" in m and "opponent" in m and "players" not in m:
+        return True
+    outcome = m.get("outcome")
+    if isinstance(outcome, dict):
+        winner = str(outcome.get("winner", "")).lower()
+        if any(tok in winner for tok in ("crash", "forfeit", "error")):
+            return True
+    return False
+
+
 def _rating_row_from_match(m: dict) -> dict | None:
     """Extract (harness_a, harness_b, model_a, model_b, score_a) from a match record.
 
     Returns None when the record cannot supply a two-player scored head-to-head. Supports
     both the flat rating-row shape and the schema-v2 match record (players[] + outcome).
+
+    Fails closed like runner.match_record_to_rating_row: a MISSING or None winner is NOT a
+    silent draw (returns None — unrateable), and two players sharing a harness key are
+    rejected (ambiguous attribution). Only an explicit ``draw``/``tie`` scores 0.5.
     """
     if all(k in m for k in ("harness_a", "harness_b", "model_a", "model_b", "score_a")):
         return m
@@ -1460,13 +1484,17 @@ def _rating_row_from_match(m: dict) -> dict | None:
     if not players or len(players) < 2:
         return None
     pa, pb = players[0], players[1]
+    if pa.get("harness") and pa.get("harness") == pb.get("harness"):
+        return None  # identical-harness self-play: winner attribution is ambiguous
     outcome = m.get("outcome") or {}
+    if "winner" not in outcome or outcome.get("winner") is None:
+        return None  # unscored/malformed — never a fabricated draw
     winner = outcome.get("winner")
     if winner in ("a", "A", 0, pa.get("harness")):
         score_a = 1.0
     elif winner in ("b", "B", 1, pb.get("harness")):
         score_a = 0.0
-    elif winner in ("draw", "tie", None):
+    elif winner in ("draw", "tie"):
         score_a = 0.5
     else:
         return None

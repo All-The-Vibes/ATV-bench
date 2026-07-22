@@ -55,11 +55,16 @@ def test_resolve_unknown_inner_errors():
 
 
 def test_bare_env_is_actually_bare(monkeypatch):
-    """The wrapper runs its inner adapter under a manifest_is_bare env (AC2.4).
+    """The wrapper runs its inner adapter under a genuinely-bare HOME (AC2.4).
 
-    We stub the inner adapter's run to capture the env it was handed and assert the bare
-    predicate holds for a fingerprint of that HOME.
+    We stub the inner adapter to capture the env it was handed, then REALLY fingerprint that
+    HOME directory (not a hand-written dict) and assert manifest_is_bare holds — i.e. probing
+    the stripped root yields empty scaffolding across every field.
     """
+    from pathlib import Path
+
+    from atv_bench.runner import fingerprint_harness_repo
+
     captured = {}
 
     class _Spy:
@@ -78,12 +83,12 @@ def test_bare_env_is_actually_bare(monkeypatch):
     assert bare.run(req) == "ran"
     env = captured["env"]
     assert env is not None
-    # A bare HOME has no harness scaffolding — the published predicate must hold.
     home = env.get("HOME")
     assert home is not None
-    # manifest_is_bare takes a fingerprint manifest; an empty-scaffolding manifest is bare.
-    empty_manifest = {"skills": [], "mcps": [], "plugins": [], "agents": [], "nested_skills": []}
-    assert manifest_is_bare(empty_manifest) is True
+    # REAL probe of the captured bare HOME: fingerprint the actual directory the wrapper
+    # seeded. A stripped HOME has no skills/mcps/plugins/agents, so the probed manifest is bare.
+    _sha, manifest = fingerprint_harness_repo("claude-code", Path(home))
+    assert manifest_is_bare(manifest) is True, f"bare HOME probed non-bare manifest: {manifest}"
 
 
 def test_bare_registered_in_composable_registry():
