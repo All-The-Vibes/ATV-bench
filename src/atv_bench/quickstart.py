@@ -24,7 +24,7 @@ from atv_bench.gates import QualityGateReport
 from atv_bench.lift import LiftResult
 from atv_bench.pergame import GameScore, overall_lift, per_game_scores
 from atv_bench.pipeline import corpus_stats, gate_corpus
-from atv_bench.runner import append_rating_row, load_rating_rows
+from atv_bench.runner import append_rating_row
 from atv_bench.scheduler import build_paired_schedule
 
 # The executor contract: run ONE match and return a rating-corpus row (or raise).
@@ -157,6 +157,7 @@ def run_quickstart_eval(
 
     failures: list[dict[str, Any]] = []
     n_attempted = 0
+    run_rows: list[dict[str, Any]] = []  # ONLY this run's rows — scores must not blend prior runs
     for i, match in enumerate(plan):
         n_attempted += 1
         if progress:
@@ -173,14 +174,18 @@ def run_quickstart_eval(
                 progress({"phase": "match_failed", "index": i, "game": match.game,
                           "error": str(exc)})
             continue
-        # persist to the rating corpus (lift/per-game) and the ELO store (board render)
+        run_rows.append(row)
+        # persist to the rating corpus (history/board) and the ELO store (board render)
         append_rating_row(corpus_path, row)
         try:
             league.append_match(_rating_row_to_elo_record(row))
         except Exception:
             pass  # board is best-effort; the scientific corpus is the source of truth
 
-    rows = load_rating_rows(corpus_path)
+    # Score ONLY this run's rows — the on-disk corpus may hold prior runs (the store is reusable
+    # and the board renders the full history), but the reported per-game/overall/gate scores and
+    # the infra-error rate must all describe THIS invocation, not a blend of accumulated runs.
+    rows = run_rows
 
     # --- scientific scores ---
     per_game = per_game_scores(rows, harness=harness, baseline=baseline, seed=seed)

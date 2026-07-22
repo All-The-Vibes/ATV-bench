@@ -206,3 +206,21 @@ def test_seat_bias_not_flagged_as_referee_nondeterminism(tmp_path):
     assert res.gate_report is not None
     nondet_fail = any("nondeterminism" in f.get("gate", "") for f in res.gate_report.failures)
     assert not nondet_fail, res.gate_report.to_dict()
+
+
+def test_second_run_to_same_store_scores_only_its_own_rows(tmp_path):
+    """Re-running quickstart against the SAME store must score only the CURRENT run — prior
+    runs accumulated in the corpus must NOT blend into per-game/overall/gate scores."""
+    store = tmp_path / "league"
+    ex1 = _stub_executor(plays={"lightcycles": 1.0})   # run 1: harness wins all
+    r1 = run_quickstart_eval(harness="claude-code", model="sonnet", games=["lightcycles"],
+                             repeats=5, store=store, execute=ex1)
+    assert r1.n_matches == 5
+    assert next(g for g in r1.per_game if g.game == "lightcycles").win_rate == 1.0
+
+    ex2 = _stub_executor(plays={"lightcycles": 0.0})   # run 2 (SAME store): harness loses all
+    r2 = run_quickstart_eval(harness="claude-code", model="sonnet", games=["lightcycles"],
+                             repeats=5, store=store, execute=ex2)
+    # r2 reflects ONLY run 2 (5 matches, 0.0 win-rate) — NOT the blended 10 matches / 0.5.
+    assert r2.n_matches == 5, "second run must not count run-1 rows"
+    assert next(g for g in r2.per_game if g.game == "lightcycles").win_rate == 0.0
