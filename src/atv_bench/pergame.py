@@ -97,8 +97,12 @@ def overall_lift(
 ) -> LiftResult | None:
     """Pooled harness-over-bare lift with a clustered bootstrap CI (games are the clusters).
 
-    Returns None when the contrast is undefined (the harness or its bare baseline never played),
-    rather than a fabricated number.
+    Returns None ONLY when the contrast is genuinely undefined — the harness or its bare
+    baseline never played, so there is no baseline to subtract. When the contrast DOES exist but
+    has too few game-clusters for a clustered CI (e.g. a single-game quickstart), we fall back to
+    the i.i.d.-row bootstrap so the caller still gets a real lift point + CI rather than a
+    misleading "baseline never ran". A genuinely unrateable contrast (no baseline on the base
+    model) still returns None.
     """
     contrast = [
         r for r in rows
@@ -108,9 +112,17 @@ def overall_lift(
         return None
     matches = matches_from_records(list(contrast))
     cluster_ids = [str(r.get("game", "")) for r in contrast]
+    n_game_clusters = len(set(cluster_ids))
     try:
-        result = compute_lift(matches, {harness: baseline}, seed=seed, n_boot=n_boot,
-                              cluster_ids=cluster_ids)
+        if n_game_clusters >= 2:
+            result = compute_lift(matches, {harness: baseline}, seed=seed, n_boot=n_boot,
+                                  cluster_ids=cluster_ids)
+        else:
+            # one game => one cluster: a clustered CI is undefined, but the i.i.d. bootstrap is
+            # the correct estimator here (a single game's matches ARE the independent unit).
+            result = compute_lift(matches, {harness: baseline}, seed=seed, n_boot=n_boot)
     except LiftError:
+        # the contrast exists but the baseline was never run on the harness's base model, so
+        # theta(bare) is undefined — genuinely unrateable.
         return None
     return result.get(harness)

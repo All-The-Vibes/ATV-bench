@@ -129,7 +129,6 @@ def run_quickstart_eval(
     repeats: int = 1,
     store: Path,
     execute: MatchExecutor,
-    homes: dict[str, Path | None] | None = None,
     seed: int = 0,
     n_boot: int = 500,
     build_board: bool = True,

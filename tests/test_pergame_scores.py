@@ -76,3 +76,13 @@ def test_overall_lift_none_when_no_baseline():
     rows = [{"harness_a": "claude-code", "harness_b": "copilot-cli", "model_a": "sonnet",
              "model_b": "sonnet", "score_a": 1.0, "game": "lightcycles", "match_id": "x"}]
     assert overall_lift(rows, harness="claude-code", baseline="bare:claude-code") is None
+
+
+def test_overall_lift_single_game_still_computes():
+    """A single-game contrast (one cluster) must NOT be misreported as 'no baseline' — it falls
+    back to the i.i.d. bootstrap and returns a real lift with a CI."""
+    rows = _rows("claude-code", "bare:claude-code", "sonnet", "lightcycles", 8, 2)
+    res = overall_lift(rows, harness="claude-code", baseline="bare:claude-code")
+    assert res is not None, "single-game contrast with a real baseline must compute a lift"
+    assert res.lift == res.lift  # not NaN
+    assert res.lo <= res.lift <= res.hi

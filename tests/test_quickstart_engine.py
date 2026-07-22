@@ -163,3 +163,21 @@ def test_engine_credible_on_powered_clean_corpus(tmp_path):
     )
     assert res.gate_report is not None
     assert res.credible is True, res.gate_report.to_dict()
+
+
+def test_scorecard_escapes_malicious_names(tmp_path):
+    """The scorecard HTML-escapes dynamic values (harness/model/game), so a crafted name can't
+    inject markup into the rendered leaderboard page."""
+    def execute(*, harness_a, harness_b, game, model, seed, index):
+        return {"harness_a": harness_a, "harness_b": harness_b, "model_a": model,
+                "model_b": model, "score_a": 1.0 if harness_a == "claude-code" else 0.0,
+                "game": game, "match_id": f"{game}-{index}"}
+    res = run_quickstart_eval(
+        harness="claude-code", model="<script>alert(1)</script>",
+        games=["<img src=x onerror=alert(1)>"], repeats=5,
+        store=tmp_path / "league", execute=execute,
+    )
+    body = (tmp_path / "league" / "scorecard.html").read_text()
+    assert "<script>alert(1)</script>" not in body
+    assert "<img src=x onerror" not in body
+    assert "&lt;script&gt;" in body  # escaped form present
