@@ -460,10 +460,11 @@ def parse_codex_model(jsonl: str) -> str:
 def _codex_config_model(env: Optional[dict] = None) -> str | None:
     """The default model from codex's ``config.toml`` (top-level ``model`` key), or None.
 
-    Codex resolves its config dir as ``$CODEX_HOME`` else ``$HOME/.codex``. We check both, plus
-    ``$HOME/config.toml`` (the location ``isolation.isolated_home`` seeds into for a cloned
-    harness HOME), so the default resolves in the live isolated path too. Honors the run env so a
-    bare/isolated HOME resolves the right (or absent) config.
+    Reads ONLY the locations the real codex CLI itself reads: ``$CODEX_HOME/config.toml`` else
+    ``$HOME/.codex/config.toml``. We deliberately do NOT read ``$HOME/config.toml`` — even though
+    ``isolation.isolated_home`` copies a seeded ``~/.codex`` root to that path, codex does not read
+    it there, so reporting it would fabricate a model the real process never used. Honors the run
+    env so a bare/isolated HOME resolves the right (or absent) config.
     """
     import os as _os
 
@@ -472,9 +473,7 @@ def _codex_config_model(env: Optional[dict] = None) -> str | None:
     if env.get("CODEX_HOME"):
         candidates.append(Path(env["CODEX_HOME"]) / "config.toml")
     if env.get("HOME"):
-        home = Path(env["HOME"])
-        candidates.append(home / ".codex" / "config.toml")
-        candidates.append(home / "config.toml")
+        candidates.append(Path(env["HOME"]) / ".codex" / "config.toml")
     for cfg in candidates:
         if not cfg.exists():
             continue

@@ -177,10 +177,11 @@ def test_codex_config_model_resolves_isolated_home_locations(tmp_path):
     (a / ".codex" / "config.toml").write_text('model = "gpt-5.5"\n')
     assert _codex_config_model({"HOME": str(a)}) == "gpt-5.5"
 
-    # $HOME/config.toml (the isolated_home seed location)
+    # $HOME/config.toml is NOT a location codex reads — must be ignored (never fabricate a model
+    # the real codex process would not use).
     b = tmp_path / "b"; b.mkdir()
     (b / "config.toml").write_text('model = "o4-mini"\n')
-    assert _codex_config_model({"HOME": str(b)}) == "o4-mini"
+    assert _codex_config_model({"HOME": str(b)}) is None
 
     # $CODEX_HOME/config.toml (explicit override)
     c = tmp_path / "c"; c.mkdir()
@@ -207,9 +208,9 @@ def test_codex_config_no_host_leak_via_isolated_home(tmp_path, monkeypatch):
         assert "CODEX_HOME" not in env, "isolated_home leaked host CODEX_HOME"
         assert _codex_config_model(env) is None  # stripped home has no config, host is not read
 
-    # a SEEDED isolated HOME must resolve ITS OWN config, not the host's
+    # a SEEDED isolated HOME whose config root already contains a .codex/ subdir DOES resolve
+    # (the .codex/config.toml lands at $HOME/.codex/config.toml where codex actually reads).
     seed = tmp_path / "seed"; (seed / ".codex").mkdir(parents=True)
     (seed / ".codex" / "config.toml").write_text('model = "seed-model"\n')
     with isolated_home(str(seed)) as env:
-        # isolated_home copies seed/* into the new HOME root, so .codex/config.toml lands there
         assert _codex_config_model(env) == "seed-model"
