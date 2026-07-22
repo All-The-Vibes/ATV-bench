@@ -226,3 +226,14 @@ def test_rating_row_blank_harness_unrateable():
         {"players": [{"harness": "  ", "model": "m"}, {"harness": "  ", "model": "m"}],
          "outcome": {"winner": "a"}}
     ) is None
+
+
+def test_rating_row_from_match_rejects_non_two_player():
+    """A record with !=2 players is not a head-to-head — unrateable (no silent truncation)."""
+    from atv_bench.cli import _rating_row_from_match
+
+    three = {"players": [{"harness": "a", "model": "m"}, {"harness": "b", "model": "m"},
+                         {"harness": "c", "model": "m"}], "outcome": {"winner": "a"}}
+    assert _rating_row_from_match(three) is None
+    one = {"players": [{"harness": "a", "model": "m"}], "outcome": {"winner": "a"}}
+    assert _rating_row_from_match(one) is None

@@ -1486,8 +1486,8 @@ def _rating_row_from_match(m: dict) -> dict | None:
             return None
         return m
     players = m.get("players")
-    if not players or len(players) < 2:
-        return None
+    if not players or len(players) != 2:
+        return None  # head-to-head contract: exactly two players, else unrateable
     pa, pb = players[0], players[1]
     ha, hb = str(pa.get("harness") or "").strip(), str(pb.get("harness") or "").strip()
     if not ha or not hb or ha == hb:
