@@ -218,3 +218,11 @@ def test_rating_row_blank_harness_unrateable():
         {"players": [{"harness": "", "model": "m"}, {"harness": "", "model": "m"}],
          "outcome": {"winner": "a"}}
     ) is None
+    # whitespace-only harness ids are also unrateable (stripped)
+    assert _rating_row_from_match(
+        {"harness_a": "   ", "harness_b": "   ", "model_a": "m", "model_b": "m", "score_a": 1.0}
+    ) is None
+    assert _rating_row_from_match(
+        {"players": [{"harness": "  ", "model": "m"}, {"harness": "  ", "model": "m"}],
+         "outcome": {"winner": "a"}}
+    ) is None

@@ -1481,7 +1481,7 @@ def _rating_row_from_match(m: dict) -> dict | None:
     if all(k in m for k in ("harness_a", "harness_b", "model_a", "model_b", "score_a")):
         # flat rating row: reject a missing/blank harness id and identical-harness self-play
         # (both make attribution meaningless), consistent with the schema-v2 path below.
-        ha, hb = m.get("harness_a"), m.get("harness_b")
+        ha, hb = str(m.get("harness_a") or "").strip(), str(m.get("harness_b") or "").strip()
         if not ha or not hb or ha == hb:
             return None
         return m
@@ -1489,7 +1489,7 @@ def _rating_row_from_match(m: dict) -> dict | None:
     if not players or len(players) < 2:
         return None
     pa, pb = players[0], players[1]
-    ha, hb = pa.get("harness"), pb.get("harness")
+    ha, hb = str(pa.get("harness") or "").strip(), str(pb.get("harness") or "").strip()
     if not ha or not hb or ha == hb:
         return None  # missing/blank harness id or identical-harness self-play: unrateable
     outcome = m.get("outcome") or {}
