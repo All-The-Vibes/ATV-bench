@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import pytest
 
+from pathlib import Path
+
 from atv_bench.quickstart import QuickstartResult, run_quickstart_eval
 
 
@@ -128,3 +130,36 @@ def test_engine_deterministic_under_seed(tmp_path):
                              store=tmp_path / "b", execute=ex2)
     # same plan order (deterministic schedule under seed)
     assert [c["game"] for c in ex1.calls] == [c["game"] for c in ex2.calls]
+    # AND identical scientific output under the same seed (not just plan order)
+    assert [g.win_rate for g in sorted(r1.per_game, key=lambda x: x.game)] == \
+           [g.win_rate for g in sorted(r2.per_game, key=lambda x: x.game)]
+    if r1.overall is not None and r2.overall is not None:
+        assert r1.overall.lift == r2.overall.lift
+        assert (r1.overall.lo, r1.overall.hi) == (r2.overall.lo, r2.overall.hi)
+
+
+def test_engine_relative_store_still_links(tmp_path, monkeypatch):
+    """A RELATIVE --store default must still produce a working scorecard URL (as_uri needs an
+    absolute path; the engine resolves it). Regression guard for the headline link promise."""
+    monkeypatch.chdir(tmp_path)
+    ex = _stub_executor(plays={"lightcycles": 1.0})
+    res = run_quickstart_eval(
+        harness="claude-code", model="sonnet", games=["lightcycles"], repeats=5,
+        store=Path("./quickstart-league"), execute=ex,  # RELATIVE
+    )
+    assert res.board_url is not None and res.board_url.startswith("file:///")
+    assert res.board_url.endswith("scorecard.html")
+
+
+def test_engine_credible_on_powered_clean_corpus(tmp_path):
+    """A powered corpus with repeats (referee agreement observed) and no failures CAN pass the
+    gates — the CREDIBLE path is reachable, not dead."""
+    # 3 games x 20 repeats = 60 eligible, >=5 per cell, 0 infra failures, referee deterministic.
+    ex = _stub_executor(plays={"lightcycles": 1.0, "chess": 0.0, "ants": 1.0})
+    res = run_quickstart_eval(
+        harness="claude-code", model="sonnet",
+        games=["lightcycles", "chess", "ants"], repeats=20,
+        store=tmp_path / "league", execute=ex,
+    )
+    assert res.gate_report is not None
+    assert res.credible is True, res.gate_report.to_dict()

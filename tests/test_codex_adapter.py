@@ -93,6 +93,8 @@ def test_codex_run_builds_exec_command(monkeypatch):
     assert "improve the bot" in cmd
     assert "-m" in cmd and "o4-mini" in cmd
     assert "--json" in cmd
+    # the security-critical non-interactive flag must be present (pins it against silent regress)
+    assert "--dangerously-bypass-approvals-and-sandbox" in cmd
 
 
 def test_codex_run_auto_model_omits_flag(monkeypatch):
@@ -108,3 +110,15 @@ def test_codex_run_auto_model_omits_flag(monkeypatch):
     monkeypatch.setattr("atv_bench.adapters.contract.git_diff", lambda p: "")
     CodexCliAdapter().run(AdapterRequest(repo_path=".", goal="x", model="auto"))
     assert "-m" not in captured["cmd"]
+
+
+def test_parse_codex_model_skips_auto_placeholder():
+    """A leading 'auto'/'default' echo must NOT be reported as the model — only the RESOLVED
+    id counts (fail-closed on the placeholder, keep scanning)."""
+    jsonl = "\n".join([
+        json.dumps({"type": "config", "model": "auto"}),          # placeholder echo first
+        json.dumps({"type": "session.created", "model": "gpt-5-codex"}),  # real resolved model
+    ])
+    assert parse_codex_model(jsonl) == "gpt-5-codex"
+    # only placeholders present -> unknown, never 'auto'
+    assert parse_codex_model(json.dumps({"model": "auto"})) == "unknown"

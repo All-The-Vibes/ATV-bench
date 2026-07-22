@@ -72,6 +72,40 @@ class QuickstartResult:
         }
 
 
+def _row_harness_score(row: dict[str, Any], harness: str) -> float | None:
+    """The harness's score in a row (orientation-corrected), or None if not a participant."""
+    sa = float(row.get("score_a", 0.5))
+    if row.get("harness_a") == harness:
+        return sa
+    if row.get("harness_b") == harness:
+        return 1.0 - sa
+    return None
+
+
+def _measure_referee_nondeterminism(rows, harness) -> float | None:
+    """Observed referee-nondeterminism rate from REPEATED matchups.
+
+    Groups rows by their (unordered pair, game) cell. For any cell with >=2 trials, the trusted
+    deterministic referee should return the same harness-score every time; the fraction of
+    multi-trial cells whose harness-scores DISAGREE is the measured nondeterminism rate. Returns
+    None when there is no repeated cell to measure (nothing observed → the gate fails closed on
+    the absent signal rather than fabricating a clean 0.0).
+    """
+    from collections import defaultdict
+
+    cells: dict[tuple, list[float]] = defaultdict(list)
+    for r in rows:
+        s = _row_harness_score(r, harness)
+        if s is not None:
+            pair = tuple(sorted((str(r.get("harness_a")), str(r.get("harness_b")))))
+            cells[(pair, str(r.get("game", "")))].append(s)
+    multi = [scores for scores in cells.values() if len(scores) >= 2]
+    if not multi:
+        return None
+    disagreeing = sum(1 for scores in multi if len(set(scores)) > 1)
+    return disagreeing / len(multi)
+
+
 def _rating_row_to_elo_record(row: dict[str, Any]) -> dict[str, Any]:
     """Map a rating row (harness_a/score_a) to the ELO store's match record for the board."""
     score_a = float(row.get("score_a", 0.5))
@@ -103,7 +137,10 @@ def run_quickstart_eval(
 ) -> QuickstartResult:
     """Run the full harness-vs-bare eval over ``games`` and score it. See module docstring."""
     baseline = f"{BARE_PREFIX}{harness}"
-    store = Path(store)
+    # Resolve to an absolute path: the scorecard link uses Path.as_uri(), which REQUIRES an
+    # absolute path (a relative default like ./quickstart-league would otherwise raise and the
+    # promised leaderboard link would silently vanish).
+    store = Path(store).resolve()
     store.mkdir(parents=True, exist_ok=True)
     corpus_path = store / "rating_matches.jsonl"
 
@@ -143,13 +180,24 @@ def run_quickstart_eval(
     per_game = per_game_scores(rows, harness=harness, baseline=baseline, seed=seed)
     overall = overall_lift(rows, harness=harness, baseline=baseline, seed=seed, n_boot=n_boot)
 
-    # --- credibility gate (fail closed): measure infra-error rate over ALL attempts ---
+    # --- credibility gate (fail closed) ---
+    # infra-error rate: genuine match failures over all attempts.
     infra_rate = (len(failures) / n_attempted) if n_attempted else 1.0
-    stats = corpus_stats(rows, infrastructure_error_rate=infra_rate)
+    # referee-nondeterminism rate: MEASURED empirically from repeats. The trusted referees are
+    # deterministic pure engines by design, so repeated (seat-a, seat-b, game) cells should
+    # agree; the fraction of multi-trial cells whose harness-scores disagree is the observed
+    # nondeterminism rate. With no repeats there is nothing to measure, so the signal is left
+    # ABSENT and the gate fails closed on it (never a fabricated clean 0.0).
+    nondet_rate = _measure_referee_nondeterminism(rows, harness)
+    stats = corpus_stats(rows, infrastructure_error_rate=infra_rate,
+                         referee_nondeterminism_rate=nondet_rate)
     gate_report = gate_corpus(stats)
     credible = gate_report.passed
 
     # --- local leaderboard link ---
+    # Build the ELO board (best-effort) AND the self-contained scorecard, THEN construct the
+    # result and persist it once — so quickstart_result.json and the returned object agree
+    # (board_url is finalized before the artifact is written).
     board_path: Path | None = None
     board_url: str | None = None
     if build_board:
@@ -159,25 +207,27 @@ def run_quickstart_eval(
         except Exception:
             board_path = None
 
-    # persist the machine-readable result beside the board
     result = QuickstartResult(
         harness=harness, baseline=baseline, model=model, games=list(games),
         n_matches=len(rows), per_game=per_game, overall=overall,
         gate_report=gate_report, credible=credible, failures=failures,
         board_path=board_path, board_url=board_url, corpus_path=corpus_path,
     )
-    (store / "quickstart_result.json").write_text(json.dumps(result.to_dict(), indent=2))
-    # A self-contained scorecard page IS the leaderboard link — it renders the actual per-game
-    # + overall scores (the ELO board needs published submissions the local run doesn't have).
+
+    # The self-contained scorecard page IS the leaderboard link — it renders the actual per-game
+    # + overall scores (the ELO board needs published submissions a local run doesn't have).
     if build_board:
         try:
             scorecard = store / "scorecard.html"
             scorecard.write_text(_render_scorecard_html(result))
-            result.board_url = scorecard.as_uri()
+            result.board_url = scorecard.as_uri()  # store is absolute (resolved above)
             if result.board_path is None:
                 result.board_path = store
-        except Exception:
-            pass
+        except Exception as exc:  # surface, don't swallow — the link is a headline promise
+            if progress:
+                progress({"phase": "scorecard_failed", "error": f"{type(exc).__name__}: {exc}"})
+
+    (store / "quickstart_result.json").write_text(json.dumps(result.to_dict(), indent=2))
     return result
 
 

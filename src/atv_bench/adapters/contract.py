@@ -438,25 +438,38 @@ def parse_codex_model(jsonl: str) -> str:
             continue
         if not isinstance(ev, dict):
             continue
-        m = ev.get("model")
-        if isinstance(m, str) and m:
+
+        def _resolved(v: Any) -> str | None:
+            # a real resolved model id, never an echoed placeholder like "auto"/"default".
+            return v if (isinstance(v, str) and v and v.strip().lower() not in
+                         {"auto", "default", "unknown"}) else None
+
+        m = _resolved(ev.get("model"))
+        if m:
             return m
         # nested shapes (defensive): {"session": {"model": ...}} / {"data": {"model": ...}}
         for k in ("session", "data", "config"):
             sub = ev.get(k)
-            if isinstance(sub, dict) and isinstance(sub.get("model"), str) and sub["model"]:
-                return sub["model"]
+            if isinstance(sub, dict):
+                m = _resolved(sub.get("model"))
+                if m:
+                    return m
     return "unknown"
 
 
 class CodexCliAdapter(HarnessAdapter):
     """Drives OpenAI Codex CLI headless via `codex exec <goal> -m <model> --json`.
 
-    Auth (headless): whatever `codex login` established, or OPENAI_API_KEY. The arena already
-    provides the containment boundary (`--network none`, read-only rootfs, non-root, cap-drop),
-    so we pass ``--dangerously-bypass-approvals-and-sandbox`` to run non-interactively INSIDE
-    that trusted sandbox — Codex's own sandbox would otherwise block the in-arena edits, and
-    the outer arena is the real security boundary (mirrors how claude/copilot run headless).
+    Auth (headless): whatever `codex login` established, or OPENAI_API_KEY. We pass
+    ``--dangerously-bypass-approvals-and-sandbox`` to run non-interactively — Codex's own
+    interactive approval + self-sandbox would otherwise block the in-arena edits. This is safe
+    because the OUTER boundary is the real one: the adapter subprocess runs under the Section-2.5
+    containment (`_run_harness_subprocess` → rlimits: RLIMIT_AS/NPROC/CPU + timeout), and in a
+    league match the whole harness runs inside the arena Docker sandbox (non-root, read-only
+    rootfs, cap-drop). NOTE: like the claude/copilot adapters, an LLM adapter runs with egress
+    PERMITTED (deny_egress defaults off — it must reach its model provider), so network is NOT
+    denied at this layer; the isolation here is resource caps + the outer Docker sandbox, not a
+    network cut. This mirrors claude's ``acceptEdits`` / copilot's ``--allow-all-tools`` posture.
 
     Model-tag integrity: the published model is parsed from Codex's own `--json` events
     (`parse_codex_model`), never the echoed `-m` input.

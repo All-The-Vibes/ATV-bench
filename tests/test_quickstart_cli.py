@@ -124,3 +124,20 @@ def test_quickstart_explicit_games(monkeypatch, tmp_path):
     runner.invoke(app, ["quickstart", "--harness", "claude-code", "--model", "m", "--yes",
                         "--game", "lightcycles", "--game", "chess", "--json"])
     assert set(cap["games"]) == {"lightcycles", "chess"}
+
+
+def test_quickstart_rejects_unknown_game(monkeypatch, tmp_path):
+    """An invalid --game is a USAGE error (exit 2), not an environment error (exit 5)."""
+    _patch(monkeypatch, tmp_path)
+    r = runner.invoke(app, ["quickstart", "--harness", "claude-code", "--model", "m", "--yes",
+                            "--game", "not-a-real-game", "--json"])
+    assert r.exit_code == 2, r.output
+    assert "not live" in r.output.lower() or "not-a-real-game" in r.output
+
+
+def test_quickstart_rejects_bad_repeats(monkeypatch, tmp_path):
+    """--repeats < 1 is a usage error."""
+    _patch(monkeypatch, tmp_path)
+    r = runner.invoke(app, ["quickstart", "--harness", "claude-code", "--model", "m", "--yes",
+                            "--repeats", "0", "--json"])
+    assert r.exit_code == 2, r.output

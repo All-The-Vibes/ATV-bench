@@ -1558,8 +1558,17 @@ def quickstart(
         typer.echo(f"Cannot start: {e}")
         raise typer.Exit(2)
 
-    # 3. resolve the game set.
+    # 3. resolve + validate the game set (fail with a USAGE error, not an env error later).
+    if repeats < 1:
+        typer.echo(f"--repeats must be >= 1, got {repeats}.")
+        raise typer.Exit(2)
+    live = set(live_keys())
     if game:
+        unknown = [g for g in game if g not in live]
+        if unknown:
+            typer.echo(f"Not live game(s): {', '.join(unknown)}. "
+                       f"Live: {', '.join(sorted(live))}.")
+            raise typer.Exit(2)
         games = list(game)
     elif all_games:
         games = live_keys()

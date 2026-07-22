@@ -11,8 +11,8 @@ Every rank, rating, or lift number that reaches a user MUST pass through
 Because there is exactly one renderer, a free-text rank leak becomes structurally
 impossible: any surface that wants to show a number routes through here.
 
-``harness_role`` reports whether a harness key is a real builder (a builder adapter exists)
-or ``fingerprint-only`` (probed but no adapter yet, e.g. codex).
+``harness_role`` reports whether a harness key is a real builder (an execution adapter is
+registered) or ``fingerprint-only`` (probed but not yet runnable — no registered adapter).
 """
 from __future__ import annotations
 
@@ -172,23 +172,15 @@ def render_ranking(data: Mapping[str, Any], *, verified: bool) -> RankingView | 
 # Harness role: builder vs fingerprint-only (CEO-5).
 # ---------------------------------------------------------------------------
 
-# A harness key maps to a builder adapter class name if one exists.
-_BUILDER_ADAPTERS = {
-    "claude-code": "ClaudeCodeAdapter",
-    "copilot-cli": "CopilotCliAdapter",
-}
-
-
 def harness_role(key: str) -> str:
-    """Return ``"builder"`` if a builder adapter exists for ``key``, else ``"fingerprint-only"``.
+    """Return ``"builder"`` if an execution adapter is registered for ``key``, else
+    ``"fingerprint-only"``.
 
-    codex is probed (fingerprint-only) but has no ``CodexAdapter`` builder yet, so it must
-    NOT be framed as a competitor. This helper reads the adapters module at call time so it
-    stays honest the moment a real adapter lands.
+    A fingerprint-only harness is probed but cannot compete (no way to build+run a bot), so it
+    must not be framed as a competitor. Derived from the live ADAPTERS registry at call time so
+    it never drifts from what is actually runnable — codex became a builder when CodexCliAdapter
+    registered.
     """
-    import atv_bench.adapters as adapters
+    from atv_bench.adapters.contract import ADAPTERS
 
-    adapter_name = _BUILDER_ADAPTERS.get(key)
-    if adapter_name and hasattr(adapters, adapter_name):
-        return "builder"
-    return "fingerprint-only"
+    return "builder" if key in ADAPTERS else "fingerprint-only"

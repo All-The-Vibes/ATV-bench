@@ -26,7 +26,11 @@ class GameScore:
     game: str
     n: int
     win_rate: float          # harness win fraction in this game (orientation-corrected)
-    lift: float | None       # per-game lift point estimate, or None if not computable
+    # per-game SIGNED ADVANTAGE in [-1, 1]: 2*win_rate - 1 (0 == parity with bare). This is a
+    # win-rate-derived point estimate for ONE arena, NOT the theta-difference lift that
+    # `overall_lift`/`lift.compute_lift` fit across the pooled corpus — a single game is one
+    # cluster and cannot carry a defensible bootstrap CI, so lo/hi stay None here.
+    lift: float | None
     lo: float | None
     hi: float | None
     insufficient: bool       # too few trials for a defensible score
