@@ -300,7 +300,7 @@ def build_pvp_config(
     players = [
         {
             "agent": harness,   # routed by monkeypatched get_agent -> HarnessPlayer
-            "name": name,
+            "name": _branch_safe_name(name),
             "config": {
                 "model": model,
                 "bot_file": spec.bot_file,
@@ -330,3 +330,21 @@ def _distinct_names(a: str, b: str) -> tuple[str, str]:
     if a != b:
         return (a, b)
     return (f"{a}-A", f"{b}-B")
+
+
+def _branch_safe_name(name: str) -> str:
+    """Make a player name safe to use as a git branch component.
+
+    CodeClash names a per-player git branch after the player, so a name with a ':' (e.g. the
+    bare control ``bare:claude-code``) or other git-refname-illegal characters (whitespace,
+    ``~^?*[]\\``) breaks branch creation (`fatal: '...' is not a valid branch name`). We map the
+    ``bare:`` prefix to ``bare-`` and replace any remaining unsafe character with ``-`` — the
+    ``agent`` routing key on the player dict is left untouched, so ``resolve_player_class`` still
+    sees the real ``bare:<inner>`` key. Distinctness is preserved (``:`` and ``-`` both map to
+    ``-`` but the two players differ in the inner/suffix portion).
+    """
+    import re
+
+    safe = name.replace("bare:", "bare-")
+    safe = re.sub(r"[:\s~^?*\[\]\\]+", "-", safe).strip("-")
+    return safe or "player"

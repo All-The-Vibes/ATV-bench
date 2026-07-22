@@ -289,10 +289,23 @@ def fingerprint_harness_repo(harness: str, home: Path | None) -> tuple[str, dict
 def summarize_tournament(raw: dict, cfg: RunConfig) -> tuple[dict, dict]:
     """Extract (outcome, player_models) from a CodeClash tournament metadata dict.
 
-    `outcome.winner` is the harness that won the most non-tie rounds (excluding the
-    identical-seed round 0). player_models maps harness → (model, source); Phase 1 uses
-    the requested model as the parsed tag (best-effort) pending gateway verification.
+    `outcome.winner` is the HARNESS KEY (e.g. ``bare:claude-code``) that won the most non-tie
+    rounds (excluding the identical-seed round 0). player_models maps harness → (model, source);
+    Phase 1 uses the requested model as the parsed tag (best-effort) pending gateway verification.
+
+    CodeClash reports the winner by the git-branch-safe PLAYER NAME (``bare-claude-code``), so we
+    map it back to the harness key via the same sanitization used to build the config — otherwise
+    the downstream rating row (which is keyed on the harness) would reject the winner as "neither
+    player".
     """
+    from atv_bench.config import _branch_safe_name
+
+    # sanitized-name -> harness-key, for BOTH seats (build_pvp_config sanitizes the name).
+    name_to_harness = {_branch_safe_name(h): h for h in (cfg.a, cfg.b)}
+
+    def _to_harness(w: str) -> str:
+        return name_to_harness.get(w, w)  # already a harness key / 'Tie' -> unchanged
+
     meta = raw.get("metadata", {})
     round_stats = meta.get("round_stats", {})
     decisive: list[str] = []
@@ -302,7 +315,7 @@ def summarize_tournament(raw: dict, cfg: RunConfig) -> tuple[dict, dict]:
                 continue  # identical-seed control round
             w = rs.get("winner")
             if w and w != "Tie":
-                decisive.append(w)
+                decisive.append(_to_harness(w))
     winner = max(set(decisive), key=decisive.count) if decisive else "tie"
     outcome = {"winner": winner, "round_winners": decisive,
                "round_stats": _compact_round_stats(round_stats)}
