@@ -131,6 +131,45 @@ Verify your machine is ready:
 atv-bench doctor          # python / harness config / gh / docker / CodeClash readiness, with fixes
 ```
 
+### One command: `atv-bench quickstart`
+
+The fastest path from install to a scored harness. It **infers your harness**, shows the
+**fingerprint** it would publish, lets you **arrow-key select a model** routable through your
+own auth (Claude Code / Copilot OAuth / Codex login), then runs **your harness AND the bare
+model** across the live games in the **isolated arena** — and prints an **overall
+harness-over-bare lift** (with a confidence interval), a **per-game breakdown**, a
+**credibility verdict**, and a **leaderboard link**.
+
+```bash
+atv-bench quickstart                       # detect harness → pick model → quick 3-game taste
+atv-bench quickstart --all                 # the full 20-live-game scientific eval
+atv-bench quickstart --model claude-sonnet-4-6 --yes --json   # headless / CI, machine-readable
+```
+
+What you get back (the science, per plan Section 5.5):
+
+```
+Evaluation: claude-code on claude-sonnet-4-6
+  OVERALL lift over bare model: +0.184  (95% CI 0.041...0.318)  -> harness helps
+  Credibility gate (G5/G6): PROVISIONAL (corpus too thin for a defensible rank)
+  Per-game (harness win-rate vs its bare control):
+    ants           #######... 70.0%  (n=10)
+    chess          #####..... 50.0%  (n=10)
+    lightcycles    ########.. 80.0%  (n=10)
+
+  Leaderboard: file:///…/quickstart-league/_board/index.html
+```
+
+- **Overall lift** `= θ(model+harness) − θ(model bare)` — the base-model term cancels, so it's a
+  *pure harness effect*, comparable across models. Reported with a clustered bootstrap CI.
+- **Per-game** win-rate vs the bare control; a game with too few trials is flagged
+  `[insufficient N]` rather than fabricating a number.
+- **Credibility gate** — the G5/G6 quality gates decide *credible* vs *provisional*; a thin or
+  noisy corpus is never published as a ranked number (fail-closed). Use `--all` (or higher
+  `--repeats`) for a corpus powered enough to pass.
+- **Runnable harnesses:** `claude-code`, `copilot-cli`, `codex`. A harness with no execution
+  adapter is fingerprinted but declined for matches (no faked runs).
+
 ### Real harness-vs-harness match (the spine)
 
 The core loop: **fingerprint** each harness → the **real harness CLI** (`claude`,

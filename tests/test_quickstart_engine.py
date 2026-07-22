@@ -76,9 +76,14 @@ def test_engine_builds_board_link(tmp_path):
         harness="claude-code", model="sonnet", games=["lightcycles"], repeats=5,
         store=tmp_path / "league", execute=ex,
     )
-    assert res.board_path is not None
-    assert (res.board_path / "index.html").exists()
-    assert (res.board_path / "leaderboard.json").exists()
+    # the scorecard IS the leaderboard link — a self-contained page with the real scores
+    assert res.board_url is not None and res.board_url.endswith("scorecard.html")
+    scorecard = tmp_path / "league" / "scorecard.html"
+    assert scorecard.exists()
+    body = scorecard.read_text()
+    assert "lightcycles" in body and "harness lift" in body.lower()
+    # machine-readable result also written
+    assert (tmp_path / "league" / "quickstart_result.json").exists()
 
 
 def test_engine_gate_verdict_provisional_on_thin_corpus(tmp_path):
