@@ -56,7 +56,7 @@ def test_harness_binary_for_codex():
 
 
 def test_parse_codex_model_from_jsonl():
-    """parse_codex_model reads the REAL model from codex's --json JSONL, never the input flag."""
+    """parse_codex_model reads a model IF a future codex --json emits one; never an input echo."""
     jsonl = "\n".join([
         json.dumps({"type": "session.created", "model": "o4-mini"}),
         json.dumps({"type": "item.completed", "item": {"type": "assistant_message", "text": "done"}}),
@@ -66,18 +66,61 @@ def test_parse_codex_model_from_jsonl():
     assert parse_codex_model("not json\n{}") == "unknown"
 
 
+# The REAL codex exec --json event shape (captured from codex-cli 0.130.0) — there is NO model
+# field anywhere in the stream. This fixture pins the real shape so tests reason about reality.
+REAL_CODEX_JSONL = "\n".join([
+    json.dumps({"type": "thread.started", "thread_id": "abc"}),
+    json.dumps({"type": "turn.started"}),
+    json.dumps({"type": "item.completed",
+                "item": {"id": "item_0", "type": "agent_message", "text": "ok"}}),
+    json.dumps({"type": "turn.completed",
+                "usage": {"input_tokens": 100, "output_tokens": 5}}),
+])
+
+
+def test_parse_codex_model_real_stream_has_no_model():
+    """The real codex --json stream carries NO model -> parse returns 'unknown' (documents why
+    _resolve_codex_model's fallbacks are load-bearing, not decorative)."""
+    assert parse_codex_model(REAL_CODEX_JSONL) == "unknown"
+
+
+def test_resolve_codex_model_priority(monkeypatch, tmp_path):
+    """_resolve_codex_model: stream model > explicit -m > config.toml default > 'unknown'."""
+    from atv_bench.adapters.contract import AdapterRequest, _resolve_codex_model
+
+    # explicit model wins when the stream has none (the real case).
+    req = AdapterRequest(repo_path=".", goal="x", model="gpt-5.5")
+    assert _resolve_codex_model(REAL_CODEX_JSONL, req) == "gpt-5.5"
+
+    # 'auto' + a configured default -> the config default.
+    codex_home = tmp_path / ".codex"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text('model = "gpt-5-codex"\n')
+    req_auto = AdapterRequest(repo_path=".", goal="x", model="auto",
+                              env={"HOME": str(tmp_path)})
+    assert _resolve_codex_model(REAL_CODEX_JSONL, req_auto) == "gpt-5-codex"
+
+    # 'auto' + no config -> 'unknown' (fail closed, never fabricated).
+    req_none = AdapterRequest(repo_path=".", goal="x", model="auto",
+                              env={"HOME": str(tmp_path / "empty")})
+    assert _resolve_codex_model(REAL_CODEX_JSONL, req_none) == "unknown"
+
+    # a real stream model (future codex) beats everything.
+    stream = json.dumps({"type": "session.created", "model": "o9-turbo"})
+    assert _resolve_codex_model(stream, req) == "o9-turbo"
+
+
 def test_codex_run_builds_exec_command(monkeypatch):
     """run() drives `codex exec <goal> -m <model> --json` headless (sandbox bypassed because the
-    ARENA already provides the isolation boundary), parses the model, and returns an EDITED/NO_EDIT
-    result. We inject a fake subprocess so no real CLI is needed."""
+    ARENA already provides the isolation boundary), resolves the model, and returns an
+    EDITED/NO_EDIT result. Fake subprocess returns the REAL (model-less) event shape, so the
+    reported model comes from the explicit -m via _resolve_codex_model."""
     captured = {}
 
     def fake_run(cmd, req, *, env):
         captured["cmd"] = cmd
         return subprocess.CompletedProcess(
-            cmd, returncode=0,
-            stdout=json.dumps({"type": "session.created", "model": "o4-mini"}) + "\n",
-            stderr="",
+            cmd, returncode=0, stdout=REAL_CODEX_JSONL + "\n", stderr="",
         )
 
     monkeypatch.setattr("atv_bench.adapters.contract._run_harness_subprocess", fake_run)
@@ -86,7 +129,7 @@ def test_codex_run_builds_exec_command(monkeypatch):
     monkeypatch.setattr("atv_bench.adapters.contract.git_diff", lambda p: "")
 
     res = CodexCliAdapter().run(AdapterRequest(repo_path=".", goal="improve the bot", model="o4-mini"))
-    assert res.model == "o4-mini"
+    assert res.model == "o4-mini"  # resolved from the explicit -m (stream has no model)
     assert res.status in (AdapterStatus.EDITED, AdapterStatus.NO_EDIT)
     cmd = captured["cmd"]
     assert cmd[0] == "codex" and cmd[1] == "exec"

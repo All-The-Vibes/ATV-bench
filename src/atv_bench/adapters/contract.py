@@ -457,6 +457,50 @@ def parse_codex_model(jsonl: str) -> str:
     return "unknown"
 
 
+def _codex_config_model(env: Optional[dict] = None) -> str | None:
+    """The default model from ``~/.codex/config.toml`` (top-level ``model`` key), or None.
+
+    Reuses the same trusted source the codex fingerprint reader uses. Honors ``CODEX_HOME`` /
+    ``HOME`` from the run env so a bare/isolated HOME resolves the right config.
+    """
+    import os as _os
+
+    env = env if env is not None else _os.environ
+    home = env.get("CODEX_HOME") or (Path(env["HOME"]) / ".codex" if env.get("HOME") else None)
+    if home is None:
+        return None
+    cfg = Path(home) / "config.toml"
+    if not cfg.exists():
+        return None
+    try:
+        import tomllib
+        data = tomllib.loads(cfg.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    m = data.get("model")
+    return m if (isinstance(m, str) and m.strip()) else None
+
+
+def _resolve_codex_model(stdout: str, req: "AdapterRequest") -> str:
+    """Resolve the model a codex run actually used, in priority order (see CodexCliAdapter).
+
+    1. a real ``model`` event in the ``--json`` stream (future-proofing);
+    2. the explicit ``-m`` request (authoritative — codex hard-errors on an unsupported model,
+       so a run that produced output ran exactly the requested id);
+    3. the configured default from ``~/.codex/config.toml``;
+    4. ``"unknown"``.
+    """
+    from_stream = parse_codex_model(stdout)
+    if from_stream != "unknown":
+        return from_stream
+    if req.model and req.model != "auto":
+        return req.model
+    cfg_model = _codex_config_model(req.env)
+    if cfg_model:
+        return cfg_model
+    return "unknown"
+
+
 class CodexCliAdapter(HarnessAdapter):
     """Drives OpenAI Codex CLI headless via `codex exec <goal> -m <model> --json`.
 
@@ -471,8 +515,13 @@ class CodexCliAdapter(HarnessAdapter):
     denied at this layer; the isolation here is resource caps + the outer Docker sandbox, not a
     network cut. This mirrors claude's ``acceptEdits`` / copilot's ``--allow-all-tools`` posture.
 
-    Model-tag integrity: the published model is parsed from Codex's own `--json` events
-    (`parse_codex_model`), never the echoed `-m` input.
+    Model-tag integrity: the model is resolved in priority order — (1) a real ``model`` event in
+    Codex's ``--json`` stream if a future version emits one (``parse_codex_model``); (2) the
+    explicit ``-m`` argument, which IS authoritative because Codex hard-errors on an unsupported
+    model (a run that produced a result therefore ran the requested id); (3) the configured
+    default from ``~/.codex/config.toml``; else ``unknown``. Verified against the real CLI: the
+    current ``codex exec --json`` stream carries NO model field, so (2)/(3) are load-bearing —
+    never a bare ``unknown`` when the model is knowable.
     """
 
     name = "codex"
@@ -504,7 +553,7 @@ class CodexCliAdapter(HarnessAdapter):
                 usage=Usage(seconds=time.time() - start),
             )
         elapsed = time.time() - start
-        model_used = parse_codex_model(proc.stdout or "")
+        model_used = _resolve_codex_model(proc.stdout or "", req)
         diff = capture_diff(Path(req.repo_path), base) if base else git_diff(req.repo_path)
         if proc.returncode != 0 and not diff.strip():
             return AdapterResult(
