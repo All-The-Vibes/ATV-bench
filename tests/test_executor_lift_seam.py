@@ -142,3 +142,14 @@ def test_identical_harness_selfplay_rejected():
     rec = _record("claude-code", "claude-code", "claude-code")  # both seats same harness
     with pytest.raises(ValueError, match="same harness|ambiguous|identical"):
         match_record_to_rating_row(rec)
+
+
+def test_none_winner_not_matched_to_literal_none_harness():
+    """A None winner must be rejected BEFORE stringification — otherwise a player whose
+    harness key is the literal string 'None' would be mis-scored as the winner."""
+    from atv_bench.runner import match_record_to_rating_row
+
+    rec = _record("None", "None", "b")  # player_a.harness == 'None', winner set to 'None'
+    rec.outcome["winner"] = None        # but the REAL winner is None (unscored)
+    with pytest.raises(ValueError, match="None|winner"):
+        match_record_to_rating_row(rec)

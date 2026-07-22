@@ -71,18 +71,21 @@ def match_record_to_rating_row(rec: MatchRecord) -> dict[str, Any]:
         )
     if "winner" not in rec.outcome:
         raise ValueError("outcome has no 'winner' key — malformed record, refusing to score")
-    winner = str(rec.outcome.get("winner", "")).strip()
+    raw_winner = rec.outcome.get("winner")
+    if raw_winner is None:
+        raise ValueError("outcome 'winner' is None — malformed record, refusing to score")
+    winner = str(raw_winner).strip()
     if not winner:
         raise ValueError("outcome 'winner' is blank — malformed record, refusing to score")
     if winner.lower() in {"tie", "draw"}:
         score_a = 0.5
-    elif winner == a.harness:
+    elif winner == ha:
         score_a = 1.0
-    elif winner == b.harness:
+    elif winner == hb:
         score_a = 0.0
     else:
         raise ValueError(
-            f"outcome winner {winner!r} is neither player ({a.harness!r}, {b.harness!r})"
+            f"outcome winner {winner!r} is neither player ({ha!r}, {hb!r})"
         )
     return {
         "harness_a": a.harness, "harness_b": b.harness,
