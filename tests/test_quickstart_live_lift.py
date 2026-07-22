@@ -69,6 +69,19 @@ def test_real_claude_vs_bare_produces_sensible_lift(tmp_path):
     assert res.n_matches > 0, f"no matches scored; failures={res.failures}"
     assert (tmp_path / "league" / "rating_matches.jsonl").exists()
 
+    # Prove REAL gameplay happened, not two unedited starter bots tying out: at least one match
+    # must be decisive (a non-0.5 score). Two identical un-edited starters would tie every game,
+    # so a decisive outcome is evidence the harness actually performed a live authenticated edit.
+    # (If auth silently failed and left starter trees in place, this catches the false-green.)
+    import json as _json
+    rows = [_json.loads(ln) for ln in
+            (tmp_path / "league" / "rating_matches.jsonl").read_text().splitlines() if ln.strip()]
+    decisive = [r for r in rows if float(r.get("score_a", 0.5)) != 0.5]
+    assert decisive, (
+        "every live match tied — likely no real edit happened (auth/edit failure). "
+        f"rows={rows}"
+    )
+
     # per-game breakdown present for at least one requested game
     assert res.per_game, "no per-game scores produced"
     assert {g.game for g in res.per_game} <= set(games)

@@ -350,20 +350,27 @@ def collect_player_budgets(cfg: RunConfig) -> dict[str, BudgetVector]:
     player in the match. We map cfg.a/cfg.b → their distinct player names → cached result
     → BudgetVector. A player with no cached build (never ran) yields an all-None vector.
     """
-    from atv_bench.config import _branch_safe_name, _distinct_names
+    from atv_bench.config import _branch_safe_name, _distinct_names, resolve_game
     from atv_bench.players import _ARTIFACT_CACHE
 
-    # The cache is keyed by the PLAYER NAME the match ran under, which build_pvp_config makes
-    # git-branch-safe (`bare:claude-code` -> `bare-claude-code`). Look up by that same sanitized
-    # name, else a `bare:<inner>` seat's budget would silently come back all-None.
+    # The cache is keyed by (player_id, game, prompt_version) where player_id is the git-branch-
+    # safe player NAME. Match on the FULL identity — a player_id-only lookup would misattribute an
+    # EARLIER game's usage to the current match in a multi-game run. The cache `game` may be the
+    # ATV key (`lightcycles`) or CodeClash's arena name (`LightCycles`) depending on the caller,
+    # so accept either spelling for the current game.
     names = [_branch_safe_name(n) for n in _distinct_names(cfg.a, cfg.b)]
-    # Index the build-once cache by player name (id), taking the first build per player.
-    by_name: dict[str, Any] = {}
-    for (player_id, _game, _pv), (_tree, result, _diff) in _ARTIFACT_CACHE.items():
-        by_name.setdefault(player_id, result)
+    game_aliases = {cfg.game}
+    try:
+        game_aliases.add(resolve_game(cfg.game).codeclash_name)
+    except Exception:
+        pass
     out: dict[str, BudgetVector] = {}
     for harness, name in zip((cfg.a, cfg.b), names):
-        result = by_name.get(name)
+        result = None
+        for (player_id, game, _pv), (_tree, res, _diff) in _ARTIFACT_CACHE.items():
+            if player_id == name and game in game_aliases:
+                result = res
+                break
         usage = getattr(result, "usage", None) if result is not None else None
         out[harness] = budget_from_usage(usage)
     return out

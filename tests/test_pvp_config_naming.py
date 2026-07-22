@@ -64,17 +64,27 @@ def test_collect_player_budgets_finds_bare_seat_after_rename():
     clear_artifact_cache()
     try:
         # the match ran the bare seat under the SANITIZED name (as build_pvp_config emits).
-        res = AdapterResult(status=AdapterStatus.EDITED, diff="x", log="",
-                            usage=Usage(tokens=123, seconds=4.5, turns=1))
-        _ARTIFACT_CACHE[("bare-claude-code", "lightcycles", "edit@1")] = ({}, res, "x")
-        _ARTIFACT_CACHE[("claude-code", "lightcycles", "edit@1")] = (
+        # seed an EARLIER game (Dummy) first, then the current game (LightCycles) — the cache is
+        # keyed by (player_id, codeclash_game_name, prompt_version). A player_id-only lookup would
+        # wrongly return the Dummy usage; the fix must return the CURRENT game's usage.
+        _ARTIFACT_CACHE[("bare-claude-code", "Dummy", "edit@1")] = (
+            {}, AdapterResult(status=AdapterStatus.EDITED, diff="d", log="",
+                              usage=Usage(tokens=1, seconds=0.1, turns=1)), "d")
+        _ARTIFACT_CACHE[("claude-code", "Dummy", "edit@1")] = (
+            {}, AdapterResult(status=AdapterStatus.EDITED, diff="d", log="",
+                              usage=Usage(tokens=2, seconds=0.2, turns=1)), "d")
+        _ARTIFACT_CACHE[("bare-claude-code", "LightCycles", "edit@1")] = (
+            {}, AdapterResult(status=AdapterStatus.EDITED, diff="x", log="",
+                              usage=Usage(tokens=123, seconds=4.5, turns=1)), "x")
+        _ARTIFACT_CACHE[("claude-code", "LightCycles", "edit@1")] = (
             {}, AdapterResult(status=AdapterStatus.EDITED, diff="y", log="",
                               usage=Usage(tokens=99, seconds=3.0, turns=1)), "y")
 
         cfg = RunConfig(game="lightcycles", a="claude-code", b="bare:claude-code",
                         model="sonnet", rounds=1)
         budgets = collect_player_budgets(cfg)
-        # the bare control's budget survives the rename (keyed by harness key in the output)
+        # the CURRENT game's usage (LightCycles), keyed by harness key — NOT the Dummy usage,
+        # and the bare control's budget survives the branch-safe rename.
         assert budgets["bare:claude-code"].tokens == 123
         assert budgets["bare:claude-code"].wall_time_s == 4.5
         assert budgets["claude-code"].tokens == 99
