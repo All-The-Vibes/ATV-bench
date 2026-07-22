@@ -1479,6 +1479,10 @@ def _rating_row_from_match(m: dict) -> dict | None:
     rejected (ambiguous attribution). Only an explicit ``draw``/``tie`` scores 0.5.
     """
     if all(k in m for k in ("harness_a", "harness_b", "model_a", "model_b", "score_a")):
+        # flat rating row: still reject identical-harness self-play (ambiguous attribution),
+        # consistent with the schema-v2 path below.
+        if m.get("harness_a") and m.get("harness_a") == m.get("harness_b"):
+            return None
         return m
     players = m.get("players")
     if not players or len(players) < 2:

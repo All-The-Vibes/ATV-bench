@@ -176,3 +176,29 @@ def test_rate_enforce_gates_fails_closed_on_missing_nondeterminism(tmp_path):
     r = runner.invoke(app, ["rate", "--store", str(store), "--enforce-gates"])
     assert r.exit_code != 0
     assert "referee_nondeterminism_rate" in r.output
+
+
+def test_corpus_stats_ignores_false_flags_as_unmeasured():
+    """A row carrying `infrastructure_error: false` is NOT a measurement of the corpus-wide
+    rate — the infra failures that matter never scored, so they are absent by construction.
+    A False flag must not fabricate a clean 0.0 that lets the gate pass unmeasured."""
+    rows = [
+        {"harness_a": "claude-code", "harness_b": "bare:claude-code", "game": "lightcycles",
+         "score_a": 1.0, "infrastructure_error": False, "referee_nondeterministic": False}
+        for _ in range(60)
+    ]
+    stats = corpus_stats(rows)
+    # False flags are not a measured rate — the signals stay ABSENT so the gate fails closed.
+    assert "infrastructure_error_rate" not in stats
+    assert "referee_nondeterminism_rate" not in stats
+    assert gate_corpus(stats).passed is False
+
+
+def test_rating_row_from_match_flat_selfplay_rejected():
+    """A flat rating row with identical harnesses is unrateable (ambiguous), even on the
+    fast-path flat shape."""
+    from atv_bench.cli import _rating_row_from_match
+
+    flat = {"harness_a": "claude-code", "harness_b": "claude-code",
+            "model_a": "sonnet", "model_b": "sonnet", "score_a": 1.0}
+    assert _rating_row_from_match(flat) is None

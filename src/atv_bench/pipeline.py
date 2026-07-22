@@ -34,45 +34,34 @@ def corpus_stats(
       * ``min_trials_per_cell``   the minimum per-(unordered pair, game) trial count.
 
     The other two G6 signals — ``infrastructure_error_rate`` and
-    ``referee_nondeterminism_rate`` — CANNOT be measured from scored rows alone: an
+    ``referee_nondeterminism_rate`` — CANNOT be measured from scored rows at all: an
     infrastructure crash or a non-deterministic-referee match never produced a scored row, so
-    it is absent from this corpus by construction. We therefore emit them ONLY when the caller
-    supplies a measured value (it knows the total attempt count / re-run agreement), or when the
-    rows themselves carry explicit ``infrastructure_error``/``crashed`` /
-    ``referee_nondeterministic`` flags. If neither source is present the signals are OMITTED —
-    NOT fabricated as 0.0 — so ``evaluate_quality_gates`` fails CLOSED on the missing signal
-    (per its missing-signal contract) instead of a thin corpus silently passing a gate that
-    never actually ran.
+    it is absent from this corpus by construction. A per-row flag like
+    ``infrastructure_error: false`` on a SCORED row is therefore NOT a measurement of the
+    corpus-wide rate (the failures that matter are the rows that never appear here), so we do
+    NOT derive these signals from row flags. They are emitted ONLY when the caller supplies a
+    measured value (it knows the total attempt count / re-run agreement). If the caller
+    supplies nothing the signals are OMITTED — never fabricated as 0.0 — so
+    ``evaluate_quality_gates`` fails CLOSED on the missing signal (per its missing-signal
+    contract) instead of a corpus silently passing a gate that never actually ran.
     """
     n = len(rows)
     cells: Counter = Counter()
-    infra_flagged = 0
-    nondet_flagged = 0
-    have_row_flags = False
     for r in rows:
         pair = tuple(sorted((str(r.get("harness_a")), str(r.get("harness_b")))))
         cells[(pair, str(r.get("game", "")))] += 1
-        if any(k in r for k in ("infrastructure_error", "crashed", "referee_nondeterministic")):
-            have_row_flags = True
-        if r.get("infrastructure_error") or r.get("crashed"):
-            infra_flagged += 1
-        if r.get("referee_nondeterministic"):
-            nondet_flagged += 1
 
     stats: dict[str, Any] = {
         "eligible_n": n,
         "min_trials_per_cell": min(cells.values()) if cells else 0,
     }
-    # infra-error rate: prefer an explicit measured value; else derive from row flags IF the
-    # corpus actually carries them; else leave ABSENT so the gate fails closed.
+    # infra-error + referee-nondeterminism rates are emitted ONLY from an explicit measured
+    # value supplied by the caller (which knows the full attempt population); otherwise ABSENT
+    # so the gate fails closed. A scored row's own flag is never treated as the corpus rate.
     if infrastructure_error_rate is not None:
         stats["infrastructure_error_rate"] = infrastructure_error_rate
-    elif have_row_flags and n:
-        stats["infrastructure_error_rate"] = infra_flagged / n
     if referee_nondeterminism_rate is not None:
         stats["referee_nondeterminism_rate"] = referee_nondeterminism_rate
-    elif have_row_flags and n:
-        stats["referee_nondeterminism_rate"] = nondet_flagged / n
     return stats
 
 
