@@ -56,12 +56,22 @@ Result (`isolation/isolation_proof.txt` / `.json`):
 
 Regenerate: `python scripts/capture_isolation_proof.py docs/proof/isolation`
 
-## 4. All-22-arenas live matrix
+## 4. All-22-arenas live matrix — 20/22 produce a real scored match
 
 `scripts/e2e_arena_matrix.py --all` runs a REAL live match for every CodeClash arena (Docker
 build + live `claude-code` harness edits + arena adjudication) and records a per-arena verdict.
-The aggregated `wave-c/matrix.json` is the evidence backing the `live=True` flags in
-`games.py` (see `docs/proof/wave-c/README.md`). Arenas that do not produce a scored,
-non-crash match are surfaced honestly, not hidden.
+The aggregated `wave-c/matrix.json` (committed) is the evidence backing the `live=True` flags in
+`games.py`:
 
-Regenerate: `python scripts/e2e_arena_matrix.py --all`  (writes `_e2e/<arena>/verdict.json`).
+- **20/22 arenas PASS** with a scored, non-crash match: ants, battlecode23, battlecode24,
+  battlesnake, bomberland, bridge, chess, corewar, cyborg, dummy, figgie, gomoku, halite,
+  halite2, halite3, huskybench, lightcycles, paintvolley, robotrumble, scml.
+- **2 arenas fail** (robocode, battlecode25) with the SAME documented upstream CodeClash bug
+  (`ValueError: max() iterable argument is empty`); they correctly stay `live=False`.
+
+Zero drift: every `live=True` arena has a passing proof row (enforced by
+`tests/test_wave_c_evidence.py` on the follow-ups branch). See `docs/proof/wave-c/README.md`
+for the methodology (isolated re-runs supersede batch failures caused by Docker contention).
+
+Regenerate: `python scripts/e2e_arena_matrix.py --all` → `python scripts/rerun_failed_arenas.py
+<failed>` → `python scripts/consolidate_wave_c_proof.py`.

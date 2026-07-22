@@ -1,0 +1,134 @@
+{
+  "ants": {
+    "passed": true,
+    "seconds": 395,
+    "why": "r0: winner=Tie, valid=['claude-code-A', 'claude-code-B'] | r1: winner=claude-code-A, valid=['claude-code-A', 'claude-code-B']",
+    "players": 2
+  },
+  "battlecode23": {
+    "passed": true,
+    "seconds": 448,
+    "why": "r0: winner=Tie, valid=['claude-code-A', 'claude-code-B'] | r1: winner=Tie, valid=['claude-code-A', 'claude-code-B']",
+    "players": 2
+  },
+  "battlecode24": {
+    "passed": true,
+    "seconds": 462,
+    "why": "r0: winner=Tie, valid=['claude-code-A', 'claude-code-B'] | r1: winner=claude-code-A, valid=['claude-code-B', 'claude-code-A']",
+    "players": 2
+  },
+  "battlecode25": {
+    "passed": false,
+    "seconds": 367,
+    "why": "ValueError: max() iterable argument is empty",
+    "players": 2
+  },
+  "battlesnake": {
+    "passed": true,
+    "seconds": 228,
+    "why": "r0: winner=claude-code-A, valid=['claude-code-A', 'claude-code-B'] | r1: winner=claude-code-B, valid=['claude-code-A', 'claude-code-B']",
+    "players": 2
+  },
+  "bomberland": {
+    "passed": true,
+    "seconds": 126,
+    "why": "r0: winner=Tie, valid=['claude-code-B', 'claude-code-A'] | r1: winner=claude-code-B, valid=['claude-code-A', 'claude-code-B']",
+    "players": 2
+  },
+  "bridge": {
+    "passed": true,
+    "seconds": 338,
+    "why": "r0: winner=Tie, valid=['harness-1', 'harness-3', 'bare-0', 'bare-2'] | r1: winner=harness-3/harness-1, valid=['harness-3', 'bare-0', 'harness-1', 'bare-2']",
+    "players": 4
+  },
+  "chess": {
+    "passed": true,
+    "seconds": 507,
+    "why": "r0: winner=Tie, valid=['claude-code-B', 'claude-code-A'] | r1: winner=claude-code-B, valid=['claude-code-B', 'claude-code-A']",
+    "players": 2
+  },
+  "corewar": {
+    "passed": true,
+    "seconds": 332,
+    "why": "r0: winner=Tie, valid=['claude-code-B', 'claude-code-A'] | r1: winner=Tie, valid=['claude-code-A', 'claude-code-B']",
+    "players": 2
+  },
+  "cyborg": {
+    "passed": true,
+    "seconds": 415,
+    "why": "r0: winner=Tie, valid=['claude-code-B', 'claude-code-A'] | r1: winner=claude-code-B, valid=['claude-code-A', 'claude-code-B']",
+    "players": 2
+  },
+  "dummy": {
+    "passed": true,
+    "seconds": 52,
+    "why": "r0: winner=claude-code-B, valid=['claude-code-B', 'claude-code-A'] | r1: winner=claude-code-A, valid=['claude-code-A', 'claude-code-B']",
+    "players": 2
+  },
+  "figgie": {
+    "passed": true,
+    "seconds": 335,
+    "why": "r0: winner=Tie, valid=['bare-2', 'harness-3', 'harness-1', 'bare-0'] | r1: winner=harness-3, valid=['harness-3', 'bare-0', 'harness-1', 'bare-2']",
+    "players": 4
+  },
+  "gomoku": {
+    "passed": true,
+    "seconds": 405,
+    "why": "r0: winner=claude-code-B, valid=['claude-code-B', 'claude-code-A'] | r1: winner=claude-code-A, valid=['claude-code-A', 'claude-code-B']",
+    "players": 2
+  },
+  "halite": {
+    "passed": true,
+    "seconds": 253,
+    "why": "r0: winner=claude-code-B, valid=['claude-code-A', 'claude-code-B'] | r1: winner=claude-code-B, valid=['claude-code-A', 'claude-code-B']",
+    "players": 2
+  },
+  "halite2": {
+    "passed": true,
+    "seconds": 527,
+    "why": "r0: winner=claude-code-A, valid=['claude-code-B', 'claude-code-A'] | r1: winner=Tie, valid=['claude-code-B', 'claude-code-A']",
+    "players": 2
+  },
+  "halite3": {
+    "passed": true,
+    "seconds": 711,
+    "why": "r0: winner=Tie, valid=['claude-code-A', 'claude-code-B'] | r1: winner=Tie, valid=['claude-code-B', 'claude-code-A']",
+    "players": 2
+  },
+  "huskybench": {
+    "passed": true,
+    "seconds": 217,
+    "why": "r0: winner=claude-code-B, valid=['claude-code-A', 'claude-code-B'] | r1: winner=claude-code-B, valid=['claude-code-B', 'claude-code-A']",
+    "players": 2
+  },
+  "lightcycles": {
+    "passed": true,
+    "seconds": 399,
+    "why": "r0: winner=Tie, valid=['claude-code-B', 'claude-code-A'] | r1: winner=claude-code-A, valid=['claude-code-A', 'claude-code-B']",
+    "players": 2
+  },
+  "paintvolley": {
+    "passed": true,
+    "seconds": 427,
+    "why": "r0: winner=Tie, valid=['claude-code-A', 'claude-code-B'] | r1: winner=claude-code-A, valid=['claude-code-B', 'claude-code-A']",
+    "players": 2
+  },
+  "robocode": {
+    "passed": false,
+    "seconds": 20,
+    "why": "ValueError: max() iterable argument is empty",
+    "players": 2
+  },
+  "robotrumble": {
+    "passed": true,
+    "seconds": 175,
+    "why": "r0: winner=Tie, valid=['claude-code-A', 'claude-code-B'] | r1: winner=claude-code-B, valid=['claude-code-B', 'claude-code-A']",
+    "players": 2
+  },
+  "scml": {
+    "passed": true,
+    "seconds": 310,
+    "why": "r0: winner=claude-code-B, valid=['claude-code-A', 'claude-code-B'] | r1: winner=claude-code-A, valid=['claude-code-A', 'claude-code-B']",
+    "players": 2
+  }
+}
