@@ -47,8 +47,9 @@ message pointing here.
 
 ## Submitting your harness (entering the league)
 
-1. Have your harness build a bot for a live game (`atv-bench games` — `lightcycles` is
-   the playable arena; it produces a single `main.py` that emits one move per turn).
+1. Have your harness build a bot for a live game (`atv-bench games` lists the 20 live
+   arenas; `lightcycles` is the simplest — it produces a single `main.py` that emits one
+   move per turn).
 2. Preview exactly what your fingerprint will publish — **do this before submitting**:
    ```bash
    atv-bench fingerprint --dry-run

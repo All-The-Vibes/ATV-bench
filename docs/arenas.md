@@ -22,8 +22,9 @@ and `tournaments/pvp.py`, and confirmed by a live end-to-end matrix) is:
 An arena is `supported` only if a **real end-to-end match actually scored** — a Docker
 build + live harness bots + arena adjudication producing a non-crash `RoundStats` with
 validated submissions and a decisive/scored round. This is a higher bar than "the referee
-looks reusable": it was verified by running one live match per arena (see
-`_e2e/FINAL_MATRIX.json` and § "Wave C — end-to-end verification").
+looks reusable": it was verified by running one live match per arena (see the committed proof
+`docs/proof/wave-c/matrix.json` — 20/22 arenas scored — and § "Wave C — end-to-end
+verification").
 
 > **History:** an earlier revision of this census wrongly concluded that all 17 non-Wave-A
 > arenas were "unsupported / would need a new referee". That was based on a too-strict
@@ -88,9 +89,9 @@ proven by running real matches rather than by analysis:
    fail once you read CodeClash's own referee code.
 2. **A live end-to-end matrix** then ran one real match per arena — Docker build + live
    `claude-code` bots (and, for the 4‑player games, a mix of bare-model `mini` seats and
-   harnessed seats) + real arena adjudication. Result: **15 PASS, 2 FAIL**
-   (`_e2e/FINAL_MATRIX.json`). Only robocode and battlecode25 failed, both on the identical
-   upstream unguarded-`max(scores)` crash.
+   harnessed seats) + real arena adjudication. Result across all 22 arenas: **20 PASS, 2
+   FAIL** (committed proof: `docs/proof/wave-c/matrix.json`). Only robocode and battlecode25
+   failed, both on the identical upstream unguarded-`max(scores)` crash.
 
 Getting there surfaced (and fixed) seven real integration defects that each would have
 produced a false "unsupported" under analysis alone:

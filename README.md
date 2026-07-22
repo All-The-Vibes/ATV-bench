@@ -7,7 +7,7 @@
 Your skills. Your MCP servers. Your plugins, custom agents, and config.
 **That's what actually ships code — so that's what we rank.**
 
-[![hermetic tests](https://img.shields.io/badge/tests-397%20passing-6ce7be?style=flat-square)](#dev)
+[![hermetic tests](https://img.shields.io/badge/tests-983%20passing-6ce7be?style=flat-square)](#dev)
 [![docker adjudication](https://img.shields.io/badge/arena-referee%20adjudicated-7aa2ff?style=flat-square)](#the-trust-boundary)
 [![leak-safe](https://img.shields.io/badge/fingerprint-leak--safe-ffc45c?style=flat-square)](#the-credibility-gate)
 [![license](https://img.shields.io/badge/license-MIT-e8ecf5?style=flat-square)](LICENSE)
@@ -198,6 +198,51 @@ non-deterministic; only the recorded replay is reproducible). Exit codes are sta
 distinct per failure mode (`0` ok · `3` missing-cli · `5` docker · `9` codeclash-dep …)
 so an agent or CI can branch on them.
 
+### The full pipeline: plan → run → rate → lift
+
+A single `run` is one match. To measure a **harness as lift over its own bare model** across
+many matches, four commands chain into a pipeline. Every stage is deterministic and
+fails **closed** — it refuses to emit a number it can't defend.
+
+**1. Plan a side-balanced schedule** (`plan-schedule`, the G1 scheduler). Every unordered
+harness pair plays every game `--repeats` times with alternating A/B seats. Use
+`bare:<inner>` for the **bare-model negative control** — the same model CLI run with its
+harness scaffolding physically stripped, so `lift` has a baseline to subtract:
+
+```bash
+atv-bench plan-schedule \
+  --harness claude-code --harness bare:claude-code \
+  --game lightcycles --repeats 2 --seed 7 --json
+# → a deterministic, side-balanced list of matches (identical seed ⇒ identical plan)
+```
+
+**2. Run each planned match and accumulate a rating corpus** with `--persist`. Off by
+default (a bare `run` has no side effects); with `--persist` it appends one rating row per
+match to a JSONL lift corpus:
+
+```bash
+atv-bench run --game lightcycles --a claude-code --b bare:claude-code \
+  --model sonnet --persist league/lift.jsonl
+```
+
+**3. Fit ratings, optionally gated.** `rate` fits the Bradley-Terry ratings from the corpus;
+`--enforce-gates` refuses to publish a thin or noisy corpus (the G5/G6 quality gates —
+minimum eligible N, per-cell trials, infra-error rate, referee determinism). Missing a
+load-bearing signal fails **closed**, never a silent pass:
+
+```bash
+atv-bench rate --store league --enforce-gates
+```
+
+**4. Emit the headline metric** with `lift` — `lift(H, M) = θ(M with harness H) − θ(M bare)`.
+Because both players share the same base model, the model term cancels, so the number is a
+**pure harness effect**, comparable across harnesses on different base models:
+
+```bash
+atv-bench lift --store league --baseline claude-code=bare:claude-code --json
+# refuses (exit 2) if the declared bare baseline was never run on that model
+```
+
 ### See the rankings first
 
 Before you submit anything, look at the board — including a populated sample so you
@@ -312,6 +357,17 @@ uv run python scripts/make_demo_music.py out.wav 29.4   # regenerate the deep-ho
 uv run python scripts/make_demo_frames.py /tmp/f        # regenerate beat-synced demo frames
 # stitch: ffmpeg -framerate 30 -i /tmp/f/f%05d.png -i out.wav -c:v libx264 \
 #   -pix_fmt yuv420p -crf 20 -c:a aac -shortest -movflags +faststart demo.mp4
+```
+
+Regenerate the committed proof artifacts (`docs/proof/`) — the evidence that the tests are
+effective, the games execute, and the sandbox contains a hostile bot:
+
+```bash
+uv run python scripts/capture_live_match.py docs/proof/live-browser    # browser Tron match (Playwright)
+uv run python scripts/capture_isolation_proof.py docs/proof/isolation  # network-isolation proof (Docker)
+uv run python scripts/e2e_arena_matrix.py --all                        # live match per arena → _e2e/<arena>/
+uv run python scripts/rerun_failed_arenas.py <arena> ...               # isolated re-run for Docker-flaky arenas
+uv run python scripts/consolidate_wave_c_proof.py                      # → docs/proof/wave-c/matrix.json (20/22)
 ```
 
 Editing the viewer? Keep the bundled copy in sync:
