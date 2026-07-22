@@ -56,6 +56,12 @@ def isolated_home(harness_config: Optional[Path] = None) -> Iterator[dict]:
         env["HOME"] = str(root)
         env["XDG_CONFIG_HOME"] = str(config_home)
         env["XDG_CACHE_HOME"] = str(cache_home)
+        # Drop harness-specific HOME overrides that would point a CLI back at the HOST config,
+        # defeating the isolated/stripped HOME. CODEX_HOME in particular takes precedence over
+        # $HOME for codex; leaving the host value set would leak the host's model/config into a
+        # bare or cloned-home run. The isolated HOME (seeded or empty) is the sole authority.
+        for leak in ("CODEX_HOME", "CLAUDE_CONFIG_DIR", "COPILOT_HOME"):
+            env.pop(leak, None)
         yield env
     finally:
         shutil.rmtree(root, ignore_errors=True)

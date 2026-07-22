@@ -189,3 +189,27 @@ def test_codex_config_model_resolves_isolated_home_locations(tmp_path):
 
     # none present -> None
     assert _codex_config_model({"HOME": str(tmp_path / "empty")}) is None
+
+
+def test_codex_config_no_host_leak_via_isolated_home(tmp_path, monkeypatch):
+    """isolated_home must strip a host CODEX_HOME so a bare/cloned-home codex run resolves the
+    ISOLATED config, never the host's (isolation leak: CODEX_HOME takes precedence over $HOME)."""
+    from atv_bench.adapters.contract import _codex_config_model
+    from atv_bench.isolation import isolated_home
+
+    # a host CODEX_HOME pointing at a host config with a distinctive model
+    host = tmp_path / "host-codex"; host.mkdir()
+    (host / "config.toml").write_text('model = "host-model"\n')
+    monkeypatch.setenv("CODEX_HOME", str(host))
+
+    # a stripped isolated HOME (no config) must NOT resolve the host model
+    with isolated_home(None) as env:
+        assert "CODEX_HOME" not in env, "isolated_home leaked host CODEX_HOME"
+        assert _codex_config_model(env) is None  # stripped home has no config, host is not read
+
+    # a SEEDED isolated HOME must resolve ITS OWN config, not the host's
+    seed = tmp_path / "seed"; (seed / ".codex").mkdir(parents=True)
+    (seed / ".codex" / "config.toml").write_text('model = "seed-model"\n')
+    with isolated_home(str(seed)) as env:
+        # isolated_home copies seed/* into the new HOME root, so .codex/config.toml lands there
+        assert _codex_config_model(env) == "seed-model"
