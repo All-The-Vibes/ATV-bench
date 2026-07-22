@@ -165,3 +165,27 @@ def test_parse_codex_model_skips_auto_placeholder():
     assert parse_codex_model(jsonl) == "gpt-5-codex"
     # only placeholders present -> unknown, never 'auto'
     assert parse_codex_model(json.dumps({"model": "auto"})) == "unknown"
+
+
+def test_codex_config_model_resolves_isolated_home_locations(tmp_path):
+    """_codex_config_model finds config.toml at $CODEX_HOME, $HOME/.codex, AND $HOME/config.toml
+    (the location isolation.isolated_home seeds) — so the default resolves in the live path."""
+    from atv_bench.adapters.contract import _codex_config_model
+
+    # $HOME/.codex/config.toml (the real user location)
+    a = tmp_path / "a"; (a / ".codex").mkdir(parents=True)
+    (a / ".codex" / "config.toml").write_text('model = "gpt-5.5"\n')
+    assert _codex_config_model({"HOME": str(a)}) == "gpt-5.5"
+
+    # $HOME/config.toml (the isolated_home seed location)
+    b = tmp_path / "b"; b.mkdir()
+    (b / "config.toml").write_text('model = "o4-mini"\n')
+    assert _codex_config_model({"HOME": str(b)}) == "o4-mini"
+
+    # $CODEX_HOME/config.toml (explicit override)
+    c = tmp_path / "c"; c.mkdir()
+    (c / "config.toml").write_text('model = "gpt-5-codex"\n')
+    assert _codex_config_model({"CODEX_HOME": str(c), "HOME": str(a)}) == "gpt-5-codex"
+
+    # none present -> None
+    assert _codex_config_model({"HOME": str(tmp_path / "empty")}) is None

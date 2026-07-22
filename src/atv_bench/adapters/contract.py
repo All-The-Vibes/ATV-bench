@@ -458,27 +458,35 @@ def parse_codex_model(jsonl: str) -> str:
 
 
 def _codex_config_model(env: Optional[dict] = None) -> str | None:
-    """The default model from ``~/.codex/config.toml`` (top-level ``model`` key), or None.
+    """The default model from codex's ``config.toml`` (top-level ``model`` key), or None.
 
-    Reuses the same trusted source the codex fingerprint reader uses. Honors ``CODEX_HOME`` /
-    ``HOME`` from the run env so a bare/isolated HOME resolves the right config.
+    Codex resolves its config dir as ``$CODEX_HOME`` else ``$HOME/.codex``. We check both, plus
+    ``$HOME/config.toml`` (the location ``isolation.isolated_home`` seeds into for a cloned
+    harness HOME), so the default resolves in the live isolated path too. Honors the run env so a
+    bare/isolated HOME resolves the right (or absent) config.
     """
     import os as _os
 
     env = env if env is not None else _os.environ
-    home = env.get("CODEX_HOME") or (Path(env["HOME"]) / ".codex" if env.get("HOME") else None)
-    if home is None:
-        return None
-    cfg = Path(home) / "config.toml"
-    if not cfg.exists():
-        return None
-    try:
-        import tomllib
-        data = tomllib.loads(cfg.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    m = data.get("model")
-    return m if (isinstance(m, str) and m.strip()) else None
+    candidates: list[Path] = []
+    if env.get("CODEX_HOME"):
+        candidates.append(Path(env["CODEX_HOME"]) / "config.toml")
+    if env.get("HOME"):
+        home = Path(env["HOME"])
+        candidates.append(home / ".codex" / "config.toml")
+        candidates.append(home / "config.toml")
+    for cfg in candidates:
+        if not cfg.exists():
+            continue
+        try:
+            import tomllib
+            data = tomllib.loads(cfg.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        m = data.get("model")
+        if isinstance(m, str) and m.strip():
+            return m.strip()
+    return None
 
 
 def _resolve_codex_model(stdout: str, req: "AdapterRequest") -> str:

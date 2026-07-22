@@ -350,10 +350,13 @@ def collect_player_budgets(cfg: RunConfig) -> dict[str, BudgetVector]:
     player in the match. We map cfg.a/cfg.b → their distinct player names → cached result
     → BudgetVector. A player with no cached build (never ran) yields an all-None vector.
     """
-    from atv_bench.config import _distinct_names
+    from atv_bench.config import _branch_safe_name, _distinct_names
     from atv_bench.players import _ARTIFACT_CACHE
 
-    names = _distinct_names(cfg.a, cfg.b)
+    # The cache is keyed by the PLAYER NAME the match ran under, which build_pvp_config makes
+    # git-branch-safe (`bare:claude-code` -> `bare-claude-code`). Look up by that same sanitized
+    # name, else a `bare:<inner>` seat's budget would silently come back all-None.
+    names = [_branch_safe_name(n) for n in _distinct_names(cfg.a, cfg.b)]
     # Index the build-once cache by player name (id), taking the first build per player.
     by_name: dict[str, Any] = {}
     for (player_id, _game, _pv), (_tree, result, _diff) in _ARTIFACT_CACHE.items():

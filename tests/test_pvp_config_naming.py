@@ -52,3 +52,31 @@ def test_summarize_tournament_maps_sanitized_winner_back_to_harness():
     }}}
     outcome, _models = summarize_tournament(raw, cfg)
     assert outcome["winner"] == "bare:claude-code"  # mapped back to the harness key
+
+
+def test_collect_player_budgets_finds_bare_seat_after_rename():
+    """The build-once cache is keyed by the git-branch-safe player name; collect_player_budgets
+    must look up by that same sanitized name, or a bare:<inner> seat's budget is silently lost."""
+    from atv_bench.adapters.contract import AdapterResult, AdapterStatus, Usage
+    from atv_bench.players import _ARTIFACT_CACHE, clear_artifact_cache
+    from atv_bench.runner import RunConfig, collect_player_budgets
+
+    clear_artifact_cache()
+    try:
+        # the match ran the bare seat under the SANITIZED name (as build_pvp_config emits).
+        res = AdapterResult(status=AdapterStatus.EDITED, diff="x", log="",
+                            usage=Usage(tokens=123, seconds=4.5, turns=1))
+        _ARTIFACT_CACHE[("bare-claude-code", "lightcycles", "edit@1")] = ({}, res, "x")
+        _ARTIFACT_CACHE[("claude-code", "lightcycles", "edit@1")] = (
+            {}, AdapterResult(status=AdapterStatus.EDITED, diff="y", log="",
+                              usage=Usage(tokens=99, seconds=3.0, turns=1)), "y")
+
+        cfg = RunConfig(game="lightcycles", a="claude-code", b="bare:claude-code",
+                        model="sonnet", rounds=1)
+        budgets = collect_player_budgets(cfg)
+        # the bare control's budget survives the rename (keyed by harness key in the output)
+        assert budgets["bare:claude-code"].tokens == 123
+        assert budgets["bare:claude-code"].wall_time_s == 4.5
+        assert budgets["claude-code"].tokens == 99
+    finally:
+        clear_artifact_cache()

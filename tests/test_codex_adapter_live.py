@@ -23,6 +23,16 @@ requires_codex = pytest.mark.skipif(
 )
 
 
+def _skip_if_unauthed(res) -> None:
+    """A real run that failed to reach the provider (not logged in / no key / policy) is an
+    ENVIRONMENT precondition, not a test failure — skip rather than go red."""
+    if res.status in (AdapterStatus.ERROR, AdapterStatus.TIMEOUT):
+        log = (res.log or "").lower()
+        if any(tok in log for tok in ("login", "auth", "api key", "unauthor", "401", "403",
+                                      "not supported", "quota", "rate limit")):
+            pytest.skip(f"codex not usable in this env (auth/policy): {res.log[:200]}")
+
+
 def _make_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "work"
     repo.mkdir()
@@ -46,6 +56,7 @@ def test_codex_really_edits_a_repo(tmp_path):
              "Do not change program behavior.",
         model="auto",
     ))
+    _skip_if_unauthed(res)
     # a real run either edits (the goal) or at worst NO_EDIT — never a crash/timeout here.
     assert res.status in (AdapterStatus.EDITED, AdapterStatus.NO_EDIT), res.log
     if res.status is AdapterStatus.EDITED:
@@ -67,6 +78,7 @@ def test_codex_reports_a_real_model_not_unknown(tmp_path):
     res = CodexCliAdapter().run(AdapterRequest(
         repo_path=str(repo), goal="say ok", model="gpt-5.5",
     ))
+    _skip_if_unauthed(res)
     assert res.model == "gpt-5.5", (
         f"explicit model must be the reported tag, got {res.model!r} (log: {res.log[:400]})"
     )
