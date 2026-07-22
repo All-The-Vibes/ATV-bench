@@ -106,3 +106,39 @@ def test_persist_record_appends_row(tmp_path):
     assert rows[0]["harness_a"] == "claude-code"
     assert rows[0]["score_a"] == 1.0
 
+
+
+def test_missing_winner_key_fails_closed():
+    """A record with NO winner key is malformed — must raise, not score a silent draw."""
+    from atv_bench.runner import match_record_to_rating_row
+
+    rec = _record("claude-code", "claude-code", "bare:sonnet")
+    rec.outcome.pop("winner", None)  # simulate a malformed/absent outcome
+    with pytest.raises(ValueError, match="winner"):
+        match_record_to_rating_row(rec)
+
+
+def test_blank_winner_fails_closed():
+    """A blank winner string is not a legitimate tie — must raise."""
+    from atv_bench.runner import match_record_to_rating_row
+
+    rec = _record("", "claude-code", "bare:sonnet")  # winner=""
+    with pytest.raises(ValueError, match="winner"):
+        match_record_to_rating_row(rec)
+
+
+def test_explicit_draw_scores_half():
+    """An explicit 'draw' token is a real outcome and still scores 0.5."""
+    from atv_bench.runner import match_record_to_rating_row
+
+    row = match_record_to_rating_row(_record("draw", "claude-code", "bare:sonnet"))
+    assert row["score_a"] == 0.5
+
+
+def test_identical_harness_selfplay_rejected():
+    """Two players sharing a harness key make winner attribution ambiguous — reject it."""
+    from atv_bench.runner import match_record_to_rating_row
+
+    rec = _record("claude-code", "claude-code", "claude-code")  # both seats same harness
+    with pytest.raises(ValueError, match="same harness|ambiguous|identical"):
+        match_record_to_rating_row(rec)

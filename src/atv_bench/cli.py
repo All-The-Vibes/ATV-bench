@@ -1187,8 +1187,15 @@ def _run_live(cfg, out_dir, a_home, b_home, json_out, persist=None):  # pragma: 
         replay_path=str(Path(out_dir)), verified=False,
     )
     if persist is not None:
+        from atv_bench.run_envelope import RunError
         from atv_bench.runner import persist_rating_row_from_record
-        persist_rating_row_from_record(rec, persist)
+        try:
+            persist_rating_row_from_record(rec, persist)
+        except ValueError as exc:
+            # a malformed outcome (missing/blank/foreign winner) must surface as a stable
+            # RunError, not a raw ValueError leaking out of the command.
+            raise RunError("policy_denied", f"cannot persist rating row: {exc}",
+                           fix="the match outcome is malformed; re-run the match") from exc
         typer.echo(f"↳ appended rating row to {persist}")
     return ok_envelope(rec.to_dict())
 
@@ -1251,6 +1258,8 @@ def rate(
         raise typer.Exit(2)
 
     rows = []
+    total_records = 0
+    infra_failures = 0
     for line in matches_file.read_text().splitlines():
         line = line.strip()
         if not line:
@@ -1260,9 +1269,14 @@ def rate(
         except json.JSONDecodeError as e:
             typer.echo(f"Cannot rate: malformed matches.jsonl line: {e}")
             raise typer.Exit(2)
+        total_records += 1
         row = _rating_row_from_match(m)
         if row is not None:
             rows.append(row)
+        else:
+            # a record that cannot yield a scored head-to-head is an infrastructure
+            # failure (crash/forfeit/malformed) — counted so the gate sees a real rate.
+            infra_failures += 1
 
     if not rows:
         typer.echo("No rateable matches in corpus (need >=1 scored head-to-head record).")
@@ -1270,7 +1284,18 @@ def rate(
 
     if enforce_gates:
         from atv_bench.pipeline import corpus_stats, gate_corpus
-        report = gate_corpus(corpus_stats(rows))
+        # Measure the infra-error rate over ALL records (scored + failed), not just the
+        # scored rows — the failures are exactly the records that did not score. The
+        # referee-nondeterminism rate is not measurable from a single corpus pass, so it is
+        # supplied as 0.0 ONLY when there is no evidence of nondeterminism to surface here;
+        # a dedicated re-run-agreement probe (out of scope for `rate`) would measure it.
+        infra_rate = (infra_failures / total_records) if total_records else 1.0
+        stats = corpus_stats(
+            rows,
+            infrastructure_error_rate=infra_rate,
+            referee_nondeterminism_rate=0.0,
+        )
+        report = gate_corpus(stats)
         if not report.passed:
             typer.echo("Refusing to publish: corpus failed quality gates (G5/G6):")
             for f in report.failures:

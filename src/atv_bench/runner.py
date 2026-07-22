@@ -23,6 +23,20 @@ from atv_bench.run_envelope import RunError
 ADAPTER_VERSION = "1.0.0"
 # Which CLI binary each harness needs on PATH (no-fake preflight).
 _HARNESS_BINARY = {"claude-code": "claude", "copilot-cli": "copilot"}
+# Composite bare-control prefix (mirrors adapters.contract.BARE_PREFIX): `bare:<inner>` runs
+# the SAME inner CLI under a stripped HOME, so it needs the inner harness's binary on PATH.
+_BARE_PREFIX = "bare:"
+
+
+def harness_binary_for(harness: str) -> str:
+    """Resolve a harness key (leaf or ``bare:<inner>``) to the CLI binary it needs on PATH.
+
+    The bare negative control runs the SAME model CLI as its inner harness (just under a
+    stripped HOME), so ``bare:claude-code`` needs ``claude`` exactly like ``claude-code``.
+    Raises ``KeyError`` if the (inner) harness is unknown.
+    """
+    inner = harness[len(_BARE_PREFIX):] if harness.startswith(_BARE_PREFIX) else harness
+    return _HARNESS_BINARY[inner]
 
 
 # ---------------------------------------------------------------------------
@@ -35,21 +49,31 @@ def match_record_to_rating_row(rec: MatchRecord) -> dict[str, Any]:
     """Convert a finished ``MatchRecord`` into a rating-corpus row.
 
     ``score_a`` is derived from the referee-authored ``outcome['winner']`` (a harness key),
-    NOT bot stdout: 1.0 if player_a won, 0.0 if player_b won, 0.5 on a tie/draw. The row
-    carries the two players' harness + model tags so ``rating.matches_from_records`` (and in
+    NOT bot stdout: 1.0 if player_a won, 0.0 if player_b won, 0.5 on an EXPLICIT tie/draw. The
+    row carries the two players' harness + model tags so ``rating.matches_from_records`` (and in
     turn ``lift.compute_lift``) can consume it directly.
 
-    Raises ``ValueError`` if the record does not carry exactly two players (the head-to-head
-    contract) or names a winner that is neither player.
+    Fails closed (raises ``ValueError``): a record without exactly two players, two players that
+    share a harness key (winner attribution would be ambiguous), a MISSING or BLANK ``winner``
+    (a malformed outcome is never silently scored as a draw — only an explicit ``tie``/``draw``
+    token scores 0.5), or a winner that is neither player.
     """
     if len(rec.players) != 2:
         raise ValueError(
             f"match_record_to_rating_row needs exactly 2 players, got {len(rec.players)}"
         )
     a, b = rec.players[0], rec.players[1]
+    if a.harness == b.harness:
+        raise ValueError(
+            f"both players share the same harness key {a.harness!r} — winner attribution is "
+            f"ambiguous; seat distinct harnesses (or the bare control 'bare:<inner>')"
+        )
+    if "winner" not in rec.outcome:
+        raise ValueError("outcome has no 'winner' key — malformed record, refusing to score")
     winner = str(rec.outcome.get("winner", "")).strip()
-    tie_tokens = {"", "tie", "draw"}
-    if winner.lower() in tie_tokens:
+    if not winner:
+        raise ValueError("outcome 'winner' is blank — malformed record, refusing to score")
+    if winner.lower() in {"tie", "draw"}:
         score_a = 0.5
     elif winner == a.harness:
         score_a = 1.0
@@ -119,10 +143,13 @@ class RunConfig:
             raise RunError("usage", f"unknown game {self.game!r}. Valid games: {valid}.",
                            fix=f"use one of: {valid}")
         for side, h in (("--a", self.a), ("--b", self.b)):
-            if h not in _HARNESS_BINARY:
+            try:
+                harness_binary_for(h)
+            except KeyError:
                 valid = ", ".join(sorted(_HARNESS_BINARY))
                 raise RunError("usage",
-                               f"unknown harness {h!r} for {side}. Valid: {valid}.",
+                               f"unknown harness {h!r} for {side}. Valid: {valid} "
+                               f"(or 'bare:<inner>' for the bare control).",
                                fix=f"use one of: {valid}")
         if not isinstance(self.rounds, int) or self.rounds < 1:
             raise RunError("usage", f"--rounds must be a positive integer, got {self.rounds!r}",
@@ -137,7 +164,7 @@ def preflight_or_raise(cfg: RunConfig, *, require_docker: bool = True,
     checks = []
     # each harness CLI must be on PATH — a missing CLI NEVER substitutes a fake bot.
     for h in (cfg.a, cfg.b):
-        binary = _HARNESS_BINARY[h]
+        binary = harness_binary_for(h)
         checks.append(("missing_cli", pf.check_cli_on_path(binary)))
     if require_docker:
         checks.append(("docker_unavailable", pf.check_docker()))

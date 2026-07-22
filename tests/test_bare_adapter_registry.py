@@ -94,3 +94,43 @@ def test_bare_registered_in_composable_registry():
     assert isinstance(a, BareModelAdapter)
     # round-trip: the resolved composite reports the same key it was built from.
     assert a.name == "bare:claude-code"
+
+
+def test_runconfig_accepts_bare_composite_harness():
+    """RunConfig.validate accepts a bare:<inner> harness key so the negative control the
+    scheduler emits can actually be run — not rejected as unknown (FU2 end-to-end)."""
+    from atv_bench.runner import RunConfig
+
+    cfg = RunConfig(game="lightcycles", a="claude-code", b="bare:claude-code", model="sonnet", rounds=1)
+    cfg.validate()  # must not raise
+
+
+def test_runconfig_rejects_bare_of_unknown_inner():
+    """bare:<unknown> still fails closed with an actionable message."""
+    from atv_bench.run_envelope import RunError
+    from atv_bench.runner import RunConfig
+
+    cfg = RunConfig(game="lightcycles", a="claude-code", b="bare:nope", model="sonnet", rounds=1)
+    with pytest.raises(RunError):
+        cfg.validate()
+
+
+def test_harness_binary_for_resolves_bare():
+    """The binary resolver maps bare:<inner> to the inner harness's CLI binary."""
+    from atv_bench.runner import harness_binary_for
+
+    assert harness_binary_for("claude-code") == "claude"
+    assert harness_binary_for("bare:claude-code") == "claude"
+
+
+def test_resolve_player_class_gates_bare_prefix():
+    """resolve_player_class recognizes bare:<inner> for builder harnesses and falls through
+    (None) for non-builders — the gating happens BEFORE the codeclash import, so it is
+    hermetically testable (a real bare build is exercised in the integration lane)."""
+    from atv_bench.integration import resolve_player_class
+
+    # non-builder keys (and bare of a non-builder) fall through to CodeClash's get_agent.
+    assert resolve_player_class("dummy") is None
+    assert resolve_player_class("bare:dummy") is None
+    assert resolve_player_class("bare:does-not-exist") is None
+    assert resolve_player_class("") is None

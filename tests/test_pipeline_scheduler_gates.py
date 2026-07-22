@@ -12,7 +12,7 @@ import json
 from typer.testing import CliRunner
 
 from atv_bench.cli import app
-from atv_bench.pipeline import gate_corpus
+from atv_bench.pipeline import corpus_stats, gate_corpus
 
 runner = CliRunner()
 
@@ -79,3 +79,57 @@ def test_rate_enforce_gates_blocks(tmp_path):
     r = runner.invoke(app, ["rate", "--store", str(store), "--enforce-gates"])
     assert r.exit_code != 0
     assert "gate" in r.output.lower()
+
+
+def test_corpus_stats_does_not_fabricate_unmeasurable_signals():
+    """Scored rating rows cannot measure infra-error / referee-nondeterminism rates —
+    those matches never scored, so they are absent from the corpus by construction.
+
+    corpus_stats must NOT emit a clean 0.0 for a signal it cannot measure (that would let a
+    thin/underspecified corpus sail through a gate that never actually ran). When the caller
+    supplies no measured rates, the signals are absent and evaluate_quality_gates fails
+    CLOSED on them (per gates.py's missing-signal contract).
+    """
+    rows = [
+        {"harness_a": "claude-code", "harness_b": "bare:claude-code", "game": "lightcycles",
+         "score_a": 1.0} for _ in range(200)
+    ]
+    stats = corpus_stats(rows)  # no measured infra/nondeterminism rates supplied
+    # unmeasurable signals must be absent, not a fabricated 0.0
+    assert "infrastructure_error_rate" not in stats or stats["infrastructure_error_rate"] is None
+    assert "referee_nondeterminism_rate" not in stats or stats["referee_nondeterminism_rate"] is None
+    # and the gate fails closed on the missing load-bearing signals
+    report = gate_corpus(stats)
+    assert report.passed is False
+    missing = {f["gate"] for f in report.failures}
+    assert any("infrastructure_error_rate" in g for g in missing)
+
+
+def test_corpus_stats_uses_supplied_measured_rates():
+    """When the caller supplies real measured infra/nondeterminism rates, they pass through
+    and a clean, powered corpus passes every gate."""
+    rows = [
+        {"harness_a": "claude-code", "harness_b": "bare:claude-code", "game": "lightcycles",
+         "score_a": 1.0} for _ in range(200)
+    ]
+    stats = corpus_stats(rows, infrastructure_error_rate=0.0, referee_nondeterminism_rate=0.0)
+    assert gate_corpus(stats).passed is True
+
+
+def test_rate_without_enforce_gates_publishes_thin_corpus(tmp_path):
+    """Default-off regression guard: rate WITHOUT --enforce-gates still publishes a thin
+    corpus (the gate is strictly opt-in; existing behavior is unchanged)."""
+    store = tmp_path / "corpus"
+    store.mkdir()
+    rows = [
+        {"player_a": "claude-code", "player_b": "bare:claude-code", "match_id": "m0",
+         "outcome": "a_wins", "harness_a": "claude-code", "harness_b": "bare:claude-code",
+         "model_a": "sonnet", "model_b": "sonnet", "score_a": 1.0},
+        {"player_a": "claude-code", "player_b": "bare:claude-code", "match_id": "m1",
+         "outcome": "b_wins", "harness_a": "claude-code", "harness_b": "bare:claude-code",
+         "model_a": "sonnet", "model_b": "sonnet", "score_a": 0.0},
+    ]
+    (store / "matches.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    r = runner.invoke(app, ["rate", "--store", str(store)])  # no --enforce-gates
+    assert r.exit_code == 0, r.output
+    assert (store / "ratings.json").exists()
