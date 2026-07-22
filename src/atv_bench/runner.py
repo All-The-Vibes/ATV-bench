@@ -63,10 +63,10 @@ def match_record_to_rating_row(rec: MatchRecord) -> dict[str, Any]:
             f"match_record_to_rating_row needs exactly 2 players, got {len(rec.players)}"
         )
     a, b = rec.players[0], rec.players[1]
-    if a.harness == b.harness:
+    if not a.harness or not b.harness or a.harness == b.harness:
         raise ValueError(
-            f"both players share the same harness key {a.harness!r} — winner attribution is "
-            f"ambiguous; seat distinct harnesses (or the bare control 'bare:<inner>')"
+            f"players must have distinct non-empty harness keys, got "
+            f"({a.harness!r}, {b.harness!r}) — winner attribution would be ambiguous"
         )
     if "winner" not in rec.outcome:
         raise ValueError("outcome has no 'winner' key — malformed record, refusing to score")

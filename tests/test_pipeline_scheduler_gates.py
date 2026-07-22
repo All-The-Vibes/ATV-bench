@@ -202,3 +202,19 @@ def test_rating_row_from_match_flat_selfplay_rejected():
     flat = {"harness_a": "claude-code", "harness_b": "claude-code",
             "model_a": "sonnet", "model_b": "sonnet", "score_a": 1.0}
     assert _rating_row_from_match(flat) is None
+
+
+def test_rating_row_blank_harness_unrateable():
+    """Missing/blank harness ids make attribution meaningless — unrateable on both shapes
+    (regression: blank ids previously slipped past the truthiness self-play guard)."""
+    from atv_bench.cli import _rating_row_from_match
+
+    # flat shape, both blank
+    assert _rating_row_from_match(
+        {"harness_a": "", "harness_b": "", "model_a": "m", "model_b": "m", "score_a": 1.0}
+    ) is None
+    # schema-v2 shape, both blank
+    assert _rating_row_from_match(
+        {"players": [{"harness": "", "model": "m"}, {"harness": "", "model": "m"}],
+         "outcome": {"winner": "a"}}
+    ) is None
