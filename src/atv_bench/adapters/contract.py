@@ -419,9 +419,104 @@ class CopilotCliAdapter(HarnessAdapter):
         )
 
 
+def parse_codex_model(jsonl: str) -> str:
+    """Parse the REAL model Codex invoked from its `--json` (JSONL) event stream.
+
+    Model-tag integrity (Eng Decision #5): the tag must reflect what the harness actually ran,
+    never the input `-m` string. Codex's `--json` emits one JSON event per line; the
+    ``session.created`` (a.k.a. session-config) event carries the resolved ``model``. We read
+    the first event that names a model. Returns "unknown" if none is machine-readable — NEVER
+    an echoed input like "auto".
+    """
+    for line in jsonl.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        m = ev.get("model")
+        if isinstance(m, str) and m:
+            return m
+        # nested shapes (defensive): {"session": {"model": ...}} / {"data": {"model": ...}}
+        for k in ("session", "data", "config"):
+            sub = ev.get(k)
+            if isinstance(sub, dict) and isinstance(sub.get("model"), str) and sub["model"]:
+                return sub["model"]
+    return "unknown"
+
+
+class CodexCliAdapter(HarnessAdapter):
+    """Drives OpenAI Codex CLI headless via `codex exec <goal> -m <model> --json`.
+
+    Auth (headless): whatever `codex login` established, or OPENAI_API_KEY. The arena already
+    provides the containment boundary (`--network none`, read-only rootfs, non-root, cap-drop),
+    so we pass ``--dangerously-bypass-approvals-and-sandbox`` to run non-interactively INSIDE
+    that trusted sandbox — Codex's own sandbox would otherwise block the in-arena edits, and
+    the outer arena is the real security boundary (mirrors how claude/copilot run headless).
+
+    Model-tag integrity: the published model is parsed from Codex's own `--json` events
+    (`parse_codex_model`), never the echoed `-m` input.
+    """
+
+    name = "codex"
+
+    @staticmethod
+    def available() -> bool:
+        return shutil.which("codex") is not None
+
+    def run(self, req: AdapterRequest) -> AdapterResult:
+        start = time.time()
+        base = _head_sha(req.repo_path)
+        cmd = [
+            "codex",
+            "exec",
+            req.goal,
+            "--json",
+            "--dangerously-bypass-approvals-and-sandbox",
+        ]
+        if req.model and req.model != "auto":
+            cmd += ["-m", req.model]
+        env = dict(req.env) if req.env is not None else dict(os.environ)
+        try:
+            proc = _run_harness_subprocess(cmd, req, env=env)
+        except subprocess.TimeoutExpired:
+            return AdapterResult(
+                status=AdapterStatus.TIMEOUT,
+                diff="",
+                log="codex timed out",
+                usage=Usage(seconds=time.time() - start),
+            )
+        elapsed = time.time() - start
+        model_used = parse_codex_model(proc.stdout or "")
+        diff = capture_diff(Path(req.repo_path), base) if base else git_diff(req.repo_path)
+        if proc.returncode != 0 and not diff.strip():
+            return AdapterResult(
+                status=AdapterStatus.ERROR,
+                diff="",
+                log=((proc.stdout or "") + (proc.stderr or ""))[-2000:],
+                usage=Usage(seconds=elapsed),
+                model=model_used,
+            )
+        status = derive_status(req.repo_path, base) if base else (
+            AdapterStatus.EDITED if diff.strip() else AdapterStatus.NO_EDIT
+        )
+        return AdapterResult(
+            status=status,
+            diff=diff,
+            log=(proc.stdout or "")[-2000:],
+            usage=Usage(seconds=elapsed, turns=1),
+            model=model_used,
+        )
+
+
 ADAPTERS: dict[str, type[HarnessAdapter]] = {
     ClaudeCodeAdapter.name: ClaudeCodeAdapter,
     CopilotCliAdapter.name: CopilotCliAdapter,
+    CodexCliAdapter.name: CodexCliAdapter,
 }
 
 # Composite-adapter prefix: `bare:<inner>` resolves to the bare-model negative control
