@@ -419,9 +419,117 @@ class CopilotCliAdapter(HarnessAdapter):
         )
 
 
+def parse_codex_model(jsonl: str) -> str:
+    """Parse the REAL model Codex invoked from its `--json` (JSONL) event stream.
+
+    Model-tag integrity (Eng Decision #5): the tag must reflect what the harness actually ran,
+    never the input `-m` string. Codex's `--json` emits one JSON event per line; the
+    ``session.created`` (a.k.a. session-config) event carries the resolved ``model``. We read
+    the first event that names a model. Returns "unknown" if none is machine-readable — NEVER
+    an echoed input like "auto".
+    """
+    for line in jsonl.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(ev, dict):
+            continue
+
+        def _resolved(v: Any) -> str | None:
+            # a real resolved model id, never an echoed placeholder like "auto"/"default".
+            return v if (isinstance(v, str) and v and v.strip().lower() not in
+                         {"auto", "default", "unknown"}) else None
+
+        m = _resolved(ev.get("model"))
+        if m:
+            return m
+        # nested shapes (defensive): {"session": {"model": ...}} / {"data": {"model": ...}}
+        for k in ("session", "data", "config"):
+            sub = ev.get(k)
+            if isinstance(sub, dict):
+                m = _resolved(sub.get("model"))
+                if m:
+                    return m
+    return "unknown"
+
+
+class CodexCliAdapter(HarnessAdapter):
+    """Drives OpenAI Codex CLI headless via `codex exec <goal> -m <model> --json`.
+
+    Auth (headless): whatever `codex login` established, or OPENAI_API_KEY. We pass
+    ``--dangerously-bypass-approvals-and-sandbox`` to run non-interactively — Codex's own
+    interactive approval + self-sandbox would otherwise block the in-arena edits. This is safe
+    because the OUTER boundary is the real one: the adapter subprocess runs under the Section-2.5
+    containment (`_run_harness_subprocess` → rlimits: RLIMIT_AS/NPROC/CPU + timeout), and in a
+    league match the whole harness runs inside the arena Docker sandbox (non-root, read-only
+    rootfs, cap-drop). NOTE: like the claude/copilot adapters, an LLM adapter runs with egress
+    PERMITTED (deny_egress defaults off — it must reach its model provider), so network is NOT
+    denied at this layer; the isolation here is resource caps + the outer Docker sandbox, not a
+    network cut. This mirrors claude's ``acceptEdits`` / copilot's ``--allow-all-tools`` posture.
+
+    Model-tag integrity: the published model is parsed from Codex's own `--json` events
+    (`parse_codex_model`), never the echoed `-m` input.
+    """
+
+    name = "codex"
+
+    @staticmethod
+    def available() -> bool:
+        return shutil.which("codex") is not None
+
+    def run(self, req: AdapterRequest) -> AdapterResult:
+        start = time.time()
+        base = _head_sha(req.repo_path)
+        cmd = [
+            "codex",
+            "exec",
+            req.goal,
+            "--json",
+            "--dangerously-bypass-approvals-and-sandbox",
+        ]
+        if req.model and req.model != "auto":
+            cmd += ["-m", req.model]
+        env = dict(req.env) if req.env is not None else dict(os.environ)
+        try:
+            proc = _run_harness_subprocess(cmd, req, env=env)
+        except subprocess.TimeoutExpired:
+            return AdapterResult(
+                status=AdapterStatus.TIMEOUT,
+                diff="",
+                log="codex timed out",
+                usage=Usage(seconds=time.time() - start),
+            )
+        elapsed = time.time() - start
+        model_used = parse_codex_model(proc.stdout or "")
+        diff = capture_diff(Path(req.repo_path), base) if base else git_diff(req.repo_path)
+        if proc.returncode != 0 and not diff.strip():
+            return AdapterResult(
+                status=AdapterStatus.ERROR,
+                diff="",
+                log=((proc.stdout or "") + (proc.stderr or ""))[-2000:],
+                usage=Usage(seconds=elapsed),
+                model=model_used,
+            )
+        status = derive_status(req.repo_path, base) if base else (
+            AdapterStatus.EDITED if diff.strip() else AdapterStatus.NO_EDIT
+        )
+        return AdapterResult(
+            status=status,
+            diff=diff,
+            log=(proc.stdout or "")[-2000:],
+            usage=Usage(seconds=elapsed, turns=1),
+            model=model_used,
+        )
+
+
 ADAPTERS: dict[str, type[HarnessAdapter]] = {
     ClaudeCodeAdapter.name: ClaudeCodeAdapter,
     CopilotCliAdapter.name: CopilotCliAdapter,
+    CodexCliAdapter.name: CodexCliAdapter,
 }
 
 # Composite-adapter prefix: `bare:<inner>` resolves to the bare-model negative control

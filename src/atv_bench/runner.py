@@ -22,7 +22,7 @@ from atv_bench.run_envelope import RunError
 
 ADAPTER_VERSION = "1.0.0"
 # Which CLI binary each harness needs on PATH (no-fake preflight).
-_HARNESS_BINARY = {"claude-code": "claude", "copilot-cli": "copilot"}
+_HARNESS_BINARY = {"claude-code": "claude", "copilot-cli": "copilot", "codex": "codex"}
 # Composite bare-control prefix (mirrors adapters.contract.BARE_PREFIX): `bare:<inner>` runs
 # the SAME inner CLI under a stripped HOME, so it needs the inner harness's binary on PATH.
 _BARE_PREFIX = "bare:"

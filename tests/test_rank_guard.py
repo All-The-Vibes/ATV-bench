@@ -183,21 +183,18 @@ def test_airtight_word_absent():
 
 
 # ---------------------------------------------------------------------------
-# 4. codex is fingerprint-only until a CodexAdapter builder exists (CEO-5).
+# 4. codex is now a BUILDER: CodexCliAdapter ships an execution adapter (quickstart).
 # ---------------------------------------------------------------------------
 
 
-def test_codex_fingerprint_only_copy():
-    """codex has no builder adapter yet -> it is fingerprint-only, not a competitor."""
-    # No CodexAdapter builder exists yet: the role helper must report fingerprint-only.
-    assert harness_role("codex") == "fingerprint-only"
-    # Builders that DO exist are reported as builders (sanity contrast).
+def test_codex_is_now_a_builder():
+    """codex gained an execution adapter (CodexCliAdapter), so it is a competitor, not
+    fingerprint-only — harness_role reflects the live ADAPTERS registry."""
+    assert harness_role("codex") == "builder"
     assert harness_role("claude-code") == "builder"
-
-    # The role helper must agree with reality: a CodexAdapter builder is absent.
-    import atv_bench.adapters as adapters
-    has_codex_builder = hasattr(adapters, "CodexAdapter")
-    assert has_codex_builder is False, (
-        "CodexAdapter builder now exists — update harness_role + the codex copy to "
-        "'competitor' and delete this guard clause"
-    )
+    assert harness_role("copilot-cli") == "builder"
+    # a genuinely-unregistered harness stays fingerprint-only.
+    assert harness_role("some-unregistered-harness") == "fingerprint-only"
+    # the role helper agrees with reality: the codex adapter is registered.
+    from atv_bench.adapters.contract import ADAPTERS
+    assert "codex" in ADAPTERS

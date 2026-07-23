@@ -1468,6 +1468,154 @@ def _is_infrastructure_failure(m: dict) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# quickstart — the one-command harness eval UX.
+# ---------------------------------------------------------------------------
+
+# A fast, diverse trio for the default "taste" run (movement, board, colony) — enough to see
+# the harness help/not without the full-20 cost. `--all` opts into every live arena.
+_QUICK_GAMES = ("lightcycles", "chess", "ants")
+
+
+def _render_score_summary(res) -> str:
+    """Human-readable scientific summary: overall lift + per-game breakdown + gate verdict."""
+    lines: list[str] = []
+    verdict = "CREDIBLE" if res.credible else "PROVISIONAL (corpus too thin for a defensible rank)"
+    lines.append("")
+    lines.append(f"Evaluation: {res.harness} on {res.model}")
+    if res.overall is not None:
+        o = res.overall
+        sign = "+" if o.lift >= 0 else ""
+        verb = ("helps" if o.lo > 0 else "hurts" if o.hi < 0 else "no measurable effect vs bare")
+        lines.append(f"  OVERALL lift over bare model: {sign}{o.lift:.3f}  "
+                     f"(95% CI {o.lo:.3f}...{o.hi:.3f})  -> harness {verb}")
+    else:
+        lines.append("  OVERALL lift: undefined (the bare baseline never ran)")
+    lines.append(f"  Credibility gate (G5/G6): {verdict}")
+    lines.append("  Per-game (harness win-rate vs its bare control):")
+    for g in sorted(res.per_game, key=lambda x: x.game):
+        flag = "  [insufficient N]" if g.insufficient else ""
+        filled = max(0, min(10, round(g.win_rate * 10)))
+        bar = "#" * filled + "." * (10 - filled)
+        lines.append(f"    {g.game:<14} {bar} {g.win_rate*100:5.1f}%  (n={g.n}){flag}")
+    if res.failures:
+        games_failed = sorted({f['game'] for f in res.failures})
+        lines.append(f"  ! {len(res.failures)} match(es) failed to run: {', '.join(games_failed)} "
+                     f"(counted as infrastructure error)")
+    if res.board_url:
+        lines.append(f"\n  Leaderboard: {res.board_url}")
+        lines.append(f"  (or run `atv-bench board --store {res.corpus_path.parent}`)")
+    return "\n".join(lines)
+
+
+@app.command()
+def quickstart(
+    harness: str = typer.Option(None, "--harness", help="Harness to evaluate (default: auto-detect)."),
+    home: Path = typer.Option(None, "--home", help="Harness config root (default: standard dir under $HOME)."),
+    model: str = typer.Option(None, "--model", help="Model to route the eval through (default: pick interactively)."),
+    all_games: bool = typer.Option(False, "--all", help="Evaluate on ALL 20 live games (slow; default is a quick trio)."),
+    game: list[str] = typer.Option(None, "--game", help="Explicit game key(s) (repeatable; overrides default/--all)."),
+    repeats: int = typer.Option(2, "--repeats", help="Paired repeats per (pair, game) cell."),
+    store: Path = typer.Option(None, "--store", help="Where to write the corpus + board (default: ./quickstart-league)."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmations (non-interactive / CI)."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the machine-readable QuickstartResult."),
+) -> None:
+    """Evaluate your coding-agent harness end-to-end in one command.
+
+    Auto-detects your harness, shows the fingerprint it would publish, lets you pick a model,
+    then runs your harness AND the bare model across the live games in the isolated arena,
+    scores each game + an overall harness-over-bare lift, updates a local leaderboard, and
+    prints the link. Default is a fast 3-game taste; `--all` runs all 20 live games.
+    """
+    from atv_bench import quickstart as qs
+    from atv_bench.adapters.contract import ADAPTERS
+    from atv_bench.games import live_keys
+    from atv_bench.interactive import select_model
+    from atv_bench.models import models_with_current
+
+    # 1. detect harness + fingerprint (reuses the vetted probe + ambiguity guard).
+    probe = _probe_or_exit(home, harness)
+    resolved = probe.manifest.get("harness") or harness
+    if not json_out:
+        typer.echo(_render_full_assessment(probe.manifest, resolved))
+        typer.echo("")
+
+    # a harness with no execution adapter can be fingerprinted but not run.
+    if resolved not in ADAPTERS:
+        typer.echo(f"'{resolved}' can be fingerprinted but has no execution adapter yet, so it "
+                   f"can't be evaluated in matches. Runnable: {', '.join(sorted(ADAPTERS))}.")
+        raise typer.Exit(2)
+
+    if not yes and not json_out:
+        typer.confirm("Evaluate this harness?", default=True, abort=True)
+
+    # 2. choose the model (arrow-key picker, or --model, or non-interactive default).
+    choices = models_with_current(resolved, probe.manifest)
+    try:
+        chosen_model = select_model(choices, preselected=model,
+                                    non_interactive=(True if (yes or json_out) else None))
+    except ValueError as e:
+        typer.echo(f"Cannot start: {e}")
+        raise typer.Exit(2)
+
+    # 3. resolve + validate the game set (fail with a USAGE error, not an env error later).
+    if repeats < 1:
+        typer.echo(f"--repeats must be >= 1, got {repeats}.")
+        raise typer.Exit(2)
+    live = set(live_keys())
+    if game:
+        unknown = [g for g in game if g not in live]
+        if unknown:
+            typer.echo(f"Not live game(s): {', '.join(unknown)}. "
+                       f"Live: {', '.join(sorted(live))}.")
+            raise typer.Exit(2)
+        games = list(game)
+    elif all_games:
+        games = live_keys()
+    else:
+        games = list(_QUICK_GAMES)
+
+    # 4. cost guard for the full run.
+    n_matches = len(games) * repeats
+    if all_games and not yes and not json_out:
+        typer.confirm(
+            f"This runs {n_matches} live matches ({len(games)} games x {repeats} repeats) "
+            f"- Docker + real API calls, can take a while. Continue?",
+            default=False, abort=True,
+        )
+
+    store_dir = store or Path("./quickstart-league")
+
+    if not json_out:
+        typer.echo(f"\nEvaluating {resolved} vs bare:{resolved} on {chosen_model} "
+                   f"across {len(games)} game(s), {repeats} repeat(s) = {n_matches} matches...\n")
+
+    def _progress(ev: dict) -> None:
+        if json_out:
+            return
+        if ev.get("phase") == "match":
+            typer.echo(f"  [{ev['index']+1}/{ev['total']}] {ev['game']}: "
+                       f"{ev['harness_a']} vs {ev['harness_b']} ...")
+        elif ev.get("phase") == "match_failed":
+            typer.echo(f"      x {ev['game']} failed: {ev.get('error','')[:80]}")
+
+    executor = qs.live_match_executor(rounds=3, homes={resolved: home, f"bare:{resolved}": home})
+    try:
+        result = qs.run_quickstart_eval(
+            harness=resolved, model=chosen_model, games=games, repeats=repeats,
+            store=store_dir, execute=executor, progress=_progress,
+        )
+    except Exception as exc:  # preflight / environment failure -> actionable, not a stack trace
+        typer.echo(f"Evaluation could not run: {type(exc).__name__}: {exc}\n"
+                   f"Run `atv-bench doctor` to check Docker / harness CLI / CodeClash readiness.")
+        raise typer.Exit(5)
+
+    if json_out:
+        typer.echo(json.dumps(result.to_dict(), indent=2))
+    else:
+        typer.echo(_render_score_summary(result))
+
+
 def _rating_row_from_match(m: dict) -> dict | None:
     """Extract (harness_a, harness_b, model_a, model_b, score_a) from a match record.
 
