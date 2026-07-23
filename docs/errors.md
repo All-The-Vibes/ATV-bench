@@ -19,13 +19,13 @@ that needs human action (unauthenticated).
 | 8    | `model_unparseable`  | The model output could not be parsed.                          |
 | 9    | `codeclash_dep`      | The CodeClash git dependency is not importable — reinstall.    |
 
-For `codeclash_dep` (exit 9), reinstall the tool to pull the git dependency:
+For `codeclash_dep` (exit 9), the CodeClash arena ships in the `run` extra —
+install that extra to pull the git dependency (a plain reinstall of `atv-bench`
+will NOT pull it):
 
 ```bash
-uv tool install --reinstall --from git+https://github.com/All-The-Vibes/ATV-bench atv-bench
-# or
-uv tool upgrade atv-bench
+uv tool install --reinstall --from 'atv-bench[run] @ git+https://github.com/All-The-Vibes/ATV-bench' atv-bench
 ```
 
-From a source checkout: `git submodule update --init && uv pip install -e '.[run]'`,
+From a source checkout: `uv pip install -e '.[run]'`,
 or run `atv-bench doctor` for a full prerequisite report.

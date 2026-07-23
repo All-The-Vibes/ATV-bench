@@ -141,3 +141,44 @@ def test_quickstart_rejects_bad_repeats(monkeypatch, tmp_path):
     r = runner.invoke(app, ["quickstart", "--harness", "claude-code", "--model", "m", "--yes",
                             "--repeats", "0", "--json"])
     assert r.exit_code == 2, r.output
+
+
+def test_quickstart_harness_picker_used_when_ambiguous(monkeypatch, tmp_path):
+    """No --harness + >1 harness detected + TTY → the keyboard harness dropdown runs and its
+    choice drives the eval (instead of the hard multi-harness ambiguity error)."""
+    board = tmp_path / "_board"; board.mkdir()
+    cap = {}
+
+    def fake_eval(**kwargs):
+        cap.update(kwargs)
+        return _fake_result(board)
+
+    monkeypatch.setattr("atv_bench.quickstart.run_quickstart_eval", fake_eval)
+    monkeypatch.setattr("atv_bench.quickstart.live_match_executor", lambda **k: (lambda **kk: {}))
+    # both harnesses "present" so auto-detect is ambiguous
+    monkeypatch.setattr("atv_bench.harnesses.harness_config_present",
+                        lambda key, base=None: key in ("claude-code", "copilot-cli"))
+    # probe resolves to whatever harness the picker returned
+    monkeypatch.setattr("atv_bench.cli._probe_or_exit",
+                        lambda home, harness: _fake_probe(harness or "claude-code"))
+    # the picker returns copilot-cli
+    monkeypatch.setattr("atv_bench.harness_selection.select_harness",
+                        lambda *a, **k: "copilot-cli")
+
+    r = runner.invoke(app, ["quickstart", "--model", "m", "--yes", "--json"])
+    assert r.exit_code == 0, r.output
+    assert cap["harness"] == "copilot-cli"
+
+
+def test_quickstart_explicit_harness_skips_picker(monkeypatch, tmp_path):
+    """An explicit --harness never opens the picker."""
+    cap = {}
+    _patch(monkeypatch, tmp_path, capture=cap)
+
+    def _boom(*a, **k):  # pragma: no cover
+        raise AssertionError("picker must not run when --harness is explicit")
+    monkeypatch.setattr("atv_bench.harness_selection.select_harness", _boom)
+    r = runner.invoke(app, ["quickstart", "--harness", "codex", "--model", "m", "--yes", "--json"])
+    assert r.exit_code == 0, r.output
+    assert cap["harness"] == "codex"
+

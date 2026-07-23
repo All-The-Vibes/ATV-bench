@@ -26,6 +26,20 @@ app = typer.Typer(
 )
 
 
+@app.callback()
+def _root(ctx: typer.Context) -> None:
+    """Greet with the ATV-BENCH gold-medal banner on first run (fail-silent, once)."""
+    # `--json` is a per-command flag; sniff argv so the banner never corrupts machine output.
+    json_mode = "--json" in sys.argv
+    try:
+        from atv_bench.banner import maybe_show_banner
+
+        maybe_show_banner(json_mode=json_mode)
+    except Exception:
+        pass  # the banner is pure polish; never let it block a command
+
+
+
 def _probe_or_exit(home: Path | None, harness: str | None) -> fp.ProbeResult:
     """Probe the resolved harness, or print an actionable message and exit(2).
 
@@ -1532,6 +1546,31 @@ def quickstart(
     from atv_bench.games import live_keys
     from atv_bench.interactive import select_model
     from atv_bench.models import models_with_current
+
+    # 0. if no explicit --harness, offer a keyboard dropdown when more than one harness is
+    #    present (else auto-detect handles the single/zero case). Skips the TUI in
+    #    non-interactive/headless mode (--yes/--json/no TTY), where the first ready harness wins.
+    if harness is None and home is None:
+        from atv_bench import harnesses as _hz
+        from atv_bench.fingerprint.probe import _HARNESS_BINARY
+        from atv_bench.harness_selection import harness_choices, select_harness
+
+        detected = [h.key for h in HARNESSES if h.live and _hz.harness_config_present(h.key)]
+        if len(detected) > 1:
+            import shutil
+            choices = harness_choices(
+                config_present=lambda k: _hz.harness_config_present(k),
+                cli_present=lambda k: shutil.which(_HARNESS_BINARY.get(k, k)) is not None,
+            )
+            try:
+                harness = select_harness(
+                    choices,
+                    non_interactive=(True if (yes or json_out) else None),
+                    allow_fallback=True,
+                )
+            except ValueError as e:
+                typer.echo(f"Cannot start: {e}")
+                raise typer.Exit(2)
 
     # 1. detect harness + fingerprint (reuses the vetted probe + ambiguity guard).
     probe = _probe_or_exit(home, harness)
