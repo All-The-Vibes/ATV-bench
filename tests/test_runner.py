@@ -23,6 +23,32 @@ def _cfg(**kw):
     return RunConfig(**base)
 
 
+def test_summarize_tournament_maps_bare_name_back_to_harness_key():
+    """CodeClash reports the winner as the git-safe player name (`bare-claude-code`);
+    summarize_tournament must map it back to the harness key (`bare:claude-code`) so
+    match_record_to_rating_row can attribute the score.
+    """
+    from atv_bench.runner import summarize_tournament
+
+    cfg = _cfg(a="claude-code", b="bare:claude-code")
+    raw = {"metadata": {"round_stats": {
+        "0": {"winner": "claude-code"},          # control round, ignored
+        "1": {"winner": "bare-claude-code"},     # sanitized name from CodeClash
+        "2": {"winner": "bare-claude-code"},
+    }}}
+    outcome, _models = summarize_tournament(raw, cfg)
+    assert outcome["winner"] == "bare:claude-code"
+
+
+def test_summarize_tournament_passes_through_tie():
+    from atv_bench.runner import summarize_tournament
+
+    cfg = _cfg(a="claude-code", b="bare:claude-code")
+    raw = {"metadata": {"round_stats": {"1": {"winner": "Tie"}}}}
+    outcome, _ = summarize_tournament(raw, cfg)
+    assert outcome["winner"] == "tie"
+
+
 def test_preflight_missing_cli_raises_missing_cli(monkeypatch):
     # No-fake guard (CRITICAL): a missing harness CLI → RunError(missing_cli), NOT a bot.
     import atv_bench.preflight as pf

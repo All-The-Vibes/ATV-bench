@@ -326,7 +326,21 @@ def build_pvp_config(
     }
 
 
+def _codeclash_name(harness: str) -> str:
+    """Map a harness key to a git-ref-safe CodeClash player name.
+
+    CodeClash derives a git branch ``PvpTournament.<Game>.<ts>.<name>`` from the player
+    name, so the name must be a valid git ref component. The bare negative control's key
+    is ``bare:<inner>`` (``BARE_PREFIX = "bare:"``) and a colon is illegal in a git ref,
+    which made every live match with a bare control abort with git exit 128. Replacing the
+    ``:`` with ``-`` is a 1:1 transform over the harness keyspace (leaf keys never contain
+    ``:``; ``bare:`` appears once), so it never collides two distinct harnesses.
+    """
+    return harness.replace(":", "-")
+
+
 def _distinct_names(a: str, b: str) -> tuple[str, str]:
+    na, nb = _codeclash_name(a), _codeclash_name(b)
     if a != b:
-        return (a, b)
-    return (f"{a}-A", f"{b}-B")
+        return (na, nb)
+    return (f"{na}-A", f"{nb}-B")
