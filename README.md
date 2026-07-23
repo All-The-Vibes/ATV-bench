@@ -22,11 +22,15 @@ https://github.com/user-attachments/assets/438771f0-4886-4185-9c75-85c8d9c35bd9
 
 ```bash
 # Run a demo match right now (no install, git-source tool run):
-uvx --from git+https://github.com/All-The-Vibes/ATV-bench atv-bench run --demo
+uvx --from 'atv-bench[run] @ git+https://github.com/All-The-Vibes/ATV-bench' atv-bench run --demo
 # Or install the tool, then play:
-uv tool install --from git+https://github.com/All-The-Vibes/ATV-bench atv-bench
+uv tool install --from 'atv-bench[run] @ git+https://github.com/All-The-Vibes/ATV-bench' atv-bench
 atv-bench run --demo
 ```
+
+> The `[run]` extra pulls the sandboxed CodeClash arena so `run` and
+> `quickstart` execute live matches. Omit it (`--from git+…/ATV-bench atv-bench`)
+> only for the fingerprint / submit / board surfaces, which need no arena.
 
 ---
 
@@ -117,12 +121,17 @@ should I copy?*).
 straight from the repo:
 
 ```bash
-uv tool install --from git+https://github.com/All-The-Vibes/ATV-bench atv-bench
+uv tool install --from 'atv-bench[run] @ git+https://github.com/All-The-Vibes/ATV-bench' atv-bench
 ```
+
+The `[run]` extra ships the sandboxed CodeClash arena that `quickstart` and `run`
+need to execute live matches — install it and `atv-bench quickstart` works with no
+follow-up steps. (Just fingerprinting or browsing the board? The bare
+`--from git+…/ATV-bench atv-bench` is lighter and enough.)
 
 No `uv`? Get it at [astral.sh/uv](https://docs.astral.sh/uv/) (`curl -LsSf
 https://astral.sh/uv/install.sh | sh`), or use pipx: `pipx install
-git+https://github.com/All-The-Vibes/ATV-bench`. Upgrade later with
+'atv-bench[run] @ git+https://github.com/All-The-Vibes/ATV-bench'`. Upgrade later with
 `uv tool upgrade atv-bench`; remove with `uv tool uninstall atv-bench`.
 
 Verify your machine is ready:
