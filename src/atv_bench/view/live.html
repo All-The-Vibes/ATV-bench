@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATV-bench — Live Match</title>
+<title>ATV-bench — Live gameplay</title>
 <style>
   :root {
     --bg: oklch(21% 0.02 265);
@@ -13,9 +13,11 @@
     --muted: oklch(72% 0.02 265);
     --line: oklch(38% 0.02 265);
     --accent: oklch(78% 0.16 155);
-    --rank-1: oklch(85% 0.15 95);
-    --a: oklch(72% 0.15 250);   /* player A — blue */
-    --b: oklch(70% 0.17 25);    /* player B — red  */
+    --a: oklch(72% 0.15 250);   /* seat 0 — claude-code — blue */
+    --b: oklch(70% 0.17 25);    /* seat 1 — bare-claude-code — red */
+    --food: oklch(85% 0.15 95);
+    --sq-light: oklch(34% 0.02 265);
+    --sq-dark: oklch(28% 0.02 265);
     --chip: oklch(34% 0.03 265);
     --radius: 14px;
     --mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, monospace;
@@ -28,199 +30,444 @@
     display: flex; flex-direction: column; align-items: center; padding: 28px 16px 60px;
   }
   h1 { font-size: 20px; font-weight: 650; margin: 0 0 2px; letter-spacing: .2px; }
-  .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; text-align: center; }
-  .players {
-    display: flex; gap: 14px; align-items: center; margin-bottom: 14px; font-family: var(--mono);
-    font-size: 14px;
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 18px; text-align: center; }
+
+  /* D3 — seat legend: swatch + raw name establishes color->name before the strip. */
+  .seat-legend {
+    display: flex; gap: 14px; align-items: center; margin-bottom: 16px;
+    font-family: var(--mono); font-size: 14px;
   }
   .pill { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: var(--surface);
     border: 1px solid var(--line); border-radius: 999px; }
   .swatch { width: 12px; height: 12px; border-radius: 3px; }
   .swatch.a { background: var(--a); } .swatch.b { background: var(--b); }
   .vs { color: var(--muted); font-size: 12px; }
+  .score { color: var(--muted); font-family: var(--mono); font-size: 13px; margin-left: 6px; }
+
+  /* D1 — round strip: pending ghost / current pulse+turn / landed winner-colored+check */
+  .round-strip { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; justify-content: center; }
+  .chip {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-width: 58px; padding: 8px 10px; border-radius: 10px; font-family: var(--mono);
+    font-size: 13px; border: 1px solid var(--line); background: var(--chip); cursor: default;
+    line-height: 1.3;
+  }
+  .chip .rnd { font-weight: 700; }
+  .chip .meta { font-size: 11px; color: var(--muted); }
+  .chip.pending { opacity: .4; border-style: dashed; background: transparent; }
+  .chip.current {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--accent) 60%, transparent);
+    animation: pulse 1.4s ease-out infinite;
+  }
+  .chip.landed { color: #fff; }
+  .chip.landed.clickable { cursor: pointer; }
+  .chip.landed.seat-a { background: var(--a); border-color: var(--a); }
+  .chip.landed.seat-b { background: var(--b); border-color: var(--b); }
+  .chip.landed .meta { color: rgba(255,255,255,.85); }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--accent) 55%, transparent); }
+    70% { box-shadow: 0 0 0 8px color-mix(in oklch, var(--accent) 0%, transparent); }
+    100% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--accent) 0%, transparent); }
+  }
+
   .stage { position: relative; }
   canvas {
     background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
     box-shadow: 0 8px 30px rgba(0,0,0,.35); display: block;
   }
-  .hud { font-family: var(--mono); font-size: 13px; color: var(--muted); margin-top: 10px;
-    text-align: center; min-height: 20px; }
-  .banner {
-    position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
-    background: color-mix(in oklch, var(--bg) 62%, transparent); border-radius: var(--radius);
-    font-family: var(--mono); font-size: 22px; font-weight: 700; text-align: center; padding: 0 10px;
-  }
-  .banner.show { display: flex; animation: fade .4s ease; }
+  .controls { display: flex; gap: .6rem; align-items: center; font-family: var(--mono);
+    font-size: 13px; margin-top: 12px; }
+  button { background: var(--surface); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: .4rem .8rem; font-family: var(--mono); cursor: pointer; }
+  button:hover { border-color: var(--a); }
+  input[type=range] { accent-color: var(--a); }
+  .hud { font-family: var(--mono); font-size: 13px; color: var(--muted); margin-top: 8px;
+    text-align: center; min-height: 18px; }
+
+  /* D4 — empty state: minimal status line */
+  .empty-line { font-family: var(--mono); font-size: 15px; color: var(--text);
+    margin: 30px 0 6px; text-align: center; }
+  .empty-line .dots { color: var(--muted); }
+
+  /* D2 — complete state: lift headline + CI subtext + confidence meter */
+  .complete { display: none; margin-top: 28px; width: min(520px, 94vw); text-align: center; }
+  .complete.show { display: block; animation: fade .5s ease; }
   @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
-  .board { margin-top: 26px; width: min(680px, 94vw); display: none; }
-  .board.show { display: block; animation: fade .5s ease; }
-  .board h2 { font-size: 13px; color: var(--muted); font-weight: 600; margin: 0 0 10px;
-    text-transform: uppercase; letter-spacing: .08em; }
-  .row {
-    display: grid; grid-template-columns: 34px 78px 1fr; align-items: center; gap: 12px;
-    padding: 10px 14px; background: var(--surface); border: 1px solid var(--line);
-    border-radius: 10px; margin-bottom: 8px; font-family: var(--mono);
-  }
-  .row .rank { color: var(--muted); font-weight: 700; }
-  .row .elo { color: var(--accent); font-weight: 700; }
-  .row.win { border-color: color-mix(in oklch, var(--accent) 55%, var(--line)); }
-  .row .who b { font-weight: 650; } .row .who .chip { color: var(--muted); font-size: 12px; }
-  .insights { margin-top: 16px; }
-  .insights ul { margin: 0; padding-left: 20px; }
-  .insights li { color: var(--text); margin: 6px 0; font-size: 14px; }
+  .lift { font-size: 46px; font-weight: 750; font-family: var(--mono); letter-spacing: -.02em; }
+  .lift.pos { color: var(--accent); } .lift.neg { color: var(--b); }
+  .ci { color: var(--muted); font-family: var(--mono); font-size: 13px; margin-top: 2px; }
+  .confidence-meter { display: inline-flex; align-items: center; gap: 10px; margin-top: 14px;
+    font-family: var(--mono); font-size: 13px; }
+  .meter-track { display: flex; gap: 3px; }
+  .meter-track i { width: 16px; height: 10px; border-radius: 2px; background: var(--line); }
+  .meter-track i.on { background: var(--accent); }
+  .conf-label { text-transform: uppercase; letter-spacing: .08em; font-size: 11px; }
+  .conf-low .conf-label { color: var(--b); }
+  .conf-med .conf-label { color: var(--food); }
+  .conf-high .conf-label { color: var(--accent); }
+  .breakdown { margin-top: 18px; font-family: var(--mono); font-size: 13px; color: var(--muted); }
+  .lead-link { display: inline-block; margin-top: 18px; color: var(--muted); font-size: 13px;
+    font-family: var(--mono); }
+  .lead-link a { color: var(--accent); }
 </style>
 </head>
 <body>
-  <h1>ATV-bench — Live Match</h1>
-  <div class="sub">Two harnesses' bots, head-to-head in Lightcycles (Tron). Live feed, streamed turn by turn.</div>
+  <h1>ATV-bench — Live gameplay</h1>
+  <div class="sub" id="sub">Watching the matches play, round by round.</div>
 
-  <div class="players">
-    <span class="pill"><span class="swatch a"></span><span id="nameA">Player A</span></span>
+  <div class="seat-legend" id="legend">
+    <span class="pill"><span class="swatch a"></span><span id="nameA">claude-code</span></span>
     <span class="vs">vs</span>
-    <span class="pill"><span class="swatch b"></span><span id="nameB">Player B</span></span>
+    <span class="pill"><span class="swatch b"></span><span id="nameB">bare:claude-code</span></span>
+    <span class="score" id="score"></span>
   </div>
 
-  <div class="stage">
+  <div class="round-strip" id="strip"></div>
+
+  <div class="empty-line" id="emptyLine" style="display:none"></div>
+
+  <div class="stage" id="stage">
     <canvas id="arena" width="600" height="600"></canvas>
-    <div class="banner" id="banner"></div>
   </div>
-  <div class="hud" id="hud">Connecting to match feed…</div>
+  <div class="controls" id="controls">
+    <button id="playpause">⏸ Pause</button>
+    <button id="restart">⟲ Restart</button>
+    <input id="scrub" type="range" min="0" value="0">
+    <span id="turn" class="hud">turn 0</span>
+  </div>
+  <div class="hud" id="hud"></div>
 
-  <div class="board" id="board">
-    <h2>Leaderboard</h2>
-    <div id="rows"></div>
-    <div class="insights"><h2>Insights</h2><ul id="insights"></ul></div>
+  <div class="complete" id="complete">
+    <div class="lift" id="lift"></div>
+    <div class="ci" id="ci"></div>
+    <div class="confidence-meter" id="confMeter" data-confidence="">
+      <span class="meter-track" id="meterTrack"></span>
+      <span class="conf-label" id="confLabel"></span>
+    </div>
+    <div class="breakdown" id="breakdown"></div>
+    <div class="lead-link" id="leadLink"></div>
   </div>
 
+<script src="shell.js"></script>
 <script>
 (function () {
-  const canvas = document.getElementById('arena');
-  const ctx = canvas.getContext('2d');
-  const hud = document.getElementById('hud');
-  const banner = document.getElementById('banner');
-  const CSS = getComputedStyle(document.documentElement);
-  const COL_A = CSS.getPropertyValue('--a').trim();
-  const COL_B = CSS.getPropertyValue('--b').trim();
-  const COL_LINE = CSS.getPropertyValue('--line').trim();
-  const COL_SURF = CSS.getPropertyValue('--surface-2').trim();
-
-  let cell = 24, W = 25, H = 25;
-
-  function fit(frame) {
-    W = frame.width; H = frame.height;
-    const target = Math.min(window.innerWidth - 40, 600);
-    cell = Math.max(6, Math.floor(target / Math.max(W, H)));
-    canvas.width = W * cell; canvas.height = H * cell;
-  }
-
-  function draw(frame) {
-    ctx.fillStyle = COL_SURF;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.strokeStyle = COL_LINE; ctx.globalAlpha = 0.25; ctx.lineWidth = 1;
-    for (let x = 0; x <= W; x++) { ctx.beginPath(); ctx.moveTo(x*cell,0); ctx.lineTo(x*cell,H*cell); ctx.stroke(); }
-    for (let y = 0; y <= H; y++) { ctx.beginPath(); ctx.moveTo(0,y*cell); ctx.lineTo(W*cell,y*cell); ctx.stroke(); }
-    ctx.globalAlpha = 1;
-
-    const trail = (cells, color, alpha) => {
-      ctx.fillStyle = color; ctx.globalAlpha = alpha;
-      for (const c of cells) ctx.fillRect(c[0]*cell+1, c[1]*cell+1, cell-2, cell-2);
-      ctx.globalAlpha = 1;
-    };
-    trail(frame.trail_a, COL_A, 0.55);
-    trail(frame.trail_b, COL_B, 0.55);
-    const head = (pos, color) => {
-      ctx.shadowColor = color; ctx.shadowBlur = 12; ctx.fillStyle = color;
-      ctx.fillRect(pos[0]*cell+1, pos[1]*cell+1, cell-2, cell-2);
-      ctx.shadowBlur = 0;
-    };
-    head(frame.head_a, COL_A);
-    head(frame.head_b, COL_B);
-  }
-
-  const es = new EventSource('/events');
-  let started = false;
-
-  es.onmessage = (e) => {
-    const frame = JSON.parse(e.data);
-    if (!started) {
-      started = true;
-      fit(frame);
-      document.getElementById('nameA').textContent = frame.label_a;
-      document.getElementById('nameB').textContent = frame.label_b;
-    }
-    draw(frame);
-    hud.textContent = 'turn ' + frame.turn;
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const css = getComputedStyle(document.documentElement);
+  const colors = {
+    a: css.getPropertyValue('--a').trim(),
+    b: css.getPropertyValue('--b').trim(),
+    surface: css.getPropertyValue('--surface-2').trim(),
+    line: css.getPropertyValue('--line').trim(),
+    food: css.getPropertyValue('--food').trim(),
+    light: css.getPropertyValue('--sq-light').trim(),
+    dark: css.getPropertyValue('--sq-dark').trim(),
   };
+  // Round color is emitted as the seat color name ("blue"/"red"); map to CSS seat class.
+  const COLOR_CLASS = { blue: 'a', red: 'b' };
+  // status.rounds[].winner is the seat INDEX (0/1) the strip colors by (D1 view
+  // contract) — same seat->color mapping as the watcher: 0=harness=blue=a,
+  // 1=bare-control=red=b.
+  const SEAT_CLASS = ['a', 'b'];
 
-  es.addEventListener('result', (e) => {
-    const r = JSON.parse(e.data);
-    let text;
-    if (r.outcome === 'a_wins') text = '★ ' + r.player_a + ' wins';
-    else if (r.outcome === 'b_wins') text = '★ ' + r.player_b + ' wins';
-    else text = '— draw —';
-    banner.textContent = text; banner.classList.add('show');
-    hud.textContent = text;
-  });
-
-  es.addEventListener('board', (e) => {
-    renderBoard(JSON.parse(e.data));
-    es.close();
-  });
-
-  // Integrity gate (Section 6): mirror index.html — an UNVERIFIED board doc renders
-  // NO rank (no #1, no medal, no "leads"/"beats"), only the integrity-gate reframe.
-  // The gate is the product working, not a broken board. live_server feeds a
-  // verified-by-omission demo store today; this closes the leak if verified=false
-  // data ever reaches the live board.
-  function renderUnranked() {
-    const boardEl = document.getElementById('board');
-    const rowsEl = document.getElementById('rows');
-    rowsEl.innerHTML = '';
-    const state = document.createElement('div');
-    state.className = 'row';
-    const msg = document.createElement('span'); msg.className = 'who';
-    const h = document.createElement('b'); h.textContent = 'unranked (integrity gate)';
-    const p = document.createElement('span'); p.className = 'chip';
-    p.textContent = ' — No — numbers are gated because we won’t publish what we ' +
-      'can’t verify. This corpus is not a ranked number yet: it is gated for ' +
-      'integrity until every surface verifies. The gate is the product working.';
-    state.appendChild(h); state.appendChild(p);
-    rowsEl.appendChild(state);
-    document.getElementById('insights').innerHTML = '';
-    boardEl.classList.add('show');
+  // bare-claude-code displays as bare:claude-code (contract D3).
+  function displayName(name) {
+    return name === 'bare-claude-code' ? 'bare:claude-code' : name;
   }
 
-  function renderBoard(board) {
-    // Section 6 typed-rank guard AT THE DOM BOUNDARY: verified===false -> no rank ever.
-    if (board.verified === false) { renderUnranked(); return; }
-    const rowsEl = document.getElementById('rows');
-    rowsEl.innerHTML = '';
-    for (const r of board.rows) {
-      const div = document.createElement('div');
-      div.className = 'row' + (r.rank === 1 ? ' win' : '');
-      const chip = r.fingerprint_summary ? ' · ' + r.fingerprint_summary : '';
-      const rank = document.createElement('span'); rank.className = 'rank'; rank.textContent = '#' + r.rank;
-      const elo = document.createElement('span'); elo.className = 'elo'; elo.textContent = Math.round(r.elo);
-      const who = document.createElement('span'); who.className = 'who';
-      const b = document.createElement('b'); b.textContent = '@' + r.identity;
-      const meta = document.createElement('span'); meta.className = 'chip';
-      meta.textContent = ' (' + r.harness_name + ')' + chip;
-      who.appendChild(b); who.appendChild(meta);
-      div.appendChild(rank); div.appendChild(elo); div.appendChild(who);
-      rowsEl.appendChild(div);
-    }
-    const ul = document.getElementById('insights');
-    ul.innerHTML = '';
-    for (const line of board.insights) {
-      const li = document.createElement('li'); li.textContent = line; ul.appendChild(li);
-    }
-    document.getElementById('board').classList.add('show');
+  // ---- data source: real LiveView output (status.json + per-round files) ----
+  // A single contract, identical whether served over HTTP or injected for tests:
+  //   status.json = { status:"running"|"complete", harness, baseline, games:[],
+  //                   matches:[{game,index,seats:[n0,n1],rounds:[{round,winner,color,file}]}],
+  //                   lift:{value,ci_lo,ci_hi,confidence}|null, leaderboard_url? }
+  //   <file>      = { game, round, winner, color, seats:[n0,n1], scores:{},
+  //                   sims:[ ants|lightcycles sim ], chess:[ {fens:[...]} ] }
+  // Tests may inject window.__LIVE_FIXTURE__ = {status, files:{ "<file>": payload }}.
+  const FIX = window.__LIVE_FIXTURE__ || null;
+  const roundCache = {};
+  let lastShown = null;
+  let playback = null;
+
+  function fetchStatus() {
+    if (FIX) return Promise.resolve(FIX.status);
+    return fetch('status.json', { cache: 'no-store' }).then((r) => r.json());
+  }
+  function fetchFile(file) {
+    if (!file) return Promise.resolve(null);
+    if (roundCache[file]) return Promise.resolve(roundCache[file]);
+    const p = FIX
+      ? Promise.resolve((FIX.files && FIX.files[file]) || null)
+      : fetch(file, { cache: 'no-store' }).then((r) => r.json());
+    return p.then((d) => { if (d) roundCache[file] = d; return d; });
   }
 
-  // allow tests/screenshots to inject a board doc without a live SSE match.
-  if (window.__BOARD_FIXTURE__) { renderBoard(window.__BOARD_FIXTURE__); }
+  // ---- active match: the most recent match with landed rounds, else the last ----
+  function activeMatch(status) {
+    const ms = status.matches || [];
+    if (!ms.length) return null;
+    for (let i = ms.length - 1; i >= 0; i--) {
+      if (ms[i].rounds && ms[i].rounds.length) return ms[i];
+    }
+    return ms[ms.length - 1];
+  }
 
-  es.onerror = () => { if (!started) hud.textContent = 'Waiting for match feed…'; };
+  // ---- seat legend (D3) ----
+  // Read the top-level view contract seats[{name,color}] + score{a,b} first;
+  // fall back to the engine-facing match/harness keys only if absent.
+  function renderLegend(status, match) {
+    const seats = status.seats && status.seats.length
+      ? status.seats.map((s) => s.name)
+      : (match && match.seats) || [status.harness, status.baseline];
+    if (seats[0]) $('nameA').textContent = displayName(seats[0]);
+    if (seats[1]) $('nameB').textContent = displayName(seats[1]);
+    const score = status.score || scoreFromRounds(status, match);
+    const landed = (status.rounds || []).some((r) => r.status === 'landed')
+      || (match && match.rounds && match.rounds.length);
+    $('score').textContent = landed
+      ? '· score ' + (score.a || 0) + '–' + (score.b || 0) : '';
+    const game = status.game || (match && match.game)
+      || (status.games && status.games[0]);
+    if (game) $('sub').textContent = 'Watching ' + game + ' play, round by round.';
+  }
+
+  // Fallback score if the top-level score{a,b} is missing (legacy status shape).
+  function scoreFromRounds(status, match) {
+    const rounds = (match && match.rounds) || [];
+    let a = 0, b = 0;
+    for (const r of rounds) {
+      if (r.color === 'blue') a++; else if (r.color === 'red') b++;
+    }
+    return { a: a, b: b };
+  }
+
+  // ---- round strip (D1) ----
+  // Render the FULL strip from the top-level view contract status.rounds[]:
+  //   status:"pending" -> hollow GHOST chip (number only)
+  //   status:"current" -> pulsing chip showing the live turn
+  //   status:"landed"  -> filled with the WINNER's seat color (+ check), tie = neutral
+  // The engine-facing matches[].rounds[] only supplies each landed round's
+  // clickable per-round canvas file (looked up by round index).
+  function fileByRound(match) {
+    const map = {};
+    const rounds = (match && match.rounds) || [];
+    for (const r of rounds) if (r.file != null) map[r.round] = r.file;
+    return map;
+  }
+
+  function renderStrip(status, match) {
+    const strip = $('strip');
+    strip.innerHTML = '';
+    const files = fileByRound(match);
+    const rounds = viewRounds(status, match);
+    for (const r of rounds) {
+      strip.appendChild(chipFor(r, files[r.round]));
+    }
+  }
+
+  // The top-level view rounds if present, else a landed-only fallback derived
+  // from the engine-facing match (legacy status shape).
+  function viewRounds(status, match) {
+    if (status.rounds && status.rounds.length) return status.rounds;
+    const rounds = (match && match.rounds) || [];
+    return rounds.map((r) => ({
+      round: r.round, status: 'landed',
+      winner: r.color === 'blue' ? 0 : r.color === 'red' ? 1 : null,
+      turn: r.turn || 0, name: r.winner,
+    }));
+  }
+
+  function chipFor(r, file) {
+    const chip = document.createElement('div');
+    const rnd = document.createElement('span');
+    rnd.className = 'rnd';
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+
+    if (r.status === 'pending') {
+      chip.className = 'chip pending';
+      rnd.textContent = 'R' + r.round;            // ghost: number only
+      chip.appendChild(rnd);
+      return chip;
+    }
+    if (r.status === 'current') {
+      chip.className = 'chip current';
+      rnd.textContent = 'R' + r.round;
+      meta.textContent = 'turn ' + (r.turn || 0); // live turn
+      chip.appendChild(rnd);
+      chip.appendChild(meta);
+      return chip;
+    }
+    // landed: winner is the seat index (0/1) or null for a tie.
+    const seatCls = r.winner === 0 || r.winner === 1 ? SEAT_CLASS[r.winner] : null;
+    chip.className = 'chip landed' + (seatCls ? ' seat-' + seatCls : '')
+      + (file ? ' clickable' : '');
+    rnd.textContent = 'R' + r.round + (seatCls ? ' ✓' : ' ·');
+    meta.textContent = seatCls ? winnerName(r, seatCls) : 'tie';
+    chip.appendChild(rnd);
+    chip.appendChild(meta);
+    if (file) chip.onclick = () => showFile(file);
+    return chip;
+  }
+
+  // A landed round's winner label: prefer an explicit name, else the seat legend.
+  function winnerName(r, seatCls) {
+    if (r.name) return displayName(r.name);
+    const el = seatCls === 'a' ? $('nameA') : $('nameB');
+    return el ? el.textContent : (seatCls === 'a' ? 'harness' : 'control');
+  }
+
+  // ---- canvas: normalize a per-round payload to shell frames + meta ----
+  // The round file carries raw server sims (ants/lightcycles) and chess (fens);
+  // select the first sim/game and map it to the shell's frame + meta contract.
+  function buildPlayback(round) {
+    const canvas = $('arena');
+    canvas.__cell = null; // recompute geometry for this round
+    const game = round.game;
+    let frames = [];
+    let meta = { colors: colors, maxPx: 600 };
+    let draw;
+    if (game === 'lightcycles') {
+      const sim = (round.sims || [])[0];
+      if (!sim) return null;
+      draw = ATVShell.drawLightcycles;
+      frames = sim.frames || [];
+      meta.W = sim.width; meta.H = sim.height;
+      meta.obstacles = sim.rocks || sim.water || [];
+    } else if (game === 'ants') {
+      const sim = (round.sims || [])[0];
+      if (!sim) return null;
+      draw = ATVShell.drawAnts;
+      frames = sim.frames || [];
+      meta.W = sim.cols; meta.H = sim.rows;
+      meta.obstacles = sim.water || sim.rocks || [];
+    } else if (game === 'chess') {
+      const g = (round.chess || [])[0];
+      if (!g) return null;
+      draw = ATVShell.drawChess;
+      frames = (g.fens || []).map((fen) => ({ fen: fen }));
+      meta.maxPx = 480;
+    } else {
+      return null;
+    }
+    return ATVShell.Playback({
+      canvas: canvas, frames: frames, draw: draw, meta: meta, scrub: $('scrub'),
+      onTurn: (t) => { $('turn').textContent = 'turn ' + t; },
+      onEnd: () => { $('playpause').textContent = '▶ Play'; },
+      interval: 120,
+    });
+  }
+
+  function showFile(file) {
+    fetchFile(file).then((round) => {
+      if (!round) return;
+      // Tear down any in-flight playback first so switching rounds never stacks
+      // setInterval timers (fix #3). Idempotent stop() on the prior controller.
+      if (playback && playback.stop) playback.stop();
+      playback = buildPlayback(round);
+      if (!playback) { $('hud').textContent = 'No renderer for this game yet.'; return; }
+      $('stage').style.display = '';
+      $('controls').style.display = '';
+      const pp = $('playpause');
+      pp.onclick = () => { pp.textContent = playback.toggle() ? '⏸ Pause' : '▶ Play'; };
+      $('restart').onclick = () => { playback.restart(); pp.textContent = '⏸ Pause'; };
+      $('scrub').oninput = (e) => { pp.textContent = '▶ Play'; playback.seek(+e.target.value); };
+      playback.start();
+    });
+  }
+
+  // ---- empty state (D4) ----
+  function renderEmpty(status, match) {
+    const game = (match && match.game) || (status.games && status.games[0]) || 'match';
+    $('emptyLine').style.display = '';
+    $('emptyLine').innerHTML =
+      'Starting ' + game + ' — round 0 <span class="dots">incoming…</span>';
+    $('stage').style.display = 'none';
+    $('controls').style.display = 'none';
+  }
+  function hideEmpty() { $('emptyLine').style.display = 'none'; }
+
+  // ---- complete state (D2) ----
+  function renderComplete(status) {
+    const c = status.lift || {};
+    const el = $('complete');
+    const lift = typeof c.value === 'number' ? c.value : 0;
+    const liftEl = $('lift');
+    liftEl.textContent = (lift >= 0 ? '+' : '') + lift.toFixed(2);
+    liftEl.className = 'lift ' + (lift >= 0 ? 'pos' : 'neg');
+    $('ci').textContent = '95% CI ' + fmt(c.ci_lo) + '…' + fmt(c.ci_hi);
+
+    const bucket = (c.confidence || 'low').toLowerCase();
+    const filled = bucket === 'high' ? 3 : bucket === 'medium' || bucket === 'med' ? 2 : 1;
+    const track = $('meterTrack');
+    track.innerHTML = '';
+    for (let i = 0; i < 3; i++) {
+      const seg = document.createElement('i');
+      if (i < filled) seg.className = 'on';
+      track.appendChild(seg);
+    }
+    $('confLabel').textContent = bucket;
+    const meter = $('confMeter');
+    meter.setAttribute('data-confidence', bucket);
+    meter.className = 'confidence-meter conf-' +
+      (bucket === 'medium' || bucket === 'med' ? 'med' : bucket);
+
+    if (status.leaderboard_url) {
+      $('leadLink').innerHTML =
+        'Full results → <a href="' + encodeURI(status.leaderboard_url) + '">leaderboard</a>';
+    }
+    el.classList.add('show');
+  }
+  function fmt(v) {
+    if (typeof v !== 'number') return '—';
+    return (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(1);
+  }
+
+  // ---- main apply loop ----
+  function apply(status) {
+    const match = activeMatch(status);
+    renderLegend(status, match);
+    renderStrip(status, match);
+    // Drive state from the top-level view contract; fall back to the engine keys.
+    const state = status.state
+      || (status.status === 'complete' ? 'complete'
+          : (match && match.rounds && match.rounds.length) ? 'running' : 'empty');
+    const files = fileByRound(match);
+
+    if (state === 'empty') {
+      renderEmpty(status, match);
+      $('complete').classList.remove('show');
+      return;
+    }
+    hideEmpty();
+
+    // Show the current round's canvas: prefer the view contract `current`, else
+    // the most recent landed round with a file.
+    const showRound = status.current != null ? status.current : latestLanded(match);
+    const file = showRound != null ? files[showRound] : null;
+    if (file && file !== lastShown) {
+      lastShown = file;
+      showFile(file);
+    }
+
+    if (state === 'complete') {
+      renderComplete(status);
+    } else {
+      $('complete').classList.remove('show');
+    }
+  }
+
+  function latestLanded(match) {
+    const rounds = (match && match.rounds) || [];
+    return rounds.length ? rounds[rounds.length - 1].round : null;
+  }
+
+  function tick() {
+    fetchStatus().then(apply).catch(() => {});
+  }
+
+  tick();
+  if (!FIX) setInterval(tick, 1000);
 })();
 </script>
 </body>
