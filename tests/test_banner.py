@@ -10,6 +10,9 @@ TDD contract for `atv_bench.banner`:
 """
 from __future__ import annotations
 
+import contextlib
+import io
+
 import atv_bench.banner as banner
 
 
@@ -97,3 +100,27 @@ def test_maybe_show_fail_silent_on_rich_import_error(tmp_path, monkeypatch, caps
         sentinel=sentinel, is_tty=True, json_mode=False, env_suppressed=False
     )
     assert result is False  # render failed → treated as not-shown, no raise
+
+
+def test_maybe_show_prints_banner_exactly_once(tmp_path):
+    """The banner must render exactly once on first run.
+
+    render_banner() must not emit to real stdout as a side effect; only
+    maybe_show_banner() prints, and it prints the banner a single time.
+    """
+    sentinel = tmp_path / ".banner_shown_v1"
+    captured = io.StringIO()
+    with contextlib.redirect_stdout(captured):
+        banner.maybe_show_banner(
+            sentinel=sentinel, is_tty=True, json_mode=False, env_suppressed=False
+        )
+    text = captured.getvalue()
+    assert text.count("Community league for coding-agent") == 1
+
+
+def test_render_banner_does_not_emit_to_stdout(tmp_path):
+    """render_banner() is pure: it returns a string, never prints."""
+    captured = io.StringIO()
+    with contextlib.redirect_stdout(captured):
+        banner.render_banner()
+    assert captured.getvalue() == ""

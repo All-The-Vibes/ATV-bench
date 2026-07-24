@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import sys
+import io
 from pathlib import Path
 
 GOLD = "#FFD700"
@@ -52,7 +53,7 @@ def render_banner() -> str:
         text = Text(body, style=f"bold {GOLD}")
         panel = Panel(text, border_style=GOLD, title=f"[bold {GOLD}]ATV-BENCH[/]",
                       subtitle=f"[{GOLD}]{MEDAL} gold-standard harness benchmarking {MEDAL}[/]")
-        console = Console(record=True, width=72)
+        console = Console(record=True, width=72, file=io.StringIO())
         console.print(panel)
         rendered = console.export_text(styles=False)
         # Guarantee the verifiable tokens are present even after style export strips ANSI.
