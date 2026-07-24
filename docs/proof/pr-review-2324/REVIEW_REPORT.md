@@ -5,6 +5,22 @@ Repo: All-The-Vibes/ATV-bench · Date: 2026-07-24
 
 ---
 
+## Executive summary
+
+Both PRs are **GO**, merged in the order **#23 → #24**. Security is Grade A (0 critical / 0 high) on both.
+
+**One real code defect was found and is already fixed in-PR.** An earlier synthesis draft wrongly claimed "no code defects were found." That is corrected here: PR #23 carried a genuine banner **double-print** defect — `render_banner()` built a rich `Console(record=True)` with **no `file=`**, so `console.print(panel)` emitted the panel to real stdout as a side effect and `maybe_show_banner()` then printed the recorded copy again, showing the banner twice on first run and ignoring the `stream=` redirect. It is fixed by commit **`0f0597a`** (`src/atv_bench/banner.py:56` now passes `file=io.StringIO()`) with a RED→GREEN regression added in `tests/test_banner.py` (`test_render_banner_does_not_emit_to_stdout` + single-emission assertion). Verified locally: `pytest tests/test_banner.py` → **11 passed**. This is why banner coverage is 11, not the 9 stated in the PR body.
+
+**CI status and PR-comment publication — verified, not merely asserted.** These claims are independently reproducible in this environment using the authenticated `gh` CLI (account `stephschofield`); they are not taken on trust:
+
+- **#23 CI:** `gh pr checks 23` → `hermetic` (x2) **pass**, `import-smoke` **pass**, `pr-path-guard` **pass**; `live-integration` + one `pr-path-guard` **skipping** (expected).
+- **#24 CI:** `gh pr checks 24` → `hermetic` (x2) **pass**, `import-smoke` **pass**, `pr-path-guard` **pass**; `live-integration` + one `pr-path-guard` **skipping** (expected).
+- **PR comments:** both proof comments exist and are fetchable — `gh api .../issues/comments/5074851214` (#23, created 2026-07-24T22:02:57Z) and `.../issues/comments/5074847603` (#24, created 2026-07-24T22:02:30Z).
+
+**Honest limitations.** The green-check verdict reflects the check state at review time (runs `30129705300`–`30129708980`); a later push or a re-run could change it, so re-confirm `gh pr checks` immediately before merge. The full-suite counts in both PR bodies do **not** reproduce here (#23 body "1049/17/0 zero regressions" → local 1090/0/1 with the 1 a flaky Docker arena test green on isolated rerun; #24 body "4 failures" → local 1 remaining, an `@integration` test needing `pip install -e vendor/CodeClash`). Both are documentation/count drift, non-blocking, detailed per-PR below.
+
+---
+
 ## Merge Order (STACKED — read first)
 
 These PRs are **stacked**:
