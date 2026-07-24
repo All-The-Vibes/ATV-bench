@@ -208,6 +208,77 @@ def test_seat_bias_not_flagged_as_referee_nondeterminism(tmp_path):
     assert not nondet_fail, res.gate_report.to_dict()
 
 
+def test_match_event_carries_match_out_and_seats(tmp_path):
+    """T5: the per-match progress event carries the EXACT match_out dir the executor uses plus the
+    seat labels, so the live watcher binds to the right directory (never a glob of store_dir)."""
+    ex = _stub_executor(plays={"lightcycles": 1.0})
+    # the executor exposes where it writes each match's artifacts (mirrors live_match_executor).
+    base_out = tmp_path / "match-artifacts"
+    ex.base_out = base_out
+
+    events: list[dict] = []
+    run_quickstart_eval(
+        harness="claude-code", model="sonnet", games=["lightcycles"], repeats=2,
+        store=tmp_path / "league", execute=ex, progress=events.append,
+    )
+    match_events = [e for e in events if e.get("phase") == "match"]
+    assert match_events, "no match-phase progress events emitted"
+    for e in match_events:
+        # exact per-match directory, not a glob
+        expected = str(base_out / f"{e['game']}-{e['index']}")
+        assert e["match_out"] == expected
+        # seat labels: index0=harness_a=blue, index1=harness_b=red
+        seats = e["seats"]
+        assert seats["a"] == e["harness_a"] and seats["b"] == e["harness_b"]
+        assert seats["a_color"] == "blue" and seats["b_color"] == "red"
+
+
+def test_match_event_match_out_none_without_base_out(tmp_path):
+    """An executor with no known artifact dir (a bare stub) yields match_out=None — the watcher
+    simply has nothing to bind to, but the event still carries seat labels."""
+    ex = _stub_executor(plays={"lightcycles": 1.0})  # no .base_out attribute
+    events: list[dict] = []
+    run_quickstart_eval(
+        harness="claude-code", model="sonnet", games=["lightcycles"], repeats=1,
+        store=tmp_path / "league", execute=ex, progress=events.append,
+    )
+    match_events = [e for e in events if e.get("phase") == "match"]
+    assert match_events
+    for e in match_events:
+        assert e["match_out"] is None
+        assert e["seats"]["a"] == e["harness_a"] and e["seats"]["b"] == e["harness_b"]
+
+
+def test_live_url_defaults_none_and_round_trips(tmp_path):
+    """QuickstartResult.live_url defaults to None (the engine itself never starts a server) and
+    round-trips through to_dict for headless (--json) consumers."""
+    ex = _stub_executor(plays={"lightcycles": 1.0})
+    res = run_quickstart_eval(
+        harness="claude-code", model="sonnet", games=["lightcycles"], repeats=5,
+        store=tmp_path / "league", execute=ex,
+    )
+    assert res.live_url is None
+    d = res.to_dict()
+    assert "live_url" in d and d["live_url"] is None
+    # explicitly-set live_url round-trips too
+    res.live_url = "http://127.0.0.1:8731/live.html"
+    assert res.to_dict()["live_url"] == "http://127.0.0.1:8731/live.html"
+
+
+def test_headless_json_path_live_url_none(tmp_path):
+    """The headless (--yes/--json) engine path returns live_url=None: no server, and the
+    serialized result advertises no live link."""
+    ex = _stub_executor(plays={"lightcycles": 1.0})
+    res = run_quickstart_eval(
+        harness="claude-code", model="sonnet", games=["lightcycles"], repeats=5,
+        store=tmp_path / "league", execute=ex,
+    )
+    assert res.live_url is None
+    import json as _json
+    persisted = _json.loads((tmp_path / "league" / "quickstart_result.json").read_text())
+    assert persisted["live_url"] is None
+
+
 def test_second_run_to_same_store_scores_only_its_own_rows(tmp_path):
     """Re-running quickstart against the SAME store must score only the CURRENT run — prior
     runs accumulated in the corpus must NOT blend into per-game/overall/gate scores."""

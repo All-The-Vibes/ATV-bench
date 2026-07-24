@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 VIEW = Path(__file__).parent.parent / "leaderboard" / "view" / "index.html"
-LIVE_VIEW = Path(__file__).parent.parent / "src" / "atv_bench" / "view" / "live.html"
+LIVE_VIEW = Path(__file__).parent.parent / "src" / "atv_bench" / "view" / "live_match.html"
 
 
 def _playwright_ready():

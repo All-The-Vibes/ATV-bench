@@ -49,6 +49,9 @@ class QuickstartResult:
     board_path: Path | None
     board_url: str | None
     corpus_path: Path
+    # Set by the CLI when it starts the live server; the engine itself never binds a port, so a
+    # pure (headless / --yes / --json) engine run leaves this None.
+    live_url: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -69,6 +72,7 @@ class QuickstartResult:
             "board_path": None if self.board_path is None else str(self.board_path),
             "board_url": self.board_url,
             "corpus_path": str(self.corpus_path),
+            "live_url": self.live_url,
         }
 
 
@@ -161,8 +165,16 @@ def run_quickstart_eval(
     for i, match in enumerate(plan):
         n_attempted += 1
         if progress:
+            # Carry the EXACT per-match artifact dir + seat labels so the live watcher can bind to
+            # the right directory (never a glob of store_dir, which would pick up stale rounds).
+            # index0 = harness_a = blue (--a); index1 = harness_b = red (--b), per the seat contract.
+            base_out = getattr(execute, "base_out", None)
+            match_out = None if base_out is None else str(Path(base_out) / f"{match.game}-{i}")
             progress({"phase": "match", "index": i, "total": len(plan), "game": match.game,
-                      "harness_a": match.harness_a, "harness_b": match.harness_b})
+                      "harness_a": match.harness_a, "harness_b": match.harness_b,
+                      "match_out": match_out,
+                      "seats": {"a": match.harness_a, "b": match.harness_b,
+                                "a_color": "blue", "b_color": "red"}})
         try:
             row = execute(
                 harness_a=match.harness_a, harness_b=match.harness_b,
@@ -175,6 +187,11 @@ def run_quickstart_eval(
                           "error": str(exc)})
             continue
         run_rows.append(row)
+        if progress:
+            # match_end lets the live watcher poll the just-finished match dir to
+            # quiescence and publish its final round (which may have landed only
+            # moments before this call returned).
+            progress({"phase": "match_end", "index": i, "game": match.game})
         # persist to the rating corpus (history/board) and the ELO store (board render)
         append_rating_row(corpus_path, row)
         try:
@@ -351,4 +368,7 @@ def live_match_executor(
         row["match_id"] = f"{game}-{index}"
         return row
 
+    # Advertise the base artifact dir so the engine's match event can carry the EXACT match_out
+    # dir (base_out / f"{game}-{index}") for the live watcher to bind to.
+    execute.base_out = base_out
     return execute

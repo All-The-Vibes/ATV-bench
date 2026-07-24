@@ -185,42 +185,29 @@ _REPLAY_TEMPLATE = """<!DOCTYPE html>
   <div class="outcome" id="outcome"></div>
   <div class="meta">game=__GAME__ · seed=__SEED__ · match=__MATCH__</div>
 <script id="match" type="application/json">__MATCH_JSON__</script>
+<script>__SHELL_JS__</script>
 <script>
 const M = JSON.parse(document.getElementById('match').textContent);
-const frames = M.frames || [];
+// Adapt play's per-turn frames ({turn, a:{trail,pos}, b:{trail,pos}}) to the shared
+// shell's normalized lightcycles frame ({turn, trails:[a,b], heads:[a,b]}). The draw
+// loop, scrub, and playback all live in ATVShell — no local draw code (DRY, one shell).
+const frames = (M.frames||[]).map(f => ({
+  turn: f.turn,
+  trails: [f.a.trail, f.b.trail],
+  heads: [f.a.pos, f.b.pos],
+}));
 const W = (M.board&&M.board.width)||25, H=(M.board&&M.board.height)||25;
-const cv = document.getElementById('c'), ctx = cv.getContext('2d');
-const cell = Math.floor(cv.width / W);
-const COL_A='oklch(78% 0.16 155)', COL_B='oklch(75% 0.15 30)';
+const cv = document.getElementById('c');
+const css = getComputedStyle(document.documentElement);
+const colors = {
+  a: css.getPropertyValue('--a').trim() || 'oklch(78% 0.16 155)',
+  b: css.getPropertyValue('--b').trim() || 'oklch(75% 0.15 30)',
+  surface: css.getPropertyValue('--surface').trim(),
+  line: css.getPropertyValue('--line').trim(),
+};
+const meta = { W, H, colors, obstacles: (M.board&&M.board.obstacles)||[], maxPx: cv.width };
 const scrub = document.getElementById('scrub');
-scrub.max = Math.max(0, frames.length-1);
-let i = 0, playing = true, timer = null;
-
-function drawTrail(cells, color){
-  ctx.fillStyle = color;
-  for(const [x,y] of cells){ ctx.fillRect(x*cell, y*cell, cell-1, cell-1); }
-}
-function drawHead(pos, color){
-  const [x,y]=pos; ctx.fillStyle='#fff';
-  ctx.fillRect(x*cell-1, y*cell-1, cell+1, cell+1);
-  ctx.fillStyle=color; ctx.fillRect(x*cell+1, y*cell+1, cell-3, cell-3);
-}
-function render(idx){
-  ctx.clearRect(0,0,cv.width,cv.height);
-  ctx.fillStyle='oklch(30% 0.02 265)';
-  for(let g=0; g<=W; g++){ ctx.fillRect(g*cell,0,1,H*cell); }
-  for(let g=0; g<=H; g++){ ctx.fillRect(0,g*cell,W*cell,1); }
-  const f = frames[idx]; if(!f) return;
-  drawTrail(f.a.trail, COL_A); drawTrail(f.b.trail, COL_B);
-  drawHead(f.a.pos, COL_A); drawHead(f.b.pos, COL_B);
-  document.getElementById('turn').textContent = 'turn '+f.turn;
-  scrub.value = idx;
-}
-function step(){
-  render(i);
-  if(i >= frames.length-1){ playing=false; pp.textContent='▶ Play'; showOutcome(); return; }
-  i++;
-}
+const pp = document.getElementById('playpause');
 function showOutcome(){
   const o = M.outcome, pa=M.player_a, pb=M.player_b;
   let txt;
@@ -229,18 +216,24 @@ function showOutcome(){
   else txt='🤝 draw';
   document.getElementById('outcome').textContent = txt;
 }
-const pp = document.getElementById('playpause');
-function tick(){ if(playing){ step(); } }
-function start(){ if(timer) clearInterval(timer); timer=setInterval(tick, 90); }
-pp.onclick=()=>{ playing=!playing; pp.textContent=playing?'⏸ Pause':'▶ Play';
-  if(playing && i>=frames.length-1){ i=0; } };
-document.getElementById('restart').onclick=()=>{ i=0; playing=true; pp.textContent='⏸ Pause';
+const pb = ATVShell.Playback({
+  canvas: cv, frames, draw: ATVShell.drawLightcycles, meta, scrub,
+  onTurn: (t)=>{ document.getElementById('turn').textContent = 'turn '+t; },
+  onEnd: ()=>{ pp.textContent='▶ Play'; showOutcome(); },
+});
+pp.onclick=()=>{ pp.textContent = pb.toggle() ? '⏸ Pause' : '▶ Play'; };
+document.getElementById('restart').onclick=()=>{ pb.restart(); pp.textContent='⏸ Pause';
   document.getElementById('outcome').textContent=''; };
-scrub.oninput=(e)=>{ playing=false; pp.textContent='▶ Play'; i=+e.target.value; render(i); };
-render(0); showOutcome(); start();
+scrub.oninput=(e)=>{ pp.textContent='▶ Play'; pb.seek(+e.target.value); };
+pb.start(); showOutcome();
 </script>
 </body></html>
 """
+
+
+def _shell_js() -> str:
+    """The shared canvas shell source, inlined so replay.html stays self-contained."""
+    return (Path(__file__).parent / "view" / "shell.js").read_text()
 
 
 def build_replay_html(result: dict[str, Any], out_dir: str | Path,
@@ -271,6 +264,7 @@ def build_replay_html(result: dict[str, Any], out_dir: str | Path,
         .replace("__GAME__", esc(game or result.get("game", "lightcycles")))
         .replace("__SEED__", esc(seed if seed is not None else result.get("seed", 0)))
         .replace("__MATCH__", esc(result.get("match_id", "local")))
+        .replace("__SHELL_JS__", _shell_js())
         .replace("__MATCH_JSON__", match_json)
     )
     path = out / "replay.html"
