@@ -198,6 +198,7 @@ name = "atv-bench"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "chess" },
     { name = "filelock" },
     { name = "jsonschema" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -234,6 +235,7 @@ run = [
 [package.metadata]
 requires-dist = [
     { name = "cdifflib", marker = "extra == 'run'" },
+    { name = "chess", specifier = ">=1.9" },
     { name = "codeclash", marker = "extra == 'run'", git = "https://github.com/CodeClash-ai/CodeClash?rev=f0694c64ecf6abfca2bc867bad2de9333fef5be8" },
     { name = "filelock", specifier = ">=3.12" },
     { name = "flask", marker = "extra == 'run'" },
@@ -361,6 +363,12 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/3d/c6/eee9dca4439b1061f76373f06ea855678cc4a64c1c3c90b50e479edbb8eb/charset_normalizer-3.4.9-cp314-cp314t-win_arm64.whl", hash = "sha256:19ac87f93086ce37b86e098888555c4b4bc48102279bae3350098c0ed664b501", size = 158037, upload-time = "2026-07-07T14:34:35.018Z" },
     { url = "https://files.pythonhosted.org/packages/98/2b/f97f1c193fb855c345d678f5077d6926034db0722df74c8f057020e05a25/charset_normalizer-3.4.9-py3-none-any.whl", hash = "sha256:68e5f26a1ad57ded6d1cfb85331d1c1a195314756471d97758c48498bb4dcdf5", size = 64538, upload-time = "2026-07-07T14:34:56.993Z" },
 ]
+
+[[package]]
+name = "chess"
+version = "1.11.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/93/09/7d04d7581ae3bb8b598017941781bceb7959dd1b13e3ebf7b6a2cd843bc9/chess-1.11.2.tar.gz", hash = "sha256:a8b43e5678fdb3000695bdaa573117ad683761e5ca38e591c4826eba6d25bb39", size = 6131385, upload-time = "2025-02-25T19:10:27.328Z" }
 
 [[package]]
 name = "click"

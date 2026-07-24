@@ -1629,30 +1629,84 @@ def quickstart(
         typer.echo(f"\nEvaluating {resolved} vs bare:{resolved} on {chosen_model} "
                    f"across {len(games)} game(s), {repeats} repeat(s) = {n_matches} matches...\n")
 
+    # Live view: watch the games play in a browser during the run. On for an
+    # interactive, non-JSON run (a browser to receive it); off under --yes/--json/
+    # no-TTY, where we just print per-round progress. The live server is a daemon
+    # thread in this process — it dies when the CLI exits.
+    import sys as _sys
+    from atv_bench.liveview import LiveView
+    _rounds = 3
+    show_live = (not yes) and (not json_out) and _sys.stdout.isatty()
+    live_view = None
+    if show_live:
+        try:
+            live_view = LiveView(str(store_dir), games=list(games), harness=resolved,
+                                 baseline=f"bare:{resolved}", rounds_per_match=_rounds)
+            live_view.start_watching()
+            typer.echo(f"  Live gameplay: {live_view.url}")
+            import webbrowser
+            try:
+                webbrowser.open(live_view.url)
+            except Exception:
+                pass
+        except Exception as exc:  # a live-view failure must never block the eval
+            typer.echo(f"  (live view unavailable: {type(exc).__name__}: {exc})")
+            live_view = None
+
     def _progress(ev: dict) -> None:
+        phase = ev.get("phase")
+        # Route match lifecycle into the watcher so it binds to the exact dir + seats.
+        if live_view is not None:
+            if phase == "match" and ev.get("match_out"):
+                seats = ev.get("seats") or {}
+                live_view.match_start(ev["game"], ev["index"], ev["match_out"],
+                                      seats=(seats.get("a", resolved),
+                                             seats.get("b", f"bare:{resolved}")))
+            elif phase == "match_end":
+                live_view.match_end(ev["game"], ev["index"])
         if json_out:
             return
-        if ev.get("phase") == "match":
+        if phase == "match":
             typer.echo(f"  [{ev['index']+1}/{ev['total']}] {ev['game']}: "
                        f"{ev['harness_a']} vs {ev['harness_b']} ...")
-        elif ev.get("phase") == "match_failed":
+        elif phase == "match_failed":
             typer.echo(f"      x {ev['game']} failed: {ev.get('error','')[:80]}")
 
-    executor = qs.live_match_executor(rounds=3, homes={resolved: home, f"bare:{resolved}": home})
+    executor = qs.live_match_executor(
+        rounds=_rounds, homes={resolved: home, f"bare:{resolved}": home}
+    )
     try:
         result = qs.run_quickstart_eval(
             harness=resolved, model=chosen_model, games=games, repeats=repeats,
             store=store_dir, execute=executor, progress=_progress,
         )
     except Exception as exc:  # preflight / environment failure -> actionable, not a stack trace
+        if live_view is not None:
+            live_view.close()
         typer.echo(f"Evaluation could not run: {type(exc).__name__}: {exc}\n"
                    f"Run `atv-bench doctor` to check Docker / harness CLI / CodeClash readiness.")
         raise typer.Exit(5)
+
+    if live_view is not None:
+        # Flip the page to its complete state (final lift + CI + leaderboard link)
+        # and surface the URL on the result. The daemon server keeps serving so the
+        # user can scrub finished rounds until the CLI process exits.
+        o = result.overall
+        live_view.finish(
+            lift=None if o is None else o.lift,
+            ci_lo=None if o is None else o.lo,
+            ci_hi=None if o is None else o.hi,
+            leaderboard_url=result.board_url,
+        )
+        result.live_url = live_view.url
 
     if json_out:
         typer.echo(json.dumps(result.to_dict(), indent=2))
     else:
         typer.echo(_render_score_summary(result))
+        if live_view is not None:
+            typer.echo(f"\n  Live gameplay still at {live_view.url} "
+                       f"(open while this terminal stays running).")
 
 
 def _rating_row_from_match(m: dict) -> dict | None:
