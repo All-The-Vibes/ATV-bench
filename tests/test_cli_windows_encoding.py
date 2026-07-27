@@ -93,8 +93,14 @@ def test_cp1252_marks_stay_distinguishable() -> None:
     The CLI must emit ASCII marks instead when the console cannot encode the glyphs."""
     proc = _run(["doctor"])
     out = proc.stdout
-    assert "?" not in out, f"lossy replacement char leaked into output:\n{out}"
-    assert "[OK]" in out or "[X]" in out, f"no ASCII fallback marks found:\n{out}"
+    # Scope the lossy-char check to the MARK COLUMN, not the whole stream: prose or a
+    # runner-specific path could legitimately contain a literal "?", which would make a
+    # whole-output assertion flaky for reasons unrelated to encoding.
+    mark_column = [ln.strip().split(" ", 1)[0] for ln in out.splitlines() if ln.startswith("  ")]
+    assert "?" not in mark_column, f"lossy replacement char used as a status mark:\n{out}"
+    assert any(m in ("[OK]", "[X]", "[-]") for m in mark_column), (
+        f"no ASCII fallback marks found:\n{out}"
+    )
 
 
 def test_utf8_marks_are_not_downgraded() -> None:
