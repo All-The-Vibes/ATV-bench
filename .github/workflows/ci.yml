@@ -68,18 +68,26 @@ jobs:
         run: pytest tests/test_cli_windows_encoding.py -q
       # PYTHONUTF8=0 defeats PEP 540 UTF-8 mode, which would otherwise make stdout UTF-8
       # regardless of the codepage and mask the very bug this gate exists to catch.
-      # `submit` exits 1 on failed preflight (expected here: no gh auth) — only a crash
-      # (exit >= 2, or a traceback) is a gate failure.
+      #
+      # Assert the actual invariant — "the console did not crash the CLI" — rather than
+      # proxying it through an exit code. Exit status is a bad proxy here: `submit`
+      # legitimately exits 1 on failed preflight (no gh auth on a runner), and `cmd`'s
+      # `if errorlevel N` does not reset errorlevel, so the step inherits that 1 and the
+      # job fails for a reason unrelated to encoding. Grepping the captured output for a
+      # traceback tests the thing we actually care about, on any exit path.
       - name: Real cp1252 console runs the CLI without crashing
         shell: cmd
         env:
           PYTHONUTF8: "0"
         run: |
           chcp 1252
-          atv-bench doctor || exit /b 1
           echo def move(s): return "up" > main.py
-          atv-bench submit .\main.py --game battlesnake
-          if errorlevel 2 exit /b 1
+          atv-bench doctor > out.txt 2>&1
+          atv-bench submit .\main.py --game battlesnake >> out.txt 2>&1
+          type out.txt
+          findstr /C:"UnicodeEncodeError" out.txt >nul && exit /b 1
+          findstr /C:"Traceback (most recent call last)" out.txt >nul && exit /b 1
+          findstr /C:"[OK]" out.txt >nul || exit /b 1
           echo cp1252 console OK
 
   # Always-on community-PR confinement (santa round-7): a REQUIRED check on every PR, not a
