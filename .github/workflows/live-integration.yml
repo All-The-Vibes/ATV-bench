@@ -83,7 +83,12 @@ jobs:
         run: pip install -e '.[run,dev]'
 
       - name: Install Playwright Chromium
-        run: playwright install --with-deps chromium
+        # No --with-deps: that switches to root via sudo to apt-install system libs, which a
+        # self-hosted runner user cannot do non-interactively (it fails with "a password is
+        # required"). The browser binary installs into the runner user's cache without sudo;
+        # the runner host must already have Chromium's shared libs (provision once — see
+        # docs/ci/live-runner-setup.md).
+        run: playwright install chromium
 
       - name: Preflight — verify the runner is actually provisioned
         # Fail LOUD with an actionable message if the runner is missing Docker or the CLIs,
@@ -113,7 +118,14 @@ jobs:
         # An unset secret => that harness's live match forfeits; sample-bot/containment tests
         # still run. See docs/ci/live-runner-setup.md.
         env:
+          # claude-code auth. A deployment may authenticate the Anthropic API directly with
+          # ANTHROPIC_API_KEY, or route through a gateway that also needs a base URL + custom
+          # headers + a pinned model id. All four are passed through; unset ones are simply
+          # empty. (Only env vars survive into the adapter's isolated HOME — see the note above.)
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+          ANTHROPIC_CUSTOM_HEADERS: ${{ secrets.ANTHROPIC_CUSTOM_HEADERS }}
+          ANTHROPIC_MODEL: ${{ secrets.ANTHROPIC_MODEL }}
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: pytest -m 'integration or e2e or drift' -q
