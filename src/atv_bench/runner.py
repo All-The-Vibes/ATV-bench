@@ -304,6 +304,17 @@ def summarize_tournament(raw: dict, cfg: RunConfig) -> tuple[dict, dict]:
             if w and w != "Tie":
                 decisive.append(w)
     winner = max(set(decisive), key=decisive.count) if decisive else "tie"
+    # CodeClash reports the winner as the player *name* (git-ref-safe, e.g.
+    # `bare-claude-code`); map it back to the harness key (`bare:claude-code`) so
+    # match_record_to_rating_row can attribute score_a. Ties and unknown values pass
+    # through unchanged (the downstream "neither player" guard still fires on garbage).
+    from atv_bench.config import _distinct_names
+
+    name_to_harness = {
+        name: harness
+        for harness, name in zip((cfg.a, cfg.b), _distinct_names(cfg.a, cfg.b))
+    }
+    winner = name_to_harness.get(winner, winner)
     outcome = {"winner": winner, "round_winners": decisive,
                "round_stats": _compact_round_stats(round_stats)}
     models = {cfg.a: (cfg.model, "parsed"), cfg.b: (cfg.model, "parsed")}

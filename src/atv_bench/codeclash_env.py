@@ -44,11 +44,11 @@ def import_codeclash():
         from codeclash.tournaments import pvp as cc_pvp
     except Exception as exc:  # pragma: no cover - exercised via CodeClashUnavailable
         raise CodeClashUnavailable(
-            "CodeClash is not importable. It is a git dependency at "
-            f"pin {CODECLASH_PIN[:12]}; reinstall the tool to pull it: "
-            "`uv tool install --reinstall --from git+https://github.com/All-The-Vibes/ATV-bench atv-bench` "
-            "(or `uv tool upgrade atv-bench`); from a source checkout run "
-            "`git submodule update --init` && `uv pip install -e '.[run]'`, "
+            "CodeClash is not importable. It ships in the `run` extra as a git "
+            f"dependency at pin {CODECLASH_PIN[:12]}; install that extra to pull it: "
+            "`uv tool install --reinstall --from 'atv-bench[run] @ git+https://github.com/All-The-Vibes/ATV-bench' atv-bench` "
+            "(a plain reinstall of `atv-bench` will NOT pull it); from a source "
+            "checkout run `uv pip install -e '.[run]'`, "
             "or run `atv-bench doctor` for a full prerequisite report."
         ) from exc
 

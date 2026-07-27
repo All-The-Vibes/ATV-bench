@@ -83,10 +83,10 @@ def check_codeclash() -> CheckResult:
 
     # Same recovery text whether or not it is currently importable, so the
     # remediation is discoverable (and correct for a tool-installed user).
-    fix = ("reinstall the tool to pull the git dep: "
-           "`uv tool install --reinstall --from git+https://github.com/All-The-Vibes/ATV-bench atv-bench` "
-           "(or `uv tool upgrade atv-bench`); from a source checkout run "
-           "`git submodule update --init` && `uv pip install -e '.[run]'`, "
+    fix = ("install the `run` extra to pull the git dep: "
+           "`uv tool install --reinstall --from 'atv-bench[run] @ git+https://github.com/All-The-Vibes/ATV-bench' atv-bench` "
+           "(a plain reinstall of `atv-bench` will NOT pull it); from a source "
+           "checkout run `uv pip install -e '.[run]'`, "
            "or run `atv-bench doctor` for a full prerequisite report")
     if codeclash_available():
         return CheckResult("codeclash", True, "importable at pinned version", fix=fix)
