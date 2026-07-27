@@ -8,11 +8,11 @@ are absent. GitHub-hosted runners have neither, so this job targets a **self-hos
 labeled `atv-live`.
 
 > The pre-merge `import-smoke` job stays on GitHub-hosted runners and needs none of this.
-> Only the push-to-main / manual `live-integration` job needs the provisioned runner.
+> Only the push (to `main`/`master`) / manual-dispatch `live-integration` job needs the provisioned runner.
 
 ## 1. Provision a machine
 
-A Linux host (Ubuntu 22.04/24.04) with:
+A Linux host (Ubuntu 24.04 recommended, to match the GitHub-hosted `ubuntu-24.04` lane) with:
 
 - **Docker Engine** running, and the runner's user in the `docker` group
   (`sudo usermod -aG docker "$USER"` then re-login; verify `docker info` works without sudo).
@@ -65,13 +65,19 @@ gh secret set COPILOT_GITHUB_TOKEN --repo All-The-Vibes/ATV-bench
 gh secret set OPENAI_API_KEY       --repo All-The-Vibes/ATV-bench
 ```
 
-Alternatively, log the CLIs in interactively on the runner host once (`claude` /
-`copilot login` / `codex login`) — the adapters use an existing login if the env var is
-absent. Secrets are the reproducible, headless path and are preferred for CI.
+> **Actions secrets are required for the CI path — interactive host login does NOT work here.**
+> The live suite calls `run_live_match()` with no seeded harness homes, so it runs each adapter
+> under `isolation.isolated_home(None)`, which points `HOME`/`XDG_CONFIG_HOME`/`XDG_CACHE_HOME`
+> at a fresh throwaway `mkdtemp` dir (never the host `$HOME`). A `claude login` / `copilot login`
+> / `codex login` you performed on the runner host lives in the host `$HOME` and is therefore
+> **invisible** to the tests. Only environment variables survive into the isolated HOME — so the
+> three secrets above are the sole working auth path for this job. (Host-side login only helps
+> the `atv-bench run` CLI when it threads a real harness config home; it does not help this CI
+> suite.)
 
-> If a secret is unset **and** the CLI isn't logged in, that harness's *live* match forfeits,
-> but the deterministic sample-bot arena tests and the Docker-containment tests still pass —
-> so a partially-provisioned runner degrades gracefully rather than hard-failing everything.
+> If a secret is unset, that harness's *live* match forfeits, but the deterministic sample-bot
+> arena tests and the Docker-containment tests still pass — so a partially-provisioned runner
+> degrades gracefully rather than hard-failing everything.
 
 ## 4. Verify
 

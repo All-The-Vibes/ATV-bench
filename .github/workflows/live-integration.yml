@@ -66,12 +66,6 @@ jobs:
     # preflight requires the real CLIs on PATH. See docs/ci/live-runner-setup.md.
     runs-on: [self-hosted, atv-live]
     timeout-minutes: 45
-    env:
-      # Harness auth — provisioned as repo/org Actions secrets. Unset secrets => that CLI is
-      # logged out and its live match forfeits; the sample-bot/containment tests still run.
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -111,4 +105,15 @@ jobs:
           exit "$missing"
 
       - name: Live integration / e2e / drift suite
+        # Harness auth is scoped to THIS step only (not job-level env) so the secrets are not
+        # present during checkout / pip install / Playwright download. The live suite calls
+        # run_live_match() with no seeded harness homes, so it runs adapters under an isolated
+        # HOME (isolation.isolated_home(None)) — only env vars survive into that HOME, which is
+        # why these secrets (not a host-side `claude login`) are the working auth path.
+        # An unset secret => that harness's live match forfeits; sample-bot/containment tests
+        # still run. See docs/ci/live-runner-setup.md.
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: pytest -m 'integration or e2e or drift' -q
