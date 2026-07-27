@@ -1,8 +1,23 @@
-# Live integration suite — NOT run on every push. Exercises the real vendored
-# CodeClash arena (submodule at CODECLASH_PIN) plus the Playwright-driven live
-# board, so it needs the submodule checked out, the `run` + `dev` extras, and a
-# Chromium install. Gated to manual dispatch / main so the hermetic `ci.yml`
-# stays the fast tripwire.
+# Live integration suite — exercises the REAL vendored CodeClash arena (submodule at
+# CODECLASH_PIN), the Docker containment sandbox, and the Playwright-driven live board.
+#
+# Split by infra need:
+#   - import-smoke        → GitHub-hosted. Pure `.[run,dev]` import/provisioning contract.
+#                           Runs on every PR as the pre-merge tripwire. No Docker, no CLIs.
+#   - live-integration    → SELF-HOSTED runner (label: atv-live). The arena tests and live
+#                           harness matches call run_live_match(), whose fail-closed preflight
+#                           requires the harness CLIs (claude/copilot/codex) ON PATH plus a
+#                           working Docker daemon — a stock GitHub-hosted runner has neither,
+#                           so the fail-closed preflight (correctly) refuses to fake a match.
+#                           This job therefore targets a provisioned runner that has the CLIs
+#                           installed + authenticated. See docs/ci/live-runner-setup.md.
+#
+# Auth is supplied via repo/org secrets, surfaced as env for the harness adapters:
+#   ANTHROPIC_API_KEY   → claude-code   (src/atv_bench/adapters/contract.py:277)
+#   COPILOT_GITHUB_TOKEN→ copilot-cli   (contract.py:351; GH_TOKEN/GITHUB_TOKEN also accepted)
+#   OPENAI_API_KEY      → codex         (contract.py:463)
+# If a secret is unset the corresponding CLI stays logged-out and its live match forfeits/skips;
+# the deterministic sample-bot + Docker-containment tests still run.
 
 name: live-integration
 
@@ -16,11 +31,10 @@ permissions:
   contents: read
 
 jobs:
-  # Pre-merge tripwire for the `.[run]` import contract. Runs on every PR (unlike the
-  # heavy live suite below, which is push-to-main/manual only) so a broken CodeClash
-  # import or a missing `run` dependency is caught BEFORE merge, not after. No Docker and
-  # no Playwright — just the submodule + `.[run,dev]` install and the integration-marked
-  # import/provisioning contracts.
+  # Pre-merge tripwire for the `.[run]` import contract. Runs on every PR (unlike the heavy
+  # live suite, which is push-to-main / manual only) so a broken CodeClash import or a missing
+  # `run` dependency is caught BEFORE merge. No Docker and no Playwright — just the submodule +
+  # `.[run,dev]` install and the import/provisioning contract. GitHub-hosted; always available.
   import-smoke:
     if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-24.04
@@ -45,9 +59,19 @@ jobs:
         run: pytest tests/test_provisioning.py -q
 
   live-integration:
+    # push-to-main and manual dispatch only — never on PR (that's import-smoke's job).
     if: ${{ github.event_name != 'pull_request' }}
-    runs-on: ubuntu-24.04
+    # Self-hosted runner provisioned with docker + the harness CLIs (claude/copilot/codex)
+    # and authenticated. A stock GitHub-hosted runner cannot pass this job — the fail-closed
+    # preflight requires the real CLIs on PATH. See docs/ci/live-runner-setup.md.
+    runs-on: [self-hosted, atv-live]
     timeout-minutes: 45
+    env:
+      # Harness auth — provisioned as repo/org Actions secrets. Unset secrets => that CLI is
+      # logged out and its live match forfeits; the sample-bot/containment tests still run.
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -66,6 +90,25 @@ jobs:
 
       - name: Install Playwright Chromium
         run: playwright install --with-deps chromium
+
+      - name: Preflight — verify the runner is actually provisioned
+        # Fail LOUD with an actionable message if the runner is missing Docker or the CLIs,
+        # instead of the opaque "claude not found on PATH" mid-suite failure.
+        run: |
+          missing=0
+          for bin in docker claude copilot codex; do
+            if command -v "$bin" >/dev/null 2>&1; then
+              echo "ok: $bin -> $(command -v "$bin")"
+            else
+              echo "::error::required binary '$bin' not on PATH — provision this runner per docs/ci/live-runner-setup.md"
+              missing=1
+            fi
+          done
+          if ! docker info >/dev/null 2>&1; then
+            echo "::error::docker daemon not reachable — the arena containment tests need it"
+            missing=1
+          fi
+          exit "$missing"
 
       - name: Live integration / e2e / drift suite
         run: pytest -m 'integration or e2e or drift' -q
