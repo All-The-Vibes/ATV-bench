@@ -23,6 +23,12 @@ A Linux host (Ubuntu 24.04 recommended, to match the GitHub-hosted `ubuntu-24.04
   - `claude`  — Claude Code CLI
   - `copilot` — GitHub Copilot CLI
   - `codex`   — OpenAI Codex CLI
+- **Chromium's shared system libraries** present on the host. The workflow runs
+  `playwright install chromium` (browser binary only, no sudo) — it deliberately does **not**
+  use `--with-deps`, because that switches to root via `sudo` to apt-install system libs, which
+  a self-hosted runner user cannot do non-interactively. Provision the libs once with admin:
+  `sudo playwright install-deps chromium` (or the distro's chromium-dependency packages). Verify
+  headless launch works: `playwright install chromium && python -c "from playwright.sync_api import sync_playwright;\nwith sync_playwright() as p: p.chromium.launch(headless=True).close(); print('ok')"`.
 
 Verify: `for b in docker claude copilot codex; do command -v "$b" || echo "MISSING $b"; done`
 
@@ -56,13 +62,25 @@ adapters. Add whichever harnesses you want to exercise live:
 | Secret | Harness | Used by |
 |--------|---------|---------|
 | `ANTHROPIC_API_KEY` | `claude-code` | `adapters/contract.py` ClaudeCodeAdapter |
+| `ANTHROPIC_BASE_URL` | `claude-code` | optional — set only if Claude auth routes through a gateway |
+| `ANTHROPIC_CUSTOM_HEADERS` | `claude-code` | optional — gateway auth headers, if your deployment uses them |
+| `ANTHROPIC_MODEL` | `claude-code` | optional — pinned model id for a gateway deployment |
 | `COPILOT_GITHUB_TOKEN` | `copilot-cli` | CopilotCliAdapter (also accepts `GH_TOKEN`/`GITHUB_TOKEN`) |
 | `OPENAI_API_KEY` | `codex` | CodexCliAdapter |
+
+> The three `ANTHROPIC_*` gateway secrets are **optional**: a direct-to-Anthropic deployment
+> only needs `ANTHROPIC_API_KEY`. Set the base-URL/headers/model trio only if your Claude Code
+> is configured to authenticate through a gateway (in that case a bare key alone will not
+> authenticate). The workflow passes all four through; unset ones are simply empty.
 
 ```bash
 gh secret set ANTHROPIC_API_KEY    --repo All-The-Vibes/ATV-bench
 gh secret set COPILOT_GITHUB_TOKEN --repo All-The-Vibes/ATV-bench
 gh secret set OPENAI_API_KEY       --repo All-The-Vibes/ATV-bench
+# gateway deployments only:
+gh secret set ANTHROPIC_BASE_URL       --repo All-The-Vibes/ATV-bench
+gh secret set ANTHROPIC_CUSTOM_HEADERS --repo All-The-Vibes/ATV-bench
+gh secret set ANTHROPIC_MODEL          --repo All-The-Vibes/ATV-bench
 ```
 
 > **Actions secrets are required for the CI path — interactive host login does NOT work here.**
