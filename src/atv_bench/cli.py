@@ -18,6 +18,51 @@ from atv_bench.games import GAMES, DEFAULT_GAME, assert_playable
 from atv_bench.harnesses import HARNESSES, DEFAULT_HARNESS, detect_harness, harness_config_present
 from atv_bench.submit import run_preflight, submission_status_trail
 
+
+def _harden_stream(stream) -> None:
+    """Make a console stream survive non-ASCII output on a legacy codepage.
+
+    A Windows console defaults to cp1252, which cannot encode the ✓/✗ status glyphs this
+    CLI prints. Under the default *strict* error handler that raises UnicodeEncodeError
+    mid-command (see the `submit` preflight traceback this guards against). Switching only
+    the error handler to "replace" keeps the terminal's own encoding — so UTF-8 consoles
+    still render real glyphs — while degrading unrepresentable characters instead of
+    crashing. Fail-silent: a stream that cannot be reconfigured is left alone.
+    """
+    encoding = (getattr(stream, "encoding", "") or "").lower().replace("-", "")
+    if encoding in ("utf8", "utf8sig"):
+        return  # already lossless; don't touch it
+    reconfigure = getattr(stream, "reconfigure", None)
+    if not callable(reconfigure):
+        return  # not a TextIOWrapper (pytest capture, custom stream) — nothing to do
+    try:
+        reconfigure(errors="replace")
+    except Exception:
+        pass
+
+
+for _stream in (sys.stdout, sys.stderr):
+    _harden_stream(_stream)
+
+
+def _console_handles_glyphs() -> bool:
+    """True when stdout can encode the status glyphs losslessly."""
+    encoding = getattr(sys.stdout, "encoding", None) or "ascii"
+    try:
+        "✓✗·".encode(encoding)
+    except (UnicodeEncodeError, LookupError):
+        return False
+    return True
+
+
+# ASCII fallbacks matter beyond not crashing: `errors="replace"` maps BOTH ✓ and ✗ to `?`,
+# which would make preflight pass/fail indistinguishable on exactly the console that needs
+# to read it. Resolved once at import — the console encoding does not change mid-run.
+_GLYPHS_OK = _console_handles_glyphs()
+OK_MARK = "✓" if _GLYPHS_OK else "[OK]"
+BAD_MARK = "✗" if _GLYPHS_OK else "[X]"
+SKIP_MARK = "·" if _GLYPHS_OK else "[-]"
+
 app = typer.Typer(
     name="atv-bench",
     help="Community league for coding-agent harnesses: fingerprint your harness and submit a bot.",
@@ -335,7 +380,7 @@ def submit(
     report = run_preflight(runner=runner_fn)
     typer.echo("Preflight:")
     for r in report["results"]:
-        mark = "✓" if r["ok"] else "✗"
+        mark = OK_MARK if r["ok"] else BAD_MARK
         typer.echo(f"  {mark} {r['id']}: {r['description']}")
         if not r["ok"] and "fix" in r:
             typer.echo(f"      Fix: {r['fix']}")
@@ -380,7 +425,7 @@ def submit(
                            "stay self-attested until a trusted sandbox re-fingerprints "
                            "(COMMUNITY_LEAGUE.md#provenance).")
         else:
-            typer.echo("Provenance: ✗ does not verify — "
+            typer.echo(f"Provenance: {BAD_MARK} does not verify — "
                        + "; ".join(board_res.reasons))
 
     typer.echo("\nSubmission status trail:")
@@ -390,7 +435,7 @@ def submit(
     if live:
         # Fail closed: only open the PR if preflight passed.
         if not report["passed"]:
-            typer.echo("\nPreflight failed; not opening a PR. Fix the ✗ items above and retry.")
+            typer.echo(f"\nPreflight failed; not opening a PR. Fix the {BAD_MARK} items above and retry.")
             raise typer.Exit(1)
         try:
             result = open_submission_pr(
@@ -400,7 +445,7 @@ def submit(
         except Exception as e:  # AtvError (SUBMIT_PR_FAILED) — surface, don't crash
             typer.echo(f"\nLive submission failed: {e}")
             raise typer.Exit(1)
-        typer.echo(f"\n✓ Opened submission PR: {result['pr_url']}")
+        typer.echo(f"\n{OK_MARK} Opened submission PR: {result['pr_url']}")
         return
 
     if dry_run:
@@ -425,9 +470,9 @@ def validate_harness_cmd(
     resolved = manifest.get("harness") or harness or hz.detect_harness() or hz.DEFAULT_HARNESS
     report = _validate.validate_harness_fingerprint(manifest)
     if report["ok"]:
-        typer.echo(f"✓ {resolved} harness fingerprint is schema-complete and leak-safe")
+        typer.echo(f"{OK_MARK} {resolved} harness fingerprint is schema-complete and leak-safe")
     else:
-        typer.echo(f"✗ {resolved} harness fingerprint has issues — fix before submitting:")
+        typer.echo(f"{BAD_MARK} {resolved} harness fingerprint has issues — fix before submitting:")
         for e in report["errors"]:
             typer.echo(f"  - {e}")
         typer.echo(
@@ -446,9 +491,9 @@ def validate_game_cmd(
     from atv_bench.validate import validate_game_bot
     report = validate_game_bot(str(bot))
     if report["ok"]:
-        typer.echo(f"✓ bot {bot.name} passes shape validation")
+        typer.echo(f"{OK_MARK} bot {bot.name} passes shape validation")
     else:
-        typer.echo("✗ bot failed validation:")
+        typer.echo(f"{BAD_MARK} bot failed validation:")
         for e in report["errors"]:
             typer.echo(f"  - {e}")
         raise typer.Exit(1)
@@ -488,18 +533,18 @@ def validate_pr_paths_cmd(
         if report["ok"]:
             kind = "submission PR (confined to own files)" if report["is_submission_pr"] \
                 else "non-submission PR (not confined)"
-            typer.echo(f"✓ PR by {author}: {kind}")
+            typer.echo(f"{OK_MARK} PR by {author}: {kind}")
         else:
-            typer.echo("✗ PR is not confined to its own submission tree:")
+            typer.echo(f"{BAD_MARK} PR is not confined to its own submission tree:")
             for e in report["errors"]:
                 typer.echo(f"  - {e}")
             raise typer.Exit(1)
         return
     report = validate_pr_paths(author, [ln.strip() for ln in lines])
     if report["ok"]:
-        typer.echo(f"✓ PR by {author} touches only its own submission files")
+        typer.echo(f"{OK_MARK} PR by {author} touches only its own submission files")
     else:
-        typer.echo("✗ PR touches paths outside its own submission tree:")
+        typer.echo(f"{BAD_MARK} PR touches paths outside its own submission tree:")
         for e in report["errors"]:
             typer.echo(f"  - {e}")
         raise typer.Exit(1)
@@ -532,7 +577,7 @@ def harnesses(
     typer.echo("Harnesses you can fingerprint with `atv-bench fingerprint [--harness <key>]`:\n")
     for h in HARNESSES:
         status = "live" if h.live else "planned"
-        mark = "✓" if h.live else "·"
+        mark = OK_MARK if h.live else SKIP_MARK
         here = "  ← detected on this machine" if h.key == marked else ""
         typer.echo(f"  {mark} {h.key}  [{status}]  — {h.title}{here}")
         typer.echo(f"      {h.summary}")
@@ -564,7 +609,7 @@ def games(
     typer.echo("Games you can target with `atv-bench submit --game <key>`:\n")
     for g in GAMES:
         status = "live" if g.live else "planned"
-        mark = "✓" if g.live else "·"
+        mark = OK_MARK if g.live else SKIP_MARK
         typer.echo(f"  {mark} {g.key}  [{status}]  — {g.title}")
         typer.echo(f"      {g.summary}")
     typer.echo(f"\nDefault: {DEFAULT_GAME}. Bot entrypoint: main.py.")
@@ -645,7 +690,7 @@ def play(
     typer.echo(render_ascii(result))
     out_dir = out or Path("_replay")
     replay = build_replay_html(result, out_dir, game=game, seed=seed)
-    typer.echo(f"\n✓ Wrote animated replay: {replay}")
+    typer.echo(f"\n{OK_MARK} Wrote animated replay: {replay}")
     if open_browser:
         _serve_and_open(replay.parent, index=replay.name)
     else:
@@ -701,7 +746,7 @@ def board(
     index = site / "index.html"
     doc_path = site / "leaderboard.json"
     rows = json.loads(doc_path.read_text()).get("rows", [])
-    typer.echo(f"✓ Built board with {len(rows)} row(s): {index}")
+    typer.echo(f"{OK_MARK} Built board with {len(rows)} row(s): {index}")
     if not rows and not demo:
         typer.echo("  (empty — no submissions in this store yet. Try `atv-bench board --demo`.)")
 
@@ -1002,7 +1047,7 @@ def doctor(
     py = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     ok_py = sys.version_info >= (3, 11)
     lines: list[str] = []
-    lines.append(f"  {'✓' if ok_py else '✗'} Python {py}" + ("" if ok_py else " (need >= 3.11)"))
+    lines.append(f"  {OK_MARK if ok_py else BAD_MARK} Python {py}" + ("" if ok_py else " (need >= 3.11)"))
 
     # Resolve which harness we're reporting on: explicit --harness, else auto-detect.
     detected = detect_harness()
@@ -1012,11 +1057,11 @@ def doctor(
     found = root.exists()
     if found:
         title = h.title if h is not None else key
-        lines.append(f"  ✓ Harness config for {title} at {root} detected")
+        lines.append(f"  {OK_MARK} Harness config for {title} at {root} detected")
     else:
         live = ", ".join(hz.live_keys())
         lines.append(
-            f"  ✗ No supported harness config found (looked for {key} at {root}). "
+            f"  {BAD_MARK} No supported harness config found (looked for {key} at {root}). "
             f"Supported now: {live} — see `atv-bench harnesses`."
         )
 
@@ -1028,7 +1073,7 @@ def doctor(
         except Exception:
             authed = False
         lines.append(
-            f"  {'✓' if authed else '·'} GitHub CLI (gh) installed"
+            f"  {OK_MARK if authed else SKIP_MARK} GitHub CLI (gh) installed"
             + ("" if authed else " but not logged in — run `gh auth login` for `submit --live`")
         )
     else:
@@ -1037,7 +1082,7 @@ def doctor(
 
     docker = shutil.which("docker")
     lines.append(
-        f"  {'✓' if docker else '·'} Docker "
+        f"  {OK_MARK if docker else SKIP_MARK} Docker "
         + ("installed" if docker else "not installed — needed only to run matches locally")
     )
 
@@ -1045,13 +1090,13 @@ def doctor(
     # report the SAME readiness. Docker daemon + CodeClash + each harness CLI on PATH.
     from atv_bench import preflight as pf
     dchk = pf.check_docker()
-    lines.append(f"  {'✓' if dchk.ok else '·'} Docker daemon (for `run`): {dchk.detail}")
+    lines.append(f"  {OK_MARK if dchk.ok else SKIP_MARK} Docker daemon (for `run`): {dchk.detail}")
     cchk = pf.check_codeclash()
-    lines.append(f"  {'✓' if cchk.ok else '·'} CodeClash arena dep (for `run`): {cchk.detail}"
+    lines.append(f"  {OK_MARK if cchk.ok else SKIP_MARK} CodeClash arena dep (for `run`): {cchk.detail}"
                  + ("" if cchk.ok else f" — {cchk.fix}"))
     for binary in ("claude", "copilot"):
         bc = pf.check_cli_on_path(binary)
-        lines.append(f"  {'✓' if bc.ok else '·'} Harness CLI `{binary}` (for `run`): {bc.detail}")
+        lines.append(f"  {OK_MARK if bc.ok else SKIP_MARK} Harness CLI `{binary}` (for `run`): {bc.detail}")
 
     typer.echo("atv-bench doctor — environment readiness:\n")
     for ln in lines:
@@ -1067,7 +1112,7 @@ def _emit_run_error(err, json_out: bool) -> None:
     if json_out:
         typer.echo(json.dumps(error_envelope(err), indent=2))
     else:
-        typer.echo(f"✗ {err.message}")
+        typer.echo(f"{BAD_MARK} {err.message}")
         if err.fix:
             typer.echo(f"  fix: {err.fix}")
         typer.echo(f"  (exit {err.exit_code}, code={err.code})")
