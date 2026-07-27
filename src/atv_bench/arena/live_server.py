@@ -33,9 +33,13 @@ _BOARD_W = _BOARD_H = 25
 
 
 def _live_html() -> str:
-    """The bundled live page (view/live.html), read from the installed package."""
+    """The bundled SSE live-match page (view/live_match.html).
+
+    NOTE: `view/live.html` is now the quickstart live *gameplay* view (round strip +
+    per-round canvas, polled). This SSE demo match viewer keeps its own template.
+    """
     here = Path(__file__).resolve().parent.parent  # .../atv_bench
-    return (here / "view" / "live.html").read_text(encoding="utf-8")
+    return (here / "view" / "live_match.html").read_text(encoding="utf-8")
 
 
 def _build_board(a_name: str, b_name: str, result: dict, a_label: str, b_label: str,
