@@ -56,7 +56,7 @@ jobs:
         run: pip install -e '.[run,dev]'
 
       - name: CodeClash import + provisioning contract (no Docker / no e2e)
-        run: pytest tests/test_provisioning.py -q
+        run: python -m pytest tests/test_provisioning.py -q
 
   live-integration:
     # push-to-main and manual dispatch only — never on PR (that's import-smoke's job).
@@ -88,7 +88,7 @@ jobs:
         # required"). The browser binary installs into the runner user's cache without sudo;
         # the runner host must already have Chromium's shared libs (provision once — see
         # docs/ci/live-runner-setup.md).
-        run: playwright install chromium
+        run: python -m playwright install chromium
 
       - name: Preflight — verify the runner is actually provisioned
         # Fail LOUD with an actionable message if the runner is missing Docker or the CLIs,
@@ -128,4 +128,8 @@ jobs:
           ANTHROPIC_MODEL: ${{ secrets.ANTHROPIC_MODEL }}
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: pytest -m 'integration or e2e or drift' -q
+        # `python -m pytest`, not bare `pytest`: a self-hosted runner inherits the host user's
+        # PATH, which may put a different `pytest`/`playwright` shim (e.g. ~/.local/bin) ahead of
+        # the setup-python interpreter where `.[run,dev]` was installed — causing collection-time
+        # ModuleNotFoundError (typer, etc.). `python -m` always uses this job's interpreter.
+        run: python -m pytest -m 'integration or e2e or drift' -q
