@@ -14,9 +14,9 @@ failure modes of the same bug class were found by adversarial review:
 """
 from __future__ import annotations
 
+import ast
 import io
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -130,15 +130,26 @@ def test_subprocess_text_capture_pins_utf8() -> None:
     offenders = []
     for path in sorted(root.rglob("*.py")):
         src = path.read_text(encoding="utf-8")
-        for match in re.finditer(r"subprocess\.(?:run|Popen|check_output)\((.*?)\n\s*\)",
-                                 src, re.DOTALL):
-            call = match.group(0)
-            if "text=True" not in call and "universal_newlines=True" not in call:
+        # Parse with `ast`, not a regex. A regex that anchors on the closing paren silently
+        # skips single-line calls — which is how the most important site (submit.py's live
+        # command runner, the exact `submit` path this PR fixes) evaded an earlier draft of
+        # this guard while it still reported green.
+        for node in ast.walk(ast.parse(src)):
+            if not isinstance(node, ast.Call):
                 continue
-            if "encoding=" in call:
+            fn = node.func
+            if not (isinstance(fn, ast.Attribute)
+                    and isinstance(fn.value, ast.Name)
+                    and fn.value.id == "subprocess"
+                    and fn.attr in ("run", "Popen", "check_output")):
                 continue
-            lineno = src[: match.start()].count("\n") + 1
-            offenders.append(f"{path.relative_to(root)}:{lineno}")
+            kw = {k.arg: k.value for k in node.keywords if k.arg}
+            decodes_text = any(
+                isinstance(kw.get(name), ast.Constant) and kw[name].value is True
+                for name in ("text", "universal_newlines")
+            )
+            if decodes_text and "encoding" not in kw:
+                offenders.append(f"{path.relative_to(root)}:{node.lineno}")
     assert not offenders, (
         "subprocess text captures without an explicit encoding — these decode child "
         "output with the locale codepage (cp1252 on Windows, strict) and raise "
