@@ -363,6 +363,53 @@ def test_banner_production_path_keeps_glyphs_on_utf8(tmp_path: Path) -> None:
     assert banner.MEDAL in written, "a UTF-8 console was downgraded to the ASCII banner"
 
 
+def test_model_picker_survives_an_unimportable_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fail-soft marker import must actually be exercised, not merely written.
+
+    `interactive.select_model` pulls `_glyph` from `atv_bench.cli` purely to decorate the
+    configured model. An earlier commit imported it unguarded, which made a cosmetic
+    marker able to raise ImportError out of a picker that would otherwise have worked
+    (slim install, partial environment). The static prompt-title guard cannot catch a
+    revert of the try/except, and every other interactive test imports `cli` successfully
+    — so nothing covered it. Force the import to fail and require selection to proceed.
+    """
+    import builtins
+
+    from atv_bench import interactive
+
+    real_import = builtins.__import__
+
+    def exploding_import(name, *args, **kwargs):
+        if name == "atv_bench.cli":
+            raise ImportError("simulated: atv_bench.cli unimportable")
+        return real_import(name, *args, **kwargs)
+
+    captured: dict[str, object] = {}
+
+    class _Answer:
+        def ask(self):
+            return "model-b"
+
+    def fake_select(message, choices, default=None):
+        captured["titles"] = [c.title for c in choices]
+        return _Answer()
+
+    monkeypatch.setattr(builtins, "__import__", exploding_import)
+    monkeypatch.setattr(interactive, "_questionary_select", fake_select)
+
+    choices = [
+        interactive.ModelChoice("model-a", "Model A", is_current=True),
+        interactive.ModelChoice("model-b", "Model B"),
+    ]
+    assert interactive.select_model(choices, non_interactive=False) == "model-b"
+
+    titles = captured["titles"]
+    assert any("<-" in t for t in titles), (
+        "the ASCII fallback marker was not used when atv_bench.cli failed to import; "
+        f"got {titles!r}"
+    )
+
+
 # --- 2. Importing the CLI must not mutate a library consumer's streams --------------
 
 def test_importing_cli_does_not_mutate_caller_stdout() -> None:
