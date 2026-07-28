@@ -140,7 +140,7 @@ class LeagueStore:
         # A publishable row requires committed bot bytes (santa round-6): co-write the
         # sibling main.py so a store-seeded submission has the same publishable shape as a
         # live-submitted / match-job one. Its bytes back the re-derived bot_sha256 on load.
-        (path.parent / "main.py").write_text(bot_source or "def move(state):\n    return 'up'\n")
+        (path.parent / "main.py").write_text(bot_source or "def move(state):\n    return 'up'\n", encoding="utf-8")
 
     def load_submissions(self) -> dict[str, dict[str, Any]]:
         """Strict loader (validators): RAISE on the first malformed entrant.

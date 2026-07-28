@@ -217,13 +217,17 @@ def submission_status_trail(is_first_time: bool) -> list[str]:
     Surfaces the first-timer manual-approval wait so the virality moment doesn't
     read as silent latency.
     """
+    # ASCII "->" not "→": this trail prints on `submit`, the exact command reported
+    # crashing on a Windows cp1252 console. U+2192 is not cp1252-encodable, so it would
+    # degrade to a bare "?" and destroy the arrow's meaning. This module has no console
+    # access, so it emits portable text rather than probing the stream.
     trail = [
         "1. PR opened against All-The-Vibes/ATV-bench (`atv-bench submit --live` opens it via gh, or open it manually)",
-        "2. A maintainer adds the `run-match` label → the sandboxed match job runs your bot",
-        "3. Publish workflow recomputes ELO from history → the static leaderboard updates",
+        "2. A maintainer adds the `run-match` label -> the sandboxed match job runs your bot",
+        "3. Publish workflow recomputes ELO from history -> the static leaderboard updates",
     ]
     if is_first_time:
-        trail.insert(2, "→ First-time contributor: a maintainer must also approve the "
+        trail.insert(2, "-> First-time contributor: a maintainer must also approve the "
                         "workflow run before matches start (GitHub gate; expect a short wait).")
     return trail
 
@@ -364,7 +368,7 @@ def open_submission_pr(*, record: dict[str, Any], bot_path: str, identity: str,
     # directly (the runner handles only gh/git), so tests observe a real materialized tree.
     dest = wt / "league" / "submissions" / ident
     dest.mkdir(parents=True, exist_ok=True)
-    (dest / "main.py").write_text(Path(bot_path).read_text())
+    (dest / "main.py").write_text(Path(bot_path).read_text(encoding="utf-8"), encoding="utf-8")
     (dest / "submission.json").write_text(json.dumps(record, indent=2, sort_keys=True))
 
     _run_or_raise(runner, ["git", "checkout", "-b", branch], cwd=str(wt))

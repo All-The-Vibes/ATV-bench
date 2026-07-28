@@ -268,5 +268,5 @@ def build_replay_html(result: dict[str, Any], out_dir: str | Path,
         .replace("__MATCH_JSON__", match_json)
     )
     path = out / "replay.html"
-    path.write_text(html_text)
+    path.write_text(html_text, encoding="utf-8")
     return path

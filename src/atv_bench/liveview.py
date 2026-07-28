@@ -191,7 +191,7 @@ class LiveView:
         if src.exists():
             dest.write_bytes(src.read_bytes())
         elif not dest.exists():
-            dest.write_text("<!doctype html><title>live</title>")
+            dest.write_text("<!doctype html><title>live</title>", encoding="utf-8")
         # live.html loads <script src="shell.js"> — seed it beside the page.
         shell = view / "shell.js"
         if shell.exists():

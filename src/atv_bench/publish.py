@@ -378,7 +378,7 @@ def build_site(out_dir: str, *, store_dir: str = _DEFAULT_STORE, updated_at: str
     (out / "leaderboard.json").write_text(json.dumps(doc, indent=2))
     view = _find_view_html()
     if view is not None:
-        (out / "index.html").write_text(view.read_text())
+        (out / "index.html").write_text(view.read_text(encoding="utf-8"), encoding="utf-8")
     return out
 
 

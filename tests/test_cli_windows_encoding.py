@@ -111,3 +111,47 @@ def test_utf8_marks_are_not_downgraded() -> None:
         capture_output=True, text=True, encoding="utf-8", env=env, timeout=120,
     )
     assert "[OK]" not in proc.stdout, f"ASCII fallback used on a UTF-8 console:\n{proc.stdout}"
+
+
+# --- The actual reported invocation, not just `--help` -----------------------------
+# santa-loop round 1: adversarial review showed GLYPH_COMMANDS only covered
+# `submit --help`, which prints argparse help and NEVER enters the preflight loop —
+# the exact code path that crashed. Mutation testing confirmed the suite was near
+# vacuous: deleting the whole hardening layer still left 12/13 tests passing.
+
+def test_reported_submit_invocation_survives_cp1252(tmp_path) -> None:
+    """`atv-bench submit ./main.py --game battlesnake` — verbatim the command the user
+    reported — must run its preflight loop on a cp1252 console without crashing, and
+    must print legible ASCII marks rather than lossy `?`."""
+    bot = tmp_path / "main.py"
+    bot.write_text("def move(state):\n    return 'up'\n", encoding="utf-8")
+    env = _child_env(
+        PYTHONIOENCODING="cp1252:strict", PYTHONUTF8="0", PYTHONLEGACYWINDOWSSTDIO="1",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "atv_bench.cli", "submit", str(bot),
+         "--game", "battlesnake", "--harness", "claude-code"],
+        capture_output=True, text=True, encoding="cp1252", errors="replace",
+        env=env, cwd=str(tmp_path), timeout=180,
+    )
+    out = proc.stdout + proc.stderr
+    assert "UnicodeEncodeError" not in out, f"reported command still crashes:\n{out}"
+    # It must actually REACH preflight — otherwise the assertion above is vacuous.
+    preflight = [ln for ln in out.splitlines() if "gh_installed" in ln]
+    assert preflight, f"never reached the preflight loop (the crash site):\n{out}"
+    assert any(m in preflight[0] for m in ("[OK]", "[X]", "[-]")), (
+        f"preflight line has no legible ASCII mark: {preflight[0]!r}"
+    )
+    assert "?" not in out, f"lossy replacement char in reported command output:\n{out}"
+
+
+def test_decorative_glyph_commands_stay_legible() -> None:
+    """Commands carrying non-status glyphs (▶ ★ ⚔ ↳) must degrade to ASCII too.
+
+    `errors="replace"` alone renders `▶ atv-bench run --demo` as `? atv-bench run --demo`,
+    which reads like a broken program. Layer 2's rationale applies beyond ✓/✗.
+    """
+    proc = _run(["run", "--demo"])
+    out = proc.stdout
+    assert out.strip(), f"no output from run --demo: {proc.stderr}"
+    assert "?" not in out, f"lossy replacement char leaked:\n{out}"

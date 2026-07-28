@@ -69,25 +69,29 @@ jobs:
       # PYTHONUTF8=0 defeats PEP 540 UTF-8 mode, which would otherwise make stdout UTF-8
       # regardless of the codepage and mask the very bug this gate exists to catch.
       #
-      # Assert the actual invariant — "the console did not crash the CLI" — rather than
-      # proxying it through an exit code. Exit status is a bad proxy here: `submit`
-      # legitimately exits 1 on failed preflight (no gh auth on a runner), and `cmd`'s
-      # `if errorlevel N` does not reset errorlevel, so the step inherits that 1 and the
-      # job fails for a reason unrelated to encoding. Grepping the captured output for a
-      # traceback tests the thing we actually care about, on any exit path.
+      # Assert the actual invariant — "the console did not crash the CLI, and its output
+      # stayed legible" — rather than proxying it through an exit code. Exit status is a
+      # bad proxy here: `submit` legitimately exits 1 on failed preflight (no gh auth on a
+      # runner), and `cmd`'s `if errorlevel N` does not reset errorlevel, so the step would
+      # inherit that 1 and fail for a reason unrelated to encoding.
+      #
+      # Every assertion below is chosen to be NON-VACUOUS — it must fail if the fix is
+      # reverted. In particular the marks are asserted on a PREFLIGHT line (the exact loop
+      # that crashed), not on doctor's `[OK] Python 3.x`, which setup-python guarantees and
+      # which would therefore pass even if every other mark were broken.
       - name: Real cp1252 console runs the CLI without crashing
         shell: cmd
         env:
           PYTHONUTF8: "0"
         run: |
-          chcp 1252
-          echo def move(s): return "up" > main.py
+          chcp 1252 | findstr /C:"1252" >nul || exit /b 1
+          echo def move(s): return "up">main.py
           atv-bench doctor > out.txt 2>&1
-          atv-bench submit .\main.py --game battlesnake >> out.txt 2>&1
+          atv-bench submit .\main.py --game battlesnake --harness claude-code >> out.txt 2>&1
+          atv-bench run --demo >> out.txt 2>&1
           type out.txt
-          findstr /C:"UnicodeEncodeError" out.txt >nul && exit /b 1
-          findstr /C:"Traceback (most recent call last)" out.txt >nul && exit /b 1
-          findstr /C:"[OK]" out.txt >nul || exit /b 1
+          python .github/scripts/assert_cp1252_output.py out.txt || exit /b 1
+          echo cp1252 console OK
           echo cp1252 console OK
 
   # Always-on community-PR confinement (santa round-7): a REQUIRED check on every PR, not a
