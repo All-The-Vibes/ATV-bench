@@ -114,6 +114,24 @@ def test_shell_js_loads_under_a_cp1252_locale(monkeypatch: pytest.MonkeyPatch) -
 
 # --- 1b. Subprocess text decoding must not use the locale codepage ------------------
 
+def _scanned_roots() -> list[Path]:
+    """Every tree whose Python is shipped and executed, not just the importable package.
+
+    `arena/pkg/atv_bench/` is a SECOND copy of the arena package, baked into the Docker
+    image that actually runs matches. Rooting a scan at `atv_bench.__file__` silently
+    excludes it, so a revert there would sail past the guards while a byte-identity test
+    elsewhere is the only thing holding the two copies in sync.
+    """
+    import atv_bench
+
+    src_root = Path(atv_bench.__file__).parent
+    roots = [src_root]
+    baked = src_root.parent.parent / "arena" / "pkg" / "atv_bench"
+    if baked.is_dir():
+        roots.append(baked)
+    return roots
+
+
 def test_subprocess_text_capture_pins_utf8() -> None:
     """The THIRD vector of the same bug class (santa-loop round 3).
 
@@ -124,32 +142,30 @@ def test_subprocess_text_capture_pins_utf8() -> None:
     reading tool output raises UnicodeDecodeError on exactly the `submit` path that was
     reported crashing. Neither stdout hardening nor the file-I/O sweep reaches this.
     """
-    import atv_bench
-
-    root = Path(atv_bench.__file__).parent
     offenders = []
-    for path in sorted(root.rglob("*.py")):
-        src = path.read_text(encoding="utf-8")
-        # Parse with `ast`, not a regex. A regex that anchors on the closing paren silently
-        # skips single-line calls — which is how the most important site (submit.py's live
-        # command runner, the exact `submit` path this PR fixes) evaded an earlier draft of
-        # this guard while it still reported green.
-        for node in ast.walk(ast.parse(src)):
-            if not isinstance(node, ast.Call):
-                continue
-            fn = node.func
-            if not (isinstance(fn, ast.Attribute)
-                    and isinstance(fn.value, ast.Name)
-                    and fn.value.id == "subprocess"
-                    and fn.attr in ("run", "Popen", "check_output")):
-                continue
-            kw = {k.arg: k.value for k in node.keywords if k.arg}
-            decodes_text = any(
-                isinstance(kw.get(name), ast.Constant) and kw[name].value is True
-                for name in ("text", "universal_newlines")
-            )
-            if decodes_text and "encoding" not in kw:
-                offenders.append(f"{path.relative_to(root)}:{node.lineno}")
+    for root in _scanned_roots():
+        for path in sorted(root.rglob("*.py")):
+            src = path.read_text(encoding="utf-8")
+            # Parse with `ast`, not a regex. A regex that anchors on the closing paren
+            # silently skips single-line calls — which is how the most important site
+            # (submit.py's live command runner, the exact `submit` path this PR fixes)
+            # evaded an earlier draft of this guard while it still reported green.
+            for node in ast.walk(ast.parse(src)):
+                if not isinstance(node, ast.Call):
+                    continue
+                fn = node.func
+                if not (isinstance(fn, ast.Attribute)
+                        and isinstance(fn.value, ast.Name)
+                        and fn.value.id == "subprocess"
+                        and fn.attr in ("run", "Popen", "check_output")):
+                    continue
+                kw = {k.arg: k.value for k in node.keywords if k.arg}
+                decodes_text = any(
+                    isinstance(kw.get(name), ast.Constant) and kw[name].value is True
+                    for name in ("text", "universal_newlines")
+                )
+                if decodes_text and "encoding" not in kw:
+                    offenders.append(f"{path}:{node.lineno}")
     assert not offenders, (
         "subprocess text captures without an explicit encoding — these decode child "
         "output with the locale codepage (cp1252 on Windows, strict) and raise "
@@ -307,6 +323,47 @@ def test_no_bare_unencodable_glyphs_in_interactive_prompt_titles() -> None:
         "interactive prompt titles carry glyphs cp1252 cannot encode; each renders as a "
         "bare '?' on a Windows console:\n" + "\n".join(offenders)
     )
+
+
+def test_banner_production_path_selects_the_ascii_variant(tmp_path: Path) -> None:
+    """Gate the SELECTOR, not just the renderer.
+
+    An earlier draft asserted only on `render_banner(ascii_only=True)`, which proves the
+    ASCII variant exists but not that production ever chooses it. `maybe_show_banner()`
+    makes that decision, and it is skipped for a non-TTY — so the cp1252 CI run (which
+    redirects stdout) never exercises it either. Reverting the selector would have left
+    every guard green while real Windows users got a wall of `?`.
+
+    Drive the real entry point with a cp1252 stream and assert on the bytes it wrote.
+    """
+    from atv_bench import banner
+
+    stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="replace")
+    shown = banner.maybe_show_banner(
+        sentinel=tmp_path / ".banner_shown_v1",
+        is_tty=True, json_mode=False, env_suppressed=False, stream=stream,
+    )
+    assert shown, "the banner did not render; this test would prove nothing"
+    stream.flush()
+    written = stream.buffer.getvalue().decode("cp1252")
+    assert "?" not in written, (
+        "the production banner path emitted lossy '?' on a cp1252 console:\n" + written
+    )
+    assert "ATV" in written and "BENCH" in written, "the banner lost its wordmark"
+
+
+def test_banner_production_path_keeps_glyphs_on_utf8(tmp_path: Path) -> None:
+    """The selector must not downgrade a console that can render the real banner."""
+    from atv_bench import banner
+
+    stream = io.TextIOWrapper(io.BytesIO(), encoding="utf-8", errors="strict")
+    assert banner.maybe_show_banner(
+        sentinel=tmp_path / ".banner_shown_v1",
+        is_tty=True, json_mode=False, env_suppressed=False, stream=stream,
+    )
+    stream.flush()
+    written = stream.buffer.getvalue().decode("utf-8")
+    assert banner.MEDAL in written, "a UTF-8 console was downgraded to the ASCII banner"
 
 
 # --- 2. Importing the CLI must not mutate a library consumer's streams --------------
