@@ -97,8 +97,12 @@ def frame_to_dict(
 
 
 def _outcome_line(outcome: Outcome | None, label_a: str, label_b: str) -> str:
+    # ASCII "*" not "★": these frames are printed to the terminal by `demo-match`, and
+    # U+2605 is not cp1252-encodable, so on a Windows console it degrades to a bare "?".
+    # This module is pure (no console access), so it emits portable text rather than
+    # probing the stream. The em-dash below IS cp1252-encodable (0x97), so it can stay.
     if outcome == Outcome.A_WINS:
-        return f"★ {label_a} wins"
+        return f"* {label_a} wins"
     if outcome == Outcome.B_WINS:
-        return f"★ {label_b} wins"
+        return f"* {label_b} wins"
     return f"— draw between {label_a} and {label_b}"

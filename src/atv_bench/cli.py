@@ -57,15 +57,15 @@ def _console_handles_glyphs() -> bool:
 # is actually live when a command runs. ASCII fallbacks matter beyond not crashing:
 # `errors="replace"` maps BOTH ✓ and ✗ to `?`, which would make preflight pass/fail
 # indistinguishable on exactly the console that needs to read it.
-_GLYPHS_OK: bool | None = None
-
-
+#
+# Deliberately NOT memoized. Caching the first answer in a module global made the mark
+# depend on whichever console happened to resolve it first, which is wrong wherever
+# sys.stdout is swapped mid-process — Click's CliRunner does exactly that per invocation.
+# Re-probing costs one 4-character .encode() per call, far less than the typer.echo it
+# precedes, so there is nothing to buy back by caching.
 def _marks() -> tuple[str, str, str, str]:
-    """(ok, bad, skip, arrow) for the live stdout, resolved once per process."""
-    global _GLYPHS_OK
-    if _GLYPHS_OK is None:
-        _GLYPHS_OK = _console_handles_glyphs()
-    if _GLYPHS_OK:
+    """(ok, bad, skip, arrow) for whatever stdout is live at THIS call."""
+    if _console_handles_glyphs():
         return "✓", "✗", "·", "→"
     return "[OK]", "[X]", "[-]", "->"
 
@@ -278,7 +278,7 @@ def _render_full_assessment(manifest: dict, harness_key: str | None = None) -> s
     inventory of what makes this harness what it is.
     """
     m = manifest
-    hb = "═" * 64
+    hb = _glyph("═", "=") * 64
 
     def _block(label: str, items: list[str]) -> list[str]:
         out = [f"\n  {label} ({len(items)}):"]
@@ -523,7 +523,7 @@ def validate_harness_cmd(
         typer.echo(
             "  fix: adjust your reader / config so every published name passes the safety "
             "scan and the schema is complete, then re-run `atv-bench validate-harness "
-            f"--harness {resolved}`. See CONTRIBUTING.md → Add a harness adapter."
+            f"--harness {resolved}`. See CONTRIBUTING.md {arrow()} Add a harness adapter."
         )
         raise typer.Exit(1)
 
@@ -623,7 +623,7 @@ def harnesses(
     for h in HARNESSES:
         status = "live" if h.live else "planned"
         mark = ok_mark() if h.live else skip_mark()
-        here = "  ← detected on this machine" if h.key == marked else ""
+        here = f"  {_glyph('←', '<-')} detected on this machine" if h.key == marked else ""
         typer.echo(f"  {mark} {h.key}  [{status}]  — {h.title}{here}")
         typer.echo(f"      {h.summary}")
     if ambiguous:

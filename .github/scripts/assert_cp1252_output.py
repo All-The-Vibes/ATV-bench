@@ -53,11 +53,31 @@ def main(argv: list[str]) -> int:
     elif not any(m in preflight[0] for m in ("[OK]", "[X]", "[-]")):
         failures.append(f"preflight line carries no ASCII status mark: {preflight[0]!r}")
 
-    # A literal '?' means errors="replace" swallowed a glyph: no crash, but the reader
-    # cannot tell pass from fail. Skip lines that legitimately contain a question mark.
+    # A literal '?' where a GLYPH belongs means errors="replace" swallowed it: no crash,
+    # but the reader cannot tell pass from fail. Scope this to positions where the CLI
+    # emits a glyph — a leading status mark, or the known decorative-glyph prefixes —
+    # rather than scanning free prose. `atv-bench --help` legitimately contains
+    # "...submit, and run matches?", and a URL query string or a genuine question in a fix
+    # hint would each trip a whole-line scan, making this gate flaky for reasons that have
+    # nothing to do with encoding.
     for lineno, line in enumerate(text.splitlines(), 1):
-        if "?" in line and not line.rstrip().endswith("?"):
-            failures.append(f"line {lineno} contains a lossy replacement '?': {line.strip()!r}")
+        stripped = line.strip()
+        if not stripped:
+            continue
+        first = stripped.split(" ", 1)[0]
+        # A '?' as the first token is a degraded status mark or decorative glyph.
+        if "?" in first:
+            failures.append(
+                f"line {lineno} begins with a lossy replacement char where a glyph "
+                f"belongs: {stripped!r}"
+            )
+        # "  ? detected on this machine" style: a '?' delimited by spaces mid-line is a
+        # swallowed separator glyph (the arrow/marker forms the CLI prints).
+        elif " ? " in line:
+            failures.append(
+                f"line {lineno} contains a lossy replacement char in a glyph position: "
+                f"{stripped!r}"
+            )
 
     if failures:
         print("cp1252 console assertions FAILED:", file=sys.stderr)

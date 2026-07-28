@@ -215,7 +215,7 @@ def scoped_credential(
     fd, name = tempfile.mkstemp(prefix="atv-cred-", dir=str(directory))
     path = Path(name)
     try:
-        with os.fdopen(fd, "w") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(token)
         os.chmod(path, 0o400)
         yield ScopedCredential(path=path)

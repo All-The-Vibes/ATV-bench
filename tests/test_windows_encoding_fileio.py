@@ -108,3 +108,31 @@ def test_submission_status_trail_is_cp1252_safe() -> None:
             step.encode("cp1252")
         except UnicodeEncodeError as e:  # noqa: PERF203
             pytest.fail(f"status trail step is not cp1252-safe ({e}): {step!r}")
+
+
+# --- 4. Marks must track the LIVE stream, not a stale first answer ------------------
+
+def test_marks_follow_stdout_swaps_within_a_process() -> None:
+    """`_GLYPHS_OK` was memoized once per process, so the first console a mark was
+    resolved against decided every later answer. That is wrong in any embedding that
+    swaps sys.stdout — Click's CliRunner does exactly this per invocation — and it
+    breaks in both directions: UTF-8 output stuck on ASCII fallbacks, or real glyphs
+    emitted to a cp1252 stream where they degrade to `?`.
+    """
+    from atv_bench import cli
+
+    utf8 = io.TextIOWrapper(io.BytesIO(), encoding="utf-8", errors="strict")
+    legacy = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="replace")
+    original = sys.stdout
+    try:
+        sys.stdout = utf8
+        assert cli.ok_mark() == "✓", "UTF-8 stream should render the real glyph"
+        sys.stdout = legacy
+        assert cli.ok_mark() == "[OK]", (
+            "after swapping to a cp1252 stream the mark must degrade to ASCII, "
+            "not return the stale UTF-8 answer"
+        )
+        sys.stdout = utf8
+        assert cli.ok_mark() == "✓", "swapping back to UTF-8 must restore the real glyph"
+    finally:
+        sys.stdout = original
