@@ -65,7 +65,12 @@ jobs:
       - name: Install
         run: pip install -e '.[dev]'
       - name: Encoding regression suite (simulated cp1252 console)
-        run: pytest tests/test_cli_windows_encoding.py -q
+        # Both encoding files: test_cli_windows_encoding.py covers the CONSOLE, and
+        # test_windows_encoding_fileio.py covers the file-I/O, subprocess-decode and
+        # stdin vectors of the same bug class. The latter includes behavioural tests
+        # that spawn the real CLI, so running them on a genuine Windows runner exercises
+        # the actual cp1252 locale rather than the simulated one used on Linux.
+        run: pytest tests/test_cli_windows_encoding.py tests/test_windows_encoding_fileio.py -q
       # PYTHONUTF8=0 defeats PEP 540 UTF-8 mode, which would otherwise make stdout UTF-8
       # regardless of the codepage and mask the very bug this gate exists to catch.
       #

@@ -15,6 +15,7 @@ failure modes of the same bug class were found by adversarial review:
 from __future__ import annotations
 
 import io
+import os
 import re
 import subprocess
 import sys
@@ -202,7 +203,9 @@ def test_validate_pr_accepts_utf8_paths_on_a_cp1252_stdin() -> None:
     proc = subprocess.run(
         [sys.executable, "-m", "atv_bench.cli", "validate-pr", "--author", "alice"],
         input=raw, capture_output=True, timeout=60,
-        env={**__import__("os").environ, "PYTHONIOENCODING": "cp1252"},
+        # Inherit the full environment (Windows needs SYSTEMROOT) and force the child's
+        # stdio onto cp1252 so this exercises the real Windows decode path everywhere.
+        env={**os.environ, "PYTHONIOENCODING": "cp1252", "PYTHONUTF8": "0"},
     )
     combined = proc.stdout + proc.stderr
     assert b"UnicodeDecodeError" not in combined, (
