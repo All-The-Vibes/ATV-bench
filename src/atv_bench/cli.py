@@ -381,7 +381,7 @@ def submit(
     manual-PR fallback documented in CONTRIBUTING is real, not aspirational.
 
     With --live it runs the gh-backed preflight and, if it passes, opens the PR end-to-end
-    (fork → branch → stage under league/submissions/<identity>/ → commit → push → PR).
+    (fork -> branch -> stage under league/submissions/<identity>/ -> commit -> push -> PR).
     """
     from atv_bench.submit import (
         build_submission,

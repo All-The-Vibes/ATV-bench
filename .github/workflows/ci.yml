@@ -94,6 +94,10 @@ jobs:
           atv-bench doctor > out.txt 2>&1
           atv-bench submit .\main.py --game battlesnake --harness claude-code >> out.txt 2>&1
           atv-bench run --demo >> out.txt 2>&1
+          rem Capture --help too: command docstrings BECOME help text, and `submit --help`
+          rem shipped five `→` that degraded to `?` while every other assertion stayed green.
+          rem Help output was the one user-facing surface this gate never looked at.
+          atv-bench submit --help >> out.txt 2>&1
           type out.txt
           python .github/scripts/assert_cp1252_output.py out.txt || exit /b 1
           echo cp1252 console OK

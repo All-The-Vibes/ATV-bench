@@ -410,6 +410,63 @@ def test_model_picker_survives_an_unimportable_cli(monkeypatch: pytest.MonkeyPat
     )
 
 
+def test_command_help_text_is_cp1252_legible() -> None:
+    """Command docstrings BECOME `--help` output, so they need the same discipline.
+
+    `submit`'s docstring described the flow with `→`, which cp1252 cannot encode. The
+    console hardening kept it from crashing, so it degraded instead:
+
+        (fork ? branch ? stage under league/submissions/<identity>/ ? commit ? push ? PR)
+
+    Five arrows became five question marks in the help text for `submit` — the exact
+    command from the original bug report. Non-crashing but illegible is the failure mode
+    this branch already rejects for status marks.
+
+    Only Typer COMMAND docstrings are checked: those are rendered to a console. Internal
+    helper docstrings are read in source, where `→` is fine and clearer than `->`.
+    """
+    offenders = []
+    for root in _scanned_roots():
+        for path in sorted(root.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                is_command = any(
+                    "command" in ast.dump(dec) or "callback" in ast.dump(dec)
+                    for dec in node.decorator_list
+                )
+                if not is_command:
+                    continue
+                doc = ast.get_docstring(node) or ""
+                bad = sorted({ch for ch in doc if not _cp1252_encodable(ch)})
+                if bad:
+                    offenders.append(f"{path}:{node.lineno} {node.name}(): {bad}")
+    assert not offenders, (
+        "Typer command docstrings become --help text; these carry glyphs cp1252 cannot "
+        "encode, so each renders as a bare '?' on a Windows console:\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_submit_help_renders_without_replacement_chars() -> None:
+    """Behavioural companion: run the real `submit --help` on a cp1252 stdout."""
+    proc = subprocess.run(
+        [sys.executable, "-m", "atv_bench.cli", "submit", "--help"],
+        capture_output=True, timeout=60,
+        env={**os.environ, "PYTHONIOENCODING": "cp1252", "PYTHONUTF8": "0"},
+    )
+    text = (proc.stdout + proc.stderr).decode("cp1252", errors="replace")
+    assert "UnicodeEncodeError" not in text, "submit --help crashed on a cp1252 console"
+    # The flow line is the one that degraded; assert on it directly rather than banning
+    # every '?', since the help legitimately contains "...and run matches?".
+    flow = [ln for ln in text.splitlines() if "fork" in ln and "branch" in ln]
+    assert flow, "the submit flow line vanished from --help"
+    assert "?" not in flow[0], (
+        "submit --help still degrades its flow arrows into '?' on cp1252:\n" + flow[0]
+    )
+
+
 # --- 2. Importing the CLI must not mutate a library consumer's streams --------------
 
 def test_importing_cli_does_not_mutate_caller_stdout() -> None:
