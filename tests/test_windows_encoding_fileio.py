@@ -49,18 +49,16 @@ def test_no_unencoded_text_writes_of_non_ascii_payloads() -> None:
     pure ASCII and safe under any codepage. Everything else that writes arbitrary text
     (HTML templates, copied bot source) must pin encoding explicitly.
     """
-    import atv_bench
-
-    root = Path(atv_bench.__file__).parent
     offenders = []
-    for path in sorted(root.rglob("*.py")):
+    for root in _scanned_roots():
+      for path in sorted(root.rglob("*.py")):
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if ".write_text(" not in line or "encoding=" in line:
                 continue
             if "json.dumps" in line:
                 continue  # ensure_ascii=True → ASCII-only payload, safe on any codepage
             if ".read_text()" in line or "html" in line.lower():
-                offenders.append(f"{path.relative_to(root)}:{lineno}: {line.strip()}")
+                offenders.append(f"{path}:{lineno}: {line.strip()}")
     assert not offenders, (
         "arbitrary-text writes without an explicit encoding (crash on Windows cp1252):\n"
         + "\n".join(offenders)
@@ -86,11 +84,12 @@ def test_packaged_assets_are_read_utf8_not_locale_codepage() -> None:
         shell.decode("cp1252")
 
     offenders = []
-    for path in sorted(root.rglob("*.py")):
-        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if ".read_text()" not in line:
-                continue
-            offenders.append(f"{path.relative_to(root)}:{lineno}: {line.strip()}")
+    for scan_root in _scanned_roots():
+        for path in sorted(scan_root.rglob("*.py")):
+            for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if ".read_text()" not in line:
+                    continue
+                offenders.append(f"{path}:{lineno}: {line.strip()}")
     assert not offenders, (
         "text reads without an explicit encoding (crash on Windows cp1252 for any "
         "asset with non-cp1252-decodable bytes):\n" + "\n".join(offenders)
@@ -196,11 +195,9 @@ def test_stdin_read_pins_utf8() -> None:
     encoding includes a cp1252-unmapped byte makes the read raise UnicodeDecodeError
     before validation runs — so the PR gate crashes instead of rendering a verdict.
     """
-    import atv_bench
-
-    root = Path(atv_bench.__file__).parent
     offenders = []
-    for path in sorted(root.rglob("*.py")):
+    for root in _scanned_roots():
+      for path in sorted(root.rglob("*.py")):
         src = path.read_text(encoding="utf-8")
         for lineno, line in enumerate(src.splitlines(), 1):
             stripped = line.strip()
@@ -211,7 +208,7 @@ def test_stdin_read_pins_utf8() -> None:
             # custom stdin) where there are no raw bytes left to re-decode.
             if "buffer.read().decode" in src:
                 continue
-            offenders.append(f"{path.relative_to(root)}:{lineno}: {stripped}")
+            offenders.append(f"{path}:{lineno}: {stripped}")
     assert not offenders, (
         "stdin read without an explicit encoding — decodes piped git output with the "
         "locale codepage (cp1252 on Windows, strict):\n" + "\n".join(offenders)
