@@ -268,6 +268,33 @@ def _cp1252_encodable(ch: str) -> bool:
     return True
 
 
+def test_no_bare_unencodable_glyphs_in_interactive_prompt_titles() -> None:
+    """Sixth site of the legibility class: the questionary model picker.
+
+    `interactive.py` marked the configured model with `←`, which cp1252 cannot encode, so
+    a Windows user saw "gpt-5  ? your configured model" — the pointer degrading into what
+    looks like a rendering bug. Interactive prompts are TTY-only, so no test that captures
+    output would ever have caught it.
+    """
+    from atv_bench import interactive
+
+    src = Path(interactive.__file__).read_text(encoding="utf-8")
+    offenders = []
+    for lineno, line in enumerate(src.splitlines(), 1):
+        stripped = line.strip()
+        if stripped.startswith("#") or "_glyph(" in line:
+            continue
+        if "Choice(" not in line and "title=" not in line:
+            continue
+        bad = sorted({ch for ch in line if not _cp1252_encodable(ch)})
+        if bad:
+            offenders.append(f"{lineno}: {bad} in {stripped[:70]!r}")
+    assert not offenders, (
+        "interactive prompt titles carry glyphs cp1252 cannot encode; each renders as a "
+        "bare '?' on a Windows console:\n" + "\n".join(offenders)
+    )
+
+
 # --- 2. Importing the CLI must not mutate a library consumer's streams --------------
 
 def test_importing_cli_does_not_mutate_caller_stdout() -> None:

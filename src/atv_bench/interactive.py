@@ -67,8 +67,14 @@ def select_model(
 
     import questionary
 
+    # `←` is not cp1252-encodable, so on a legacy Windows console it renders as a bare `?`
+    # ("gpt-5  ? your configured model"), which reads like a defect rather than a pointer.
+    # Same reasoning as the CLI's [OK]/[X] status marks: prefer an honest ASCII stand-in.
+    from atv_bench.cli import _glyph
+
+    marker = _glyph("←", "<-")
     q_choices = [
-        questionary.Choice(title=f"{c.label}" + ("  ← your configured model" if c.is_current else ""),
+        questionary.Choice(title=f"{c.label}" + (f"  {marker} your configured model" if c.is_current else ""),
                            value=c.id)
         for c in choices
     ]
