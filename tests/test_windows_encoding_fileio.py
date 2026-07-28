@@ -157,6 +157,60 @@ def test_curly_quote_in_tool_output_survives_cp1252_decode() -> None:
     assert "”" in payload.decode("utf-8")
 
 
+# --- 1c. stdin must not be decoded with the locale codepage -------------------------
+
+def test_stdin_read_pins_utf8() -> None:
+    """The FOURTH vector (santa-loop round 3).
+
+    `sys.stdin.read()` decodes with the locale codec too. `atv-bench validate-pr` is fed
+    by `git diff --name-only | atv-bench validate-pr`, and git emits path bytes as UTF-8.
+    A submission directory containing a curly quote (…e2 80 9d…) or any char whose UTF-8
+    encoding includes a cp1252-unmapped byte makes the read raise UnicodeDecodeError
+    before validation runs — so the PR gate crashes instead of rendering a verdict.
+    """
+    import atv_bench
+
+    root = Path(atv_bench.__file__).parent
+    offenders = []
+    for path in sorted(root.rglob("*.py")):
+        src = path.read_text(encoding="utf-8")
+        for lineno, line in enumerate(src.splitlines(), 1):
+            stripped = line.strip()
+            if "sys.stdin.read()" not in stripped or stripped.startswith("#"):
+                continue
+            # A read guarded by an explicit sys.stdin.buffer decode is the FIX, not the
+            # bug: that branch only runs for an already-decoded stream (pytest capture,
+            # custom stdin) where there are no raw bytes left to re-decode.
+            if "buffer.read().decode" in src:
+                continue
+            offenders.append(f"{path.relative_to(root)}:{lineno}: {stripped}")
+    assert not offenders, (
+        "stdin read without an explicit encoding — decodes piped git output with the "
+        "locale codepage (cp1252 on Windows, strict):\n" + "\n".join(offenders)
+    )
+
+
+def test_validate_pr_accepts_utf8_paths_on_a_cp1252_stdin() -> None:
+    """Behavioural: pipe a UTF-8 path that cp1252 cannot decode into `validate-pr`."""
+    payload = "league/submissions/alice/main.py\nleague/submissions/”x/main.py\n"
+    raw = payload.encode("utf-8")
+
+    # Non-vacuous: this really is undecodable under the Windows default codepage.
+    with pytest.raises(UnicodeDecodeError):
+        raw.decode("cp1252")
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "atv_bench.cli", "validate-pr", "--author", "alice"],
+        input=raw, capture_output=True, timeout=60,
+        env={**__import__("os").environ, "PYTHONIOENCODING": "cp1252"},
+    )
+    combined = proc.stdout + proc.stderr
+    assert b"UnicodeDecodeError" not in combined, (
+        "validate-pr died decoding a UTF-8 path from stdin under a cp1252 locale:\n"
+        + combined.decode("utf-8", errors="replace")
+    )
+
+
 # --- 2. Importing the CLI must not mutate a library consumer's streams --------------
 
 def test_importing_cli_does_not_mutate_caller_stdout() -> None:

@@ -571,7 +571,16 @@ def validate_pr_paths_cmd(
     if paths_file is not None:
         text = paths_file.read_text(encoding="utf-8")
     else:
-        text = sys.stdin.read()
+        # Decode stdin as UTF-8 explicitly. `sys.stdin.read()` uses the locale codec under
+        # a strict handler — cp1252 on Windows — but this command is fed by
+        # `git diff --name-only | atv-bench validate-pr`, and git emits paths as UTF-8. A
+        # submission dir with a curly quote (…e2 80 9d…) would crash the gate with
+        # UnicodeDecodeError before it could render a verdict.
+        buffer = getattr(sys.stdin, "buffer", None)
+        if buffer is not None:
+            text = buffer.read().decode("utf-8", errors="replace")
+        else:  # already-decoded stream (pytest capture, custom stdin) - nothing to redo
+            text = sys.stdin.read()
     lines = [ln.rstrip("\n") for ln in text.splitlines() if ln.strip()]
     if name_status:
         report = validate_pr_changes(author, lines)
