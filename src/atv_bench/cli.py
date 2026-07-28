@@ -569,7 +569,7 @@ def validate_pr_paths_cmd(
     """
     from atv_bench.validate import validate_pr_paths, validate_pr_changes
     if paths_file is not None:
-        text = paths_file.read_text()
+        text = paths_file.read_text(encoding="utf-8")
     else:
         text = sys.stdin.read()
     lines = [ln.rstrip("\n") for ln in text.splitlines() if ln.strip()]
@@ -790,7 +790,7 @@ def board(
             shutil.rmtree(tmp_store, ignore_errors=True)
     index = site / "index.html"
     doc_path = site / "leaderboard.json"
-    rows = json.loads(doc_path.read_text()).get("rows", [])
+    rows = json.loads(doc_path.read_text(encoding="utf-8")).get("rows", [])
     typer.echo(f"{ok_mark()} Built board with {len(rows)} row(s): {index}")
     if not rows and not demo:
         typer.echo("  (empty — no submissions in this store yet. Try `atv-bench board --demo`.)")
@@ -1044,7 +1044,7 @@ def demo_match_cmd(
         _record_demo_match(str(tmp_store), result, a_name, b_name, a_bot_label, b_bot_label)
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         site = build_site(str(out_dir), store_dir=str(tmp_store), updated_at=now)
-        doc = json.loads((site / "leaderboard.json").read_text())
+        doc = json.loads((site / "leaderboard.json").read_text(encoding="utf-8"))
         rows = doc.get("rows", [])
 
         # Section 6 typed-rank guard: an unverified board never prints a rank. Route the
@@ -1364,7 +1364,7 @@ def rate(
     rows = []
     total_records = 0
     infra_failures = 0
-    for line in matches_file.read_text().splitlines():
+    for line in matches_file.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -1447,7 +1447,7 @@ def _load_rating_matches(store: Path, *, with_clusters: bool = False):
         raise typer.Exit(2)
     out = []
     clusters: list[str] = []
-    for line in matches_file.read_text().splitlines():
+    for line in matches_file.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue

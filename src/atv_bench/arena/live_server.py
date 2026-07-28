@@ -70,7 +70,7 @@ def _build_board(a_name: str, b_name: str, result: dict, a_label: str, b_label: 
         _record_demo_match(str(tmp_store), result, a_name, b_name, a_label, b_label)
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         site = build_site(str(out_dir), store_dir=str(tmp_store), updated_at=now)
-        doc = json.loads((site / "leaderboard.json").read_text())
+        doc = json.loads((site / "leaderboard.json").read_text(encoding="utf-8"))
         rows = doc.get("rows", [])
         return {"rows": rows, "insights": build_insights(rows), "verified": verified}
     finally:

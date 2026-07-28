@@ -25,7 +25,7 @@ _ADAPTER_VERSION = "1.0.0"
 
 
 def _load_doc() -> dict[str, Any]:
-    return json.loads(Path(DEMO_RECORDING_PATH).read_text())
+    return json.loads(Path(DEMO_RECORDING_PATH).read_text(encoding="utf-8"))
 
 
 def load_demo_record() -> MatchRecord:

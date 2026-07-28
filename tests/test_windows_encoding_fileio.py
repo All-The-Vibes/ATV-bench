@@ -65,6 +65,51 @@ def test_no_unencoded_text_writes_of_non_ascii_payloads() -> None:
     )
 
 
+def test_packaged_assets_are_read_utf8_not_locale_codepage() -> None:
+    """The READ side of the same bug class (santa-loop round 3).
+
+    The round-1 sweep guarded `write_text`, but `read_text()` with no encoding is just
+    as locale-dependent. `src/atv_bench/view/shell.js` contains bytes that are not
+    cp1252-DECODABLE (0x9d at offset 4062), so on a Windows cp1252 locale
+    `play._shell_js()` raises UnicodeDecodeError and `atv-bench play` dies before it
+    can write anything — a crash stdout hardening cannot reach.
+    """
+    import atv_bench
+
+    root = Path(atv_bench.__file__).parent
+
+    # The asset really is undecodable under cp1252 — this test is non-vacuous.
+    shell = (root / "view" / "shell.js").read_bytes()
+    with pytest.raises(UnicodeDecodeError):
+        shell.decode("cp1252")
+
+    offenders = []
+    for path in sorted(root.rglob("*.py")):
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if ".read_text()" not in line:
+                continue
+            offenders.append(f"{path.relative_to(root)}:{lineno}: {line.strip()}")
+    assert not offenders, (
+        "text reads without an explicit encoding (crash on Windows cp1252 for any "
+        "asset with non-cp1252-decodable bytes):\n" + "\n".join(offenders)
+    )
+
+
+def test_shell_js_loads_under_a_cp1252_locale(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Behavioural companion: simulate a cp1252 default locale and load the shell."""
+    from atv_bench import play
+
+    real_read_text = Path.read_text
+
+    def locale_read_text(self: Path, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if "encoding" not in kwargs and not args:
+            return self.read_bytes().decode("cp1252")  # what Windows open() would do
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", locale_read_text)
+    assert "canvas" in play._shell_js().lower()
+
+
 # --- 2. Importing the CLI must not mutate a library consumer's streams --------------
 
 def test_importing_cli_does_not_mutate_caller_stdout() -> None:
