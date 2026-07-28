@@ -203,7 +203,14 @@ def test_stdin_read_pins_utf8() -> None:
 
 
 def test_validate_pr_accepts_utf8_paths_on_a_cp1252_stdin() -> None:
-    """Behavioural: pipe a UTF-8 path that cp1252 cannot decode into `validate-pr`."""
+    """Behavioural: pipe a UTF-8 path that cp1252 cannot decode into the real command.
+
+    The command is `validate-pr-paths`, NOT `validate-pr`. An earlier draft of this test
+    used the latter, which does not exist — Typer answered with "No such command" and
+    exited 2 without ever reading stdin, so the test passed while proving nothing. Assert
+    on the command's real output, not merely on the absence of a traceback, so the same
+    mistake cannot recur silently.
+    """
     payload = "league/submissions/alice/main.py\nleague/submissions/”x/main.py\n"
     raw = payload.encode("utf-8")
 
@@ -212,7 +219,7 @@ def test_validate_pr_accepts_utf8_paths_on_a_cp1252_stdin() -> None:
         raw.decode("cp1252")
 
     proc = subprocess.run(
-        [sys.executable, "-m", "atv_bench.cli", "validate-pr", "--author", "alice"],
+        [sys.executable, "-m", "atv_bench.cli", "validate-pr-paths", "--author", "alice"],
         input=raw, capture_output=True, timeout=60,
         # Inherit the full environment (Windows needs SYSTEMROOT) and force the child's
         # stdio onto cp1252 so this exercises the real Windows decode path everywhere.
@@ -220,8 +227,15 @@ def test_validate_pr_accepts_utf8_paths_on_a_cp1252_stdin() -> None:
     )
     combined = proc.stdout + proc.stderr
     assert b"UnicodeDecodeError" not in combined, (
-        "validate-pr died decoding a UTF-8 path from stdin under a cp1252 locale:\n"
+        "validate-pr-paths died decoding a UTF-8 path from stdin under a cp1252 locale:\n"
         + combined.decode("utf-8", errors="replace")
+    )
+    # Proof it actually REACHED the validator rather than bailing out in argument parsing:
+    # the second path is outside alice's tree, so the confinement check must reject it.
+    assert b"No such command" not in combined, "the test invoked a command that does not exist"
+    text = combined.decode("utf-8", errors="replace")
+    assert "outside its own submission tree" in text or "not confined" in text, (
+        "expected a confinement verdict proving stdin was read and parsed; got:\n" + text
     )
 
 
