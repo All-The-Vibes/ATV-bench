@@ -71,7 +71,7 @@ def _probe_userns_netns() -> tuple[bool, str]:
         proc = subprocess.run(
             ["unshare", "-Urn", "true"],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=10,
         )
     except (OSError, subprocess.SubprocessError) as exc:
@@ -180,7 +180,7 @@ def contained_run(
             env=env,
             cwd=cwd,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=timeout,
             preexec_fn=preexec,
         )

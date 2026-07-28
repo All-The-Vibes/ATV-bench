@@ -236,7 +236,14 @@ def default_command_runner(cmd: list[str], *, cwd: str | None = None,
                            timeout: int = 120) -> "tuple[int, str, str]":
     """Live command runner used by the real submit path. Never invoked in tests (they
     inject their own). Captures output so a failing step yields an actionable Cause."""
-    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    # encoding/errors are pinned deliberately. `text=True` alone decodes the child's bytes
+    # with the LOCALE codec under a strict handler — cp1252 on Windows, which leaves five
+    # bytes unmapped (0x81 0x8D 0x8F 0x90 0x9D). git and gh emit UTF-8 curly quotes, e.g.
+    # `error: pathspec 'feature”x' did not match` → ...e2 80 9d..., so reading a failing
+    # step's output would itself raise UnicodeDecodeError on the exact `submit` path this
+    # PR is fixing. errors="replace" additionally keeps a genuinely non-UTF-8 tool from
+    # crashing the runner: a mangled diagnostic still beats a traceback.
+    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
     return proc.returncode, proc.stdout, proc.stderr
 
 

@@ -15,6 +15,7 @@ failure modes of the same bug class were found by adversarial review:
 from __future__ import annotations
 
 import io
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -108,6 +109,52 @@ def test_shell_js_loads_under_a_cp1252_locale(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr(Path, "read_text", locale_read_text)
     assert "canvas" in play._shell_js().lower()
+
+
+# --- 1b. Subprocess text decoding must not use the locale codepage ------------------
+
+def test_subprocess_text_capture_pins_utf8() -> None:
+    """The THIRD vector of the same bug class (santa-loop round 3).
+
+    `subprocess.run(..., text=True)` with no `encoding=` decodes the child's bytes with
+    the locale codec under a STRICT handler. On Windows that is cp1252, which has five
+    unmapped bytes (0x81 0x8D 0x8F 0x90 0x9D). Git and gh routinely emit UTF-8 curly
+    quotes — `error: pathspec 'feature”x' did not match` encodes to ...e2 80 9d... — so
+    reading tool output raises UnicodeDecodeError on exactly the `submit` path that was
+    reported crashing. Neither stdout hardening nor the file-I/O sweep reaches this.
+    """
+    import atv_bench
+
+    root = Path(atv_bench.__file__).parent
+    offenders = []
+    for path in sorted(root.rglob("*.py")):
+        src = path.read_text(encoding="utf-8")
+        for match in re.finditer(r"subprocess\.(?:run|Popen|check_output)\((.*?)\n\s*\)",
+                                 src, re.DOTALL):
+            call = match.group(0)
+            if "text=True" not in call and "universal_newlines=True" not in call:
+                continue
+            if "encoding=" in call:
+                continue
+            lineno = src[: match.start()].count("\n") + 1
+            offenders.append(f"{path.relative_to(root)}:{lineno}")
+    assert not offenders, (
+        "subprocess text captures without an explicit encoding — these decode child "
+        "output with the locale codepage (cp1252 on Windows, strict) and raise "
+        "UnicodeDecodeError on a curly quote in git/gh output:\n" + "\n".join(offenders)
+    )
+
+
+def test_curly_quote_in_tool_output_survives_cp1252_decode() -> None:
+    """Behavioural proof the vector is real and that utf-8 pinning closes it."""
+    payload = "error: pathspec 'feature”x' did not match".encode("utf-8")
+
+    # cp1252 (what Windows text=True would use) genuinely cannot decode this.
+    with pytest.raises(UnicodeDecodeError):
+        payload.decode("cp1252")
+
+    # The encoding we pin does, losslessly.
+    assert "”" in payload.decode("utf-8")
 
 
 # --- 2. Importing the CLI must not mutate a library consumer's streams --------------
