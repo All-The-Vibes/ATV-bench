@@ -131,7 +131,7 @@ def git_diff(repo_path: str) -> str:
     out = subprocess.run(
         ["git", "-C", repo_path, "diff"],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
     )
     return out.stdout
 
@@ -144,7 +144,7 @@ def _head_sha(repo_path: str) -> str | None:
     proc = subprocess.run(
         ["git", "-C", repo_path, "rev-parse", "HEAD"],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
     )
     sha = proc.stdout.strip()
     return sha if proc.returncode == 0 and sha else None

@@ -247,7 +247,7 @@ def run_quickstart_eval(
     if build_board:
         try:
             scorecard = store / "scorecard.html"
-            scorecard.write_text(_render_scorecard_html(result))
+            scorecard.write_text(_render_scorecard_html(result), encoding="utf-8")
             result.board_url = scorecard.as_uri()  # store is absolute (resolved above)
             if result.board_path is None:
                 result.board_path = store

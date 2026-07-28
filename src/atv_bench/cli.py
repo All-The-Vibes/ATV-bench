@@ -18,17 +18,128 @@ from atv_bench.games import GAMES, DEFAULT_GAME, assert_playable
 from atv_bench.harnesses import HARNESSES, DEFAULT_HARNESS, detect_harness, harness_config_present
 from atv_bench.submit import run_preflight, submission_status_trail
 
+
+def _harden_stream(stream) -> None:
+    """Make a console stream survive non-ASCII output on a legacy codepage.
+
+    A Windows console defaults to cp1252, which cannot encode the ✓/✗ status glyphs this
+    CLI prints. Under the default *strict* error handler that raises UnicodeEncodeError
+    mid-command (see the `submit` preflight traceback this guards against). Switching only
+    the error handler to "replace" keeps the terminal's own encoding — so UTF-8 consoles
+    still render real glyphs — while degrading unrepresentable characters instead of
+    crashing. Fail-silent: a stream that cannot be reconfigured is left alone.
+    """
+    encoding = (getattr(stream, "encoding", "") or "").lower().replace("-", "").replace("_", "")
+    # Any lossless Unicode codec is already safe; utf16/utf32 must not be downgraded either.
+    if encoding.startswith(("utf8", "utf16", "utf32")):
+        return
+    reconfigure = getattr(stream, "reconfigure", None)
+    if not callable(reconfigure):
+        return  # not a TextIOWrapper (pytest capture, custom stream) — nothing to do
+    try:
+        reconfigure(errors="replace")
+    except Exception:
+        pass
+
+
+def _console_handles_glyphs() -> bool:
+    """True when stdout can encode the status glyphs losslessly."""
+    encoding = getattr(sys.stdout, "encoding", None) or "ascii"
+    try:
+        "✓✗·→".encode(encoding)
+    except (UnicodeEncodeError, LookupError):
+        return False
+    return True
+
+
+# Marks are resolved LAZILY (not at import) so that merely importing atv_bench.cli as a
+# library never reconfigures the caller's stdio, and so the marks reflect the stream that
+# is actually live when a command runs. ASCII fallbacks matter beyond not crashing:
+# `errors="replace"` maps BOTH ✓ and ✗ to `?`, which would make preflight pass/fail
+# indistinguishable on exactly the console that needs to read it.
+#
+# Deliberately NOT memoized. Caching the first answer in a module global made the mark
+# depend on whichever console happened to resolve it first, which is wrong wherever
+# sys.stdout is swapped mid-process — Click's CliRunner does exactly that per invocation.
+# Re-probing costs one 4-character .encode() per call, far less than the typer.echo it
+# precedes, so there is nothing to buy back by caching.
+def _marks() -> tuple[str, str, str, str]:
+    """(ok, bad, skip, arrow) for whatever stdout is live at THIS call."""
+    if _console_handles_glyphs():
+        return "✓", "✗", "·", "→"
+    return "[OK]", "[X]", "[-]", "->"
+
+
+def ok_mark() -> str:
+    """Status mark for a passing check, safe on the live console."""
+    return _marks()[0]
+
+
+def bad_mark() -> str:
+    """Status mark for a failing check, safe on the live console."""
+    return _marks()[1]
+
+
+def skip_mark() -> str:
+    """Status mark for a skipped/not-applicable check, safe on the live console."""
+    return _marks()[2]
+
+
+def arrow() -> str:
+    """Arrow separator, safe on the live console (cp1252 cannot encode U+2192)."""
+    return _marks()[3]
+
+
+def _glyph(pretty: str, plain: str) -> str:
+    """Return `pretty` when the console can encode it, else the ASCII `plain`.
+
+    For decorative glyphs (⚔ ★ ▶ ↳) outside the ✓/✗ status vocabulary. Without this they
+    survive the crash via errors="replace" but render as a bare `?`, which is worse than
+    an honest ASCII stand-in — `? atv-bench run --demo` reads like a broken program.
+    """
+    try:
+        pretty.encode(getattr(sys.stdout, "encoding", None) or "ascii")
+    except (UnicodeEncodeError, LookupError):
+        return plain
+    return pretty
+
+def _console_renders_rich_frames() -> bool:
+    """True when stderr can encode the glyphs rich draws its tracebacks with.
+
+    Rich frames a pretty traceback with U+2500-family box characters and a `❱` gutter
+    marker. cp1252 encodes none of them, so with errors="replace" an unexpected error
+    renders as `| ?  572   text = ...` — crash-free but illegible, on the surface a
+    confused user reaches for first.
+    """
+    encoding = getattr(sys.stderr, "encoding", None) or "ascii"
+    try:
+        "─│╭╮╰╯❱".encode(encoding)
+    except (UnicodeEncodeError, LookupError):
+        return False
+    return True
+
+
 app = typer.Typer(
     name="atv-bench",
     help="Community league for coding-agent harnesses: fingerprint your harness and submit a bot.",
     no_args_is_help=True,
     add_completion=False,
+    # Fall back to a plain Python traceback on a console that cannot draw rich's frames.
+    # Plain tracebacks are pure ASCII, so they stay readable; a mojibake'd rich frame is
+    # strictly worse than no frame. Evaluated at import against the real stderr, which is
+    # the stream rich actually writes tracebacks to.
+    pretty_exceptions_enable=_console_renders_rich_frames(),
 )
 
 
 @app.callback()
 def _root(ctx: typer.Context) -> None:
     """Greet with the ATV-BENCH gold-medal banner on first run (fail-silent, once)."""
+    # Harden the console HERE, not at import: this callback runs for every CLI invocation
+    # but never when atv_bench.cli is imported as a library, so a consumer's stdio is left
+    # exactly as they configured it. Runs before any command output is written.
+    for _stream in (sys.stdout, sys.stderr):
+        _harden_stream(_stream)
     # `--json` is a per-command flag; sniff argv so the banner never corrupts machine output.
     json_mode = "--json" in sys.argv
     try:
@@ -188,7 +299,7 @@ def _render_full_assessment(manifest: dict, harness_key: str | None = None) -> s
     inventory of what makes this harness what it is.
     """
     m = manifest
-    hb = "═" * 64
+    hb = _glyph("═", "=") * 64
 
     def _block(label: str, items: list[str]) -> list[str]:
         out = [f"\n  {label} ({len(items)}):"]
@@ -291,7 +402,7 @@ def submit(
     manual-PR fallback documented in CONTRIBUTING is real, not aspirational.
 
     With --live it runs the gh-backed preflight and, if it passes, opens the PR end-to-end
-    (fork → branch → stage under league/submissions/<identity>/ → commit → push → PR).
+    (fork -> branch -> stage under league/submissions/<identity>/ -> commit -> push -> PR).
     """
     from atv_bench.submit import (
         build_submission,
@@ -335,7 +446,7 @@ def submit(
     report = run_preflight(runner=runner_fn)
     typer.echo("Preflight:")
     for r in report["results"]:
-        mark = "✓" if r["ok"] else "✗"
+        mark = ok_mark() if r["ok"] else bad_mark()
         typer.echo(f"  {mark} {r['id']}: {r['description']}")
         if not r["ok"] and "fix" in r:
             typer.echo(f"      Fix: {r['fix']}")
@@ -380,7 +491,7 @@ def submit(
                            "stay self-attested until a trusted sandbox re-fingerprints "
                            "(COMMUNITY_LEAGUE.md#provenance).")
         else:
-            typer.echo("Provenance: ✗ does not verify — "
+            typer.echo(f"Provenance: {bad_mark()} does not verify — "
                        + "; ".join(board_res.reasons))
 
     typer.echo("\nSubmission status trail:")
@@ -390,7 +501,7 @@ def submit(
     if live:
         # Fail closed: only open the PR if preflight passed.
         if not report["passed"]:
-            typer.echo("\nPreflight failed; not opening a PR. Fix the ✗ items above and retry.")
+            typer.echo(f"\nPreflight failed; not opening a PR. Fix the {bad_mark()} items above and retry.")
             raise typer.Exit(1)
         try:
             result = open_submission_pr(
@@ -400,7 +511,7 @@ def submit(
         except Exception as e:  # AtvError (SUBMIT_PR_FAILED) — surface, don't crash
             typer.echo(f"\nLive submission failed: {e}")
             raise typer.Exit(1)
-        typer.echo(f"\n✓ Opened submission PR: {result['pr_url']}")
+        typer.echo(f"\n{ok_mark()} Opened submission PR: {result['pr_url']}")
         return
 
     if dry_run:
@@ -425,15 +536,15 @@ def validate_harness_cmd(
     resolved = manifest.get("harness") or harness or hz.detect_harness() or hz.DEFAULT_HARNESS
     report = _validate.validate_harness_fingerprint(manifest)
     if report["ok"]:
-        typer.echo(f"✓ {resolved} harness fingerprint is schema-complete and leak-safe")
+        typer.echo(f"{ok_mark()} {resolved} harness fingerprint is schema-complete and leak-safe")
     else:
-        typer.echo(f"✗ {resolved} harness fingerprint has issues — fix before submitting:")
+        typer.echo(f"{bad_mark()} {resolved} harness fingerprint has issues — fix before submitting:")
         for e in report["errors"]:
             typer.echo(f"  - {e}")
         typer.echo(
             "  fix: adjust your reader / config so every published name passes the safety "
             "scan and the schema is complete, then re-run `atv-bench validate-harness "
-            f"--harness {resolved}`. See CONTRIBUTING.md → Add a harness adapter."
+            f"--harness {resolved}`. See CONTRIBUTING.md {arrow()} Add a harness adapter."
         )
         raise typer.Exit(1)
 
@@ -446,9 +557,9 @@ def validate_game_cmd(
     from atv_bench.validate import validate_game_bot
     report = validate_game_bot(str(bot))
     if report["ok"]:
-        typer.echo(f"✓ bot {bot.name} passes shape validation")
+        typer.echo(f"{ok_mark()} bot {bot.name} passes shape validation")
     else:
-        typer.echo("✗ bot failed validation:")
+        typer.echo(f"{bad_mark()} bot failed validation:")
         for e in report["errors"]:
             typer.echo(f"  - {e}")
         raise typer.Exit(1)
@@ -479,27 +590,36 @@ def validate_pr_paths_cmd(
     """
     from atv_bench.validate import validate_pr_paths, validate_pr_changes
     if paths_file is not None:
-        text = paths_file.read_text()
+        text = paths_file.read_text(encoding="utf-8")
     else:
-        text = sys.stdin.read()
+        # Decode stdin as UTF-8 explicitly. `sys.stdin.read()` uses the locale codec under
+        # a strict handler — cp1252 on Windows — but this command is fed by
+        # `git diff --name-only | atv-bench validate-pr`, and git emits paths as UTF-8. A
+        # submission dir with a curly quote (…e2 80 9d…) would crash the gate with
+        # UnicodeDecodeError before it could render a verdict.
+        buffer = getattr(sys.stdin, "buffer", None)
+        if buffer is not None:
+            text = buffer.read().decode("utf-8", errors="replace")
+        else:  # already-decoded stream (pytest capture, custom stdin) - nothing to redo
+            text = sys.stdin.read()
     lines = [ln.rstrip("\n") for ln in text.splitlines() if ln.strip()]
     if name_status:
         report = validate_pr_changes(author, lines)
         if report["ok"]:
             kind = "submission PR (confined to own files)" if report["is_submission_pr"] \
                 else "non-submission PR (not confined)"
-            typer.echo(f"✓ PR by {author}: {kind}")
+            typer.echo(f"{ok_mark()} PR by {author}: {kind}")
         else:
-            typer.echo("✗ PR is not confined to its own submission tree:")
+            typer.echo(f"{bad_mark()} PR is not confined to its own submission tree:")
             for e in report["errors"]:
                 typer.echo(f"  - {e}")
             raise typer.Exit(1)
         return
     report = validate_pr_paths(author, [ln.strip() for ln in lines])
     if report["ok"]:
-        typer.echo(f"✓ PR by {author} touches only its own submission files")
+        typer.echo(f"{ok_mark()} PR by {author} touches only its own submission files")
     else:
-        typer.echo("✗ PR touches paths outside its own submission tree:")
+        typer.echo(f"{bad_mark()} PR touches paths outside its own submission tree:")
         for e in report["errors"]:
             typer.echo(f"  - {e}")
         raise typer.Exit(1)
@@ -532,8 +652,8 @@ def harnesses(
     typer.echo("Harnesses you can fingerprint with `atv-bench fingerprint [--harness <key>]`:\n")
     for h in HARNESSES:
         status = "live" if h.live else "planned"
-        mark = "✓" if h.live else "·"
-        here = "  ← detected on this machine" if h.key == marked else ""
+        mark = ok_mark() if h.live else skip_mark()
+        here = f"  {_glyph('←', '<-')} detected on this machine" if h.key == marked else ""
         typer.echo(f"  {mark} {h.key}  [{status}]  — {h.title}{here}")
         typer.echo(f"      {h.summary}")
     if ambiguous:
@@ -564,7 +684,7 @@ def games(
     typer.echo("Games you can target with `atv-bench submit --game <key>`:\n")
     for g in GAMES:
         status = "live" if g.live else "planned"
-        mark = "✓" if g.live else "·"
+        mark = ok_mark() if g.live else skip_mark()
         typer.echo(f"  {mark} {g.key}  [{status}]  — {g.title}")
         typer.echo(f"      {g.summary}")
     typer.echo(f"\nDefault: {DEFAULT_GAME}. Bot entrypoint: main.py.")
@@ -645,7 +765,7 @@ def play(
     typer.echo(render_ascii(result))
     out_dir = out or Path("_replay")
     replay = build_replay_html(result, out_dir, game=game, seed=seed)
-    typer.echo(f"\n✓ Wrote animated replay: {replay}")
+    typer.echo(f"\n{ok_mark()} Wrote animated replay: {replay}")
     if open_browser:
         _serve_and_open(replay.parent, index=replay.name)
     else:
@@ -700,8 +820,8 @@ def board(
             shutil.rmtree(tmp_store, ignore_errors=True)
     index = site / "index.html"
     doc_path = site / "leaderboard.json"
-    rows = json.loads(doc_path.read_text()).get("rows", [])
-    typer.echo(f"✓ Built board with {len(rows)} row(s): {index}")
+    rows = json.loads(doc_path.read_text(encoding="utf-8")).get("rows", [])
+    typer.echo(f"{ok_mark()} Built board with {len(rows)} row(s): {index}")
     if not rows and not demo:
         typer.echo("  (empty — no submissions in this store yet. Try `atv-bench board --demo`.)")
 
@@ -863,7 +983,7 @@ def demo_match_cmd(
     use_terminal = terminal or (not live) or (not board)
     if not use_terminal:
         from atv_bench.arena.live_server import serve_live_match
-        typer.echo(f"\n  {a_name}  ⚔  {b_name}   —  Lightcycles (Tron), live in your browser\n")
+        typer.echo(f"\n  {a_name}  {_glyph('⚔', 'vs')}  {b_name}   —  Lightcycles (Tron), live in your browser\n")
         serve_live_match(
             a_bot=a_path, b_bot=b_path, a_name=a_name, b_name=b_name,
             seed=seed, turn_delay=turn_delay, open_browser=open_browser,
@@ -903,7 +1023,7 @@ def demo_match_cmd(
         dir_a=Direction.RIGHT, dir_b=Direction.LEFT, max_turns=400,
     )
 
-    typer.echo(f"\n  {a_name}  ⚔  {b_name}   —  Lightcycles (Tron)\n")
+    typer.echo(f"\n  {a_name}  {_glyph('⚔', 'vs')}  {b_name}   —  Lightcycles (Tron)\n")
 
     def _observe(state):
         frame = render_frame(state, engine, label_a=a_name, label_b=b_name)
@@ -929,7 +1049,7 @@ def demo_match_cmd(
     outcome = result.get("outcome")
     winner = {"a_wins": a_name, "b_wins": b_name}.get(outcome)
     if winner:
-        typer.echo(f"\n★ Result: {winner} wins ({outcome}).")
+        typer.echo(f"\n{_glyph('★', '*')} Result: {winner} wins ({outcome}).")
     else:
         typer.echo(f"\n— Result: draw between {a_name} and {b_name}.")
 
@@ -954,7 +1074,7 @@ def demo_match_cmd(
         _record_demo_match(str(tmp_store), result, a_name, b_name, a_bot_label, b_bot_label)
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         site = build_site(str(out_dir), store_dir=str(tmp_store), updated_at=now)
-        doc = json.loads((site / "leaderboard.json").read_text())
+        doc = json.loads((site / "leaderboard.json").read_text(encoding="utf-8"))
         rows = doc.get("rows", [])
 
         # Section 6 typed-rank guard: an unverified board never prints a rank. Route the
@@ -1002,7 +1122,7 @@ def doctor(
     py = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     ok_py = sys.version_info >= (3, 11)
     lines: list[str] = []
-    lines.append(f"  {'✓' if ok_py else '✗'} Python {py}" + ("" if ok_py else " (need >= 3.11)"))
+    lines.append(f"  {ok_mark() if ok_py else bad_mark()} Python {py}" + ("" if ok_py else " (need >= 3.11)"))
 
     # Resolve which harness we're reporting on: explicit --harness, else auto-detect.
     detected = detect_harness()
@@ -1012,11 +1132,11 @@ def doctor(
     found = root.exists()
     if found:
         title = h.title if h is not None else key
-        lines.append(f"  ✓ Harness config for {title} at {root} detected")
+        lines.append(f"  {ok_mark()} Harness config for {title} at {root} detected")
     else:
         live = ", ".join(hz.live_keys())
         lines.append(
-            f"  ✗ No supported harness config found (looked for {key} at {root}). "
+            f"  {bad_mark()} No supported harness config found (looked for {key} at {root}). "
             f"Supported now: {live} — see `atv-bench harnesses`."
         )
 
@@ -1028,7 +1148,7 @@ def doctor(
         except Exception:
             authed = False
         lines.append(
-            f"  {'✓' if authed else '·'} GitHub CLI (gh) installed"
+            f"  {ok_mark() if authed else skip_mark()} GitHub CLI (gh) installed"
             + ("" if authed else " but not logged in — run `gh auth login` for `submit --live`")
         )
     else:
@@ -1037,7 +1157,7 @@ def doctor(
 
     docker = shutil.which("docker")
     lines.append(
-        f"  {'✓' if docker else '·'} Docker "
+        f"  {ok_mark() if docker else skip_mark()} Docker "
         + ("installed" if docker else "not installed — needed only to run matches locally")
     )
 
@@ -1045,13 +1165,13 @@ def doctor(
     # report the SAME readiness. Docker daemon + CodeClash + each harness CLI on PATH.
     from atv_bench import preflight as pf
     dchk = pf.check_docker()
-    lines.append(f"  {'✓' if dchk.ok else '·'} Docker daemon (for `run`): {dchk.detail}")
+    lines.append(f"  {ok_mark() if dchk.ok else skip_mark()} Docker daemon (for `run`): {dchk.detail}")
     cchk = pf.check_codeclash()
-    lines.append(f"  {'✓' if cchk.ok else '·'} CodeClash arena dep (for `run`): {cchk.detail}"
+    lines.append(f"  {ok_mark() if cchk.ok else skip_mark()} CodeClash arena dep (for `run`): {cchk.detail}"
                  + ("" if cchk.ok else f" — {cchk.fix}"))
     for binary in ("claude", "copilot"):
         bc = pf.check_cli_on_path(binary)
-        lines.append(f"  {'✓' if bc.ok else '·'} Harness CLI `{binary}` (for `run`): {bc.detail}")
+        lines.append(f"  {ok_mark() if bc.ok else skip_mark()} Harness CLI `{binary}` (for `run`): {bc.detail}")
 
     typer.echo("atv-bench doctor — environment readiness:\n")
     for ln in lines:
@@ -1067,7 +1187,7 @@ def _emit_run_error(err, json_out: bool) -> None:
     if json_out:
         typer.echo(json.dumps(error_envelope(err), indent=2))
     else:
-        typer.echo(f"✗ {err.message}")
+        typer.echo(f"{bad_mark()} {err.message}")
         if err.fix:
             typer.echo(f"  fix: {err.fix}")
         typer.echo(f"  (exit {err.exit_code}, code={err.code})")
@@ -1158,7 +1278,7 @@ def _run_demo(*, json_out: bool, out: Path | None) -> None:
         typer.echo(json.dumps(env, indent=2))
         return
     d = env["data"]
-    typer.echo("▶ atv-bench run --demo — a canned but REAL recorded match")
+    typer.echo(f"{_glyph('▶', '>')} atv-bench run --demo — a canned but REAL recorded match")
     typer.echo(f"  game    : {d['game']}")
     for p in d["players"]:
         typer.echo(f"  player  : {p['harness']} · model {p['model']} "
@@ -1177,7 +1297,7 @@ def _run_live(cfg, out_dir, a_home, b_home, json_out, persist=None):  # pragma: 
     )
 
     preflight_or_raise(cfg)
-    typer.echo(f"▶ building bots: {cfg.a} vs {cfg.b} on {cfg.model} ({cfg.rounds} rounds)…")
+    typer.echo(f"{_glyph('▶', '>')} building bots: {cfg.a} vs {cfg.b} on {cfg.model} ({cfg.rounds} rounds)…")
     homes = {cfg.a: a_home, cfg.b: b_home}
     raw = run_live_match(cfg, output_dir=Path(out_dir), homes=homes)
 
@@ -1210,7 +1330,7 @@ def _run_live(cfg, out_dir, a_home, b_home, json_out, persist=None):  # pragma: 
             # RunError, not a raw ValueError leaking out of the command.
             raise RunError("policy_denied", f"cannot persist rating row: {exc}",
                            fix="the match outcome is malformed; re-run the match") from exc
-        typer.echo(f"↳ appended rating row to {persist}")
+        typer.echo(f"{_glyph('↳', '>')} appended rating row to {persist}")
     return ok_envelope(rec.to_dict())
 
 
@@ -1274,7 +1394,7 @@ def rate(
     rows = []
     total_records = 0
     infra_failures = 0
-    for line in matches_file.read_text().splitlines():
+    for line in matches_file.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -1357,7 +1477,7 @@ def _load_rating_matches(store: Path, *, with_clusters: bool = False):
         raise typer.Exit(2)
     out = []
     clusters: list[str] = []
-    for line in matches_file.read_text().splitlines():
+    for line in matches_file.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue

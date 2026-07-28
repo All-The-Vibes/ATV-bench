@@ -39,7 +39,7 @@ def check_cli_authenticated(binary: str, probe_args: list[str]) -> CheckResult:
         )
     try:
         proc = subprocess.run(
-            [binary, *probe_args], capture_output=True, timeout=15, text=True
+            [binary, *probe_args], capture_output=True, timeout=15, text=True, encoding="utf-8", errors="replace"
         )
         ok = proc.returncode == 0
         return CheckResult(
@@ -63,7 +63,7 @@ def check_docker() -> CheckResult:
     try:
         proc = subprocess.run(
             ["docker", "info", "--format", "{{.ServerVersion}}"],
-            capture_output=True, timeout=15, text=True,
+            capture_output=True, timeout=15, text=True, encoding="utf-8", errors="replace",
         )
         if proc.returncode == 0 and proc.stdout.strip():
             return CheckResult("docker", True, f"daemon running (v{proc.stdout.strip()})")

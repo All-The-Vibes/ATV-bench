@@ -38,6 +38,70 @@ jobs:
           print("schema in sync")
           PY
 
+  # Windows console encoding gate. A Windows console defaults to the legacy cp1252
+  # codepage, which cannot encode the ✓/✗ status glyphs the CLI prints — under Python's
+  # default *strict* error handler that is a UnicodeEncodeError traceback mid-command,
+  # not a cosmetic wobble. It has shipped to users twice: diagnosed and fixed on PR #16
+  # (closed, never merged), then re-reported against the documented `uv tool install`
+  # path. Every other CI job runs on ubuntu, whose UTF-8 default hides this entire class
+  # of bug, so this is the only job that can catch it.
+  #
+  # Two layers, because they fail differently:
+  #   1. The pytest suite pins the encoding explicitly via env, so the gate still asserts
+  #      something precise even if a runner image changes its default codepage.
+  #   2. `chcp 1252` drives the real entry point on a GENUINE Windows console at the
+  #      legacy codepage — the only place Windows-specific console behaviour (the legacy
+  #      stdio path, console vs. pipe) is observable at all.
+  windows-console-encoding:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e '.[dev]'
+      - name: Encoding regression suite (simulated cp1252 console)
+        # Both encoding files: test_cli_windows_encoding.py covers the CONSOLE, and
+        # test_windows_encoding_fileio.py covers the file-I/O, subprocess-decode and
+        # stdin vectors of the same bug class. The latter includes behavioural tests
+        # that spawn the real CLI, so running them on a genuine Windows runner exercises
+        # the actual cp1252 locale rather than the simulated one used on Linux.
+        run: pytest tests/test_cli_windows_encoding.py tests/test_windows_encoding_fileio.py -q
+      # PYTHONUTF8=0 defeats PEP 540 UTF-8 mode, which would otherwise make stdout UTF-8
+      # regardless of the codepage and mask the very bug this gate exists to catch.
+      #
+      # Assert the actual invariant — "the console did not crash the CLI, and its output
+      # stayed legible" — rather than proxying it through an exit code. Exit status is a
+      # bad proxy here: `submit` legitimately exits 1 on failed preflight (no gh auth on a
+      # runner), and `cmd`'s `if errorlevel N` does not reset errorlevel, so the step would
+      # inherit that 1 and fail for a reason unrelated to encoding.
+      #
+      # Every assertion below is chosen to be NON-VACUOUS — it must fail if the fix is
+      # reverted. In particular the marks are asserted on a PREFLIGHT line (the exact loop
+      # that crashed), not on doctor's `[OK] Python 3.x`, which setup-python guarantees and
+      # which would therefore pass even if every other mark were broken.
+      - name: Real cp1252 console runs the CLI without crashing
+        shell: cmd
+        env:
+          PYTHONUTF8: "0"
+        run: |
+          chcp 1252 | findstr /C:"1252" >nul || exit /b 1
+          echo def move(s): return "up">main.py
+          atv-bench doctor > out.txt 2>&1
+          atv-bench submit .\main.py --game battlesnake --harness claude-code >> out.txt 2>&1
+          atv-bench run --demo >> out.txt 2>&1
+          rem Capture --help too: command docstrings BECOME help text, and `submit --help`
+          rem shipped five `→` that degraded to `?` while every other assertion stayed green.
+          rem Help output was the one user-facing surface this gate never looked at.
+          atv-bench submit --help >> out.txt 2>&1
+          type out.txt
+          python .github/scripts/assert_cp1252_output.py out.txt || exit /b 1
+          echo cp1252 console OK
+
   # Always-on community-PR confinement (santa round-7): a REQUIRED check on every PR, not a
   # side effect of the labeled run-match workflow. A submission PR (one touching
   # league/submissions/**) may ONLY add/modify its own

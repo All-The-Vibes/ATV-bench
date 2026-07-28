@@ -30,7 +30,7 @@ BASE_TAG = "atv-base"
 def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", "-C", str(repo), *args],
-        capture_output=True, text=True, check=check,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=check,
     )
 
 

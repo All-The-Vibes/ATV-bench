@@ -129,7 +129,7 @@ def read_cli_runtime(harness_key: str) -> tuple[dict[str, Any], list[dict[str, s
 
     # version string from `<cli> --version`
     try:
-        proc = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=15)
+        proc = subprocess.run([binary, "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
         raw = (proc.stdout or proc.stderr or "").strip().splitlines()
         ver = raw[0].strip() if raw else ""
         ver = ver[:80]

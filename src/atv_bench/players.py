@@ -143,7 +143,7 @@ class HarnessPlayerCore:
         for rel, content in tree.items():
             dest = repo / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(content)
+            dest.write_text(content, encoding="utf-8")
 
     def _read_repo_tree(self, repo: Path) -> dict[str, str]:
         from atv_bench.capture import _IGNORED_DIR_PARTS, _IGNORED_SUFFIXES

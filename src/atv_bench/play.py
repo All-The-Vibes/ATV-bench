@@ -233,7 +233,11 @@ pb.start(); showOutcome();
 
 def _shell_js() -> str:
     """The shared canvas shell source, inlined so replay.html stays self-contained."""
-    return (Path(__file__).parent / "view" / "shell.js").read_text()
+    # encoding="utf-8" is load-bearing, not cosmetic: shell.js holds bytes that cp1252
+    # cannot DECODE (0x9d at offset 4062), so a bare read_text() on a Windows locale
+    # raises UnicodeDecodeError and kills `atv-bench play` before it writes anything.
+    # This is the read-side twin of the write-side bug fixed above.
+    return (Path(__file__).parent / "view" / "shell.js").read_text(encoding="utf-8")
 
 
 def build_replay_html(result: dict[str, Any], out_dir: str | Path,
@@ -268,5 +272,5 @@ def build_replay_html(result: dict[str, Any], out_dir: str | Path,
         .replace("__MATCH_JSON__", match_json)
     )
     path = out / "replay.html"
-    path.write_text(html_text)
+    path.write_text(html_text, encoding="utf-8")
     return path
