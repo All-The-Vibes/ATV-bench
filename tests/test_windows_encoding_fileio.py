@@ -17,6 +17,7 @@ from __future__ import annotations
 import ast
 import io
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -465,6 +466,63 @@ def test_submit_help_renders_without_replacement_chars() -> None:
     assert "?" not in flow[0], (
         "submit --help still degrades its flow arrows into '?' on cp1252:\n" + flow[0]
     )
+
+
+def test_unexpected_error_output_is_legible_on_cp1252() -> None:
+    """Typer's rich pretty-tracebacks are a console surface too (fresh-reviewer finding).
+
+    Rich frames its tracebacks with U+2500 box characters and a `❱` gutter marker, none of
+    which cp1252 can encode. The console hardening keeps them from crashing, so an
+    unexpected error rendered as:
+
+        | ?  572         text = paths_file.read_text(encoding="utf-8")            |
+
+    Crash-free but illegible — and it is the surface a confused user reaches for FIRST.
+    Every other guard on this branch watches the happy path; nothing watched the failure
+    path, which is exactly where a Windows user in trouble ends up.
+    """
+    proc = subprocess.run(
+        [sys.executable, "-m", "atv_bench.cli", "validate-pr-paths",
+         "--author", "alice", "--paths-file", "."],
+        capture_output=True, timeout=60,
+        env={**os.environ, "PYTHONIOENCODING": "cp1252", "PYTHONUTF8": "0"},
+    )
+    assert proc.returncode != 0, "this probe must actually fail; otherwise it proves nothing"
+    text = (proc.stdout + proc.stderr).decode("cp1252", errors="replace")
+    degraded = [ln for ln in text.splitlines() if _has_degraded_glyph(ln)]
+    assert not degraded, (
+        "error output degrades glyphs into '?' on a cp1252 console:\n"
+        + "\n".join(degraded[:8])
+    )
+
+
+def test_utf8_console_keeps_rich_tracebacks() -> None:
+    """The fallback must not downgrade a console that CAN draw rich's frames."""
+    proc = subprocess.run(
+        [sys.executable, "-m", "atv_bench.cli", "validate-pr-paths",
+         "--author", "alice", "--paths-file", "."],
+        capture_output=True, timeout=60,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+    )
+    text = (proc.stdout + proc.stderr).decode("utf-8", errors="replace")
+    assert "─" in text or "│" in text, (
+        "a UTF-8 console lost rich's traceback frames to the ASCII fallback"
+    )
+
+
+def _has_degraded_glyph(line: str) -> bool:
+    """Mirror of the CI gate's degraded-glyph shapes (.github/scripts/assert_cp1252_output.py)."""
+    stripped = line.strip()
+    if not stripped:
+        return False
+    first = stripped.split(" ", 1)[0]
+    if "?" in first:
+        return True
+    if " ? " in line:
+        return True
+    if stripped.endswith("?") and len(stripped) > 1 and stripped[-2].isspace():
+        return True
+    return bool(re.search(r"\?\s*[,;:)\]]", stripped))
 
 
 # --- 2. Importing the CLI must not mutate a library consumer's streams --------------

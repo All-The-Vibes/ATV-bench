@@ -103,11 +103,32 @@ def _glyph(pretty: str, plain: str) -> str:
         return plain
     return pretty
 
+def _console_renders_rich_frames() -> bool:
+    """True when stderr can encode the glyphs rich draws its tracebacks with.
+
+    Rich frames a pretty traceback with U+2500-family box characters and a `❱` gutter
+    marker. cp1252 encodes none of them, so with errors="replace" an unexpected error
+    renders as `| ?  572   text = ...` — crash-free but illegible, on the surface a
+    confused user reaches for first.
+    """
+    encoding = getattr(sys.stderr, "encoding", None) or "ascii"
+    try:
+        "─│╭╮╰╯❱".encode(encoding)
+    except (UnicodeEncodeError, LookupError):
+        return False
+    return True
+
+
 app = typer.Typer(
     name="atv-bench",
     help="Community league for coding-agent harnesses: fingerprint your harness and submit a bot.",
     no_args_is_help=True,
     add_completion=False,
+    # Fall back to a plain Python traceback on a console that cannot draw rich's frames.
+    # Plain tracebacks are pure ASCII, so they stay readable; a mojibake'd rich frame is
+    # strictly worse than no frame. Evaluated at import against the real stderr, which is
+    # the stream rich actually writes tracebacks to.
+    pretty_exceptions_enable=_console_renders_rich_frames(),
 )
 
 
