@@ -16,6 +16,7 @@ which would pass even if every other mark were broken.
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -55,29 +56,51 @@ def main(argv: list[str]) -> int:
 
     # A literal '?' where a GLYPH belongs means errors="replace" swallowed it: no crash,
     # but the reader cannot tell pass from fail. Scope this to positions where the CLI
-    # emits a glyph — a leading status mark, or the known decorative-glyph prefixes —
-    # rather than scanning free prose. `atv-bench --help` legitimately contains
-    # "...submit, and run matches?", and a URL query string or a genuine question in a fix
-    # hint would each trip a whole-line scan, making this gate flaky for reasons that have
-    # nothing to do with encoding.
-    for lineno, line in enumerate(text.splitlines(), 1):
+    # emits a glyph rather than scanning free prose. `atv-bench --help` legitimately
+    # contains "...submit, and run matches?", and a URL query string or a genuine question
+    # in a fix hint would each trip a whole-line scan, making this gate flaky for reasons
+    # that have nothing to do with encoding.
+    #
+    # The shapes below were chosen by enumerating how a degraded glyph actually appears.
+    # An earlier version checked only the leading token and a ` ? ` delimiter, which let a
+    # trailing `?` and a punctuation-adjacent `?` through. No current output can produce
+    # those (every decorative glyph goes through _glyph()), but the `submit --help` bug
+    # shipped precisely because a surface was assumed safe rather than checked.
+    def _degraded_glyph_position(line: str) -> str | None:
         stripped = line.strip()
         if not stripped:
-            continue
+            return None
         first = stripped.split(" ", 1)[0]
         # A '?' as the first token is a degraded status mark or decorative glyph.
         if "?" in first:
-            failures.append(
-                f"line {lineno} begins with a lossy replacement char where a glyph "
-                f"belongs: {stripped!r}"
-            )
+            return "begins with a lossy replacement char where a glyph belongs"
         # "  ? detected on this machine" style: a '?' delimited by spaces mid-line is a
         # swallowed separator glyph (the arrow/marker forms the CLI prints).
-        elif " ? " in line:
-            failures.append(
-                f"line {lineno} contains a lossy replacement char in a glyph position: "
-                f"{stripped!r}"
-            )
+        if " ? " in line:
+            return "contains a lossy replacement char in a glyph position"
+        # A trailing '?' after whitespace ("appended rating row ?") is a swallowed glyph;
+        # a trailing '?' attached to a word is ordinary punctuation ("run matches?").
+        if stripped.endswith("?") and len(stripped) > 1 and stripped[-2].isspace():
+            return "ends with a lossy replacement char where a glyph belongs"
+        # A '?' hugging CLOSING punctuation ("status: ok?, next") cannot be a question
+        # mark in this CLI's prose, which never abuts one against a closing delimiter.
+        # Allow intervening spaces: the degraded form is followed by column padding.
+        #
+        # Deliberately NOT extended to an opening '(' — "Is it installed? (see ...)" and
+        # "Useful? (machine-readable)" are legitimate prose, so covering that shape would
+        # trade a real defect class for a flaky gate. It stays uncovered: today no CLI
+        # output can produce it, because every decorative glyph routes through _glyph()
+        # and every status mark through the [OK]/[X]/[-] vocabulary. If a future glyph is
+        # ever emitted raw before a '(', the static AST guards in
+        # tests/test_windows_encoding_fileio.py are what catch it, not this scan.
+        if re.search(r"\?\s*[,;:)\]]", stripped):
+            return "contains a lossy replacement char adjacent to punctuation"
+        return None
+
+    for lineno, line in enumerate(text.splitlines(), 1):
+        why = _degraded_glyph_position(line)
+        if why:
+            failures.append(f"line {lineno} {why}: {line.strip()!r}")
 
     if failures:
         print("cp1252 console assertions FAILED:", file=sys.stderr)
