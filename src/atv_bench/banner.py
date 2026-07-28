@@ -37,27 +37,47 @@ def _wordmark() -> str:
 """.strip("\n")
 
 
-def render_banner() -> str:
+def _console_can_encode(text: str, stream=None) -> bool:
+    """True when `stream`'s encoding can represent every character in `text`."""
+    encoding = getattr(stream or sys.stdout, "encoding", None) or "ascii"
+    try:
+        text.encode(encoding)
+    except (UnicodeEncodeError, LookupError):
+        return False
+    return True
+
+
+def render_banner(*, ascii_only: bool = False) -> str:
     """Render the ATV-BENCH gold-medal banner to a string (gold wordmark + medal + tagline).
 
     Uses rich for the gold color + panel when available; the returned string always contains the
     ATV-BENCH wordmark, the gold color token, and the medal glyph so it is verifiable and works
     even if rich degrades.
+
+    `ascii_only=True` renders a cp1252-safe variant: rich's default box draws its borders from
+    the U+2500 family and the medal is U+1F947, none of which a legacy Windows codepage can
+    encode. The CLI hardens stdout with errors="replace", so without this the greeting a new
+    Windows user sees is ~108 literal `?` characters — no crash, but it reads like a broken
+    install. Same reasoning as the [OK]/[X] status marks: an honest ASCII stand-in beats a
+    lossy one.
     """
-    body = f"{_wordmark()}\n\n{MEDAL}  Community league for coding-agent harnesses  {MEDAL}"
+    medal = "[*]" if ascii_only else MEDAL
+    body = f"{_wordmark()}\n\n{medal}  Community league for coding-agent harnesses  {medal}"
     try:
         from rich.console import Console
         from rich.panel import Panel
         from rich.text import Text
+        from rich import box
 
         text = Text(body, style=f"bold {GOLD}")
         panel = Panel(text, border_style=GOLD, title=f"[bold {GOLD}]ATV-BENCH[/]",
-                      subtitle=f"[{GOLD}]{MEDAL} gold-standard harness benchmarking {MEDAL}[/]")
+                      subtitle=f"[{GOLD}]{medal} gold-standard harness benchmarking {medal}[/]",
+                      **({"box": box.ASCII} if ascii_only else {}))
         console = Console(record=True, width=72, file=io.StringIO())
         console.print(panel)
         rendered = console.export_text(styles=False)
         # Guarantee the verifiable tokens are present even after style export strips ANSI.
-        return f"{rendered}\n{GOLD} {MEDAL}"
+        return f"{rendered}\n{GOLD} {medal}"
     except Exception:
         # Fail soft: a plain but still-verifiable banner (contains wordmark, gold token, medal).
         return f"{body}\n[{GOLD}]"
@@ -114,7 +134,10 @@ def maybe_show_banner(
         return False
 
     try:
-        art = render_banner()
+        # Probe the live stream, not a cached answer: pick the ASCII-safe variant only when
+        # this console genuinely cannot encode the real one.
+        target = stream or sys.stdout
+        art = render_banner(ascii_only=not _console_can_encode(MEDAL + "─╭│", target))
     except Exception:
         return False  # rendering failure must never crash the command
 

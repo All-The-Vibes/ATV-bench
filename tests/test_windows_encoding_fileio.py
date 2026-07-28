@@ -225,6 +225,49 @@ def test_validate_pr_accepts_utf8_paths_on_a_cp1252_stdin() -> None:
     )
 
 
+# --- 1d. The first-run banner must stay legible on a legacy codepage ----------------
+
+def test_banner_is_legible_on_a_cp1252_console() -> None:
+    """The FIFTH vector (santa-loop round 3).
+
+    The first-run banner is the very first thing a new Windows user sees. It is rendered
+    through `rich`, whose default box style draws borders from U+2500-family glyphs, and
+    it carries a 🥇 medal — none of which cp1252 can encode. The banner is wrapped in a
+    bare `except Exception`, so it never *crashes*; instead the console hardening's
+    errors="replace" turned it into a wall of ~108 literal `?` characters.
+
+    That is precisely the failure mode this PR's own design rejects for status marks:
+    "worse than an honest ASCII stand-in". A greeting made of question marks reads like a
+    broken install, on the one platform whose users just hit a crash bug.
+    """
+    from atv_bench import banner
+
+    art = banner.render_banner(ascii_only=True)
+    unencodable = sorted({ch for ch in art if not _cp1252_encodable(ch)})
+    assert not unencodable, (
+        "the ASCII-safe banner still contains characters cp1252 cannot encode "
+        f"({unencodable}); on a Windows console each becomes a literal '?'"
+    )
+    # Still a banner, not an empty string stripped of everything.
+    assert "ATV" in art and "BENCH" in art
+
+
+def test_banner_keeps_full_glyphs_on_a_utf8_console() -> None:
+    """The ASCII fallback must not downgrade consoles that can render the real thing."""
+    from atv_bench import banner
+
+    art = banner.render_banner()
+    assert banner.MEDAL in art, "a UTF-8 console lost the medal glyph to the fallback"
+
+
+def _cp1252_encodable(ch: str) -> bool:
+    try:
+        ch.encode("cp1252")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 # --- 2. Importing the CLI must not mutate a library consumer's streams --------------
 
 def test_importing_cli_does_not_mutate_caller_stdout() -> None:
