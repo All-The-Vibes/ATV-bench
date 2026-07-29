@@ -500,7 +500,7 @@ PR #23 (branch feat/quickstart-harness-picker-banner) targets main and is FIRST 
 Steps:
 1. Re-confirm freshness: \`gh pr checks 23\` all pass; \`gh pr view 23 --json mergeable,mergeStateStatus\` is MERGEABLE (BLOCKED only on review is fine — you will approve).
 2. Approve: \`gh pr review 23 --approve --body "Agent-team review complete: body claims verified with committed screenshot proof, atv-security clean, santa-loop NICE (Reviewer A opus + Reviewer B codex both PASS). CI green, no conflicts."\`
-3. Merge: \`gh pr merge 23 --squash --admin\` (use --admin to satisfy branch protection since this is an approved, green, NICE PR). Capture the merge commit SHA from \`gh pr view 23 --json mergeCommit --jq .mergeCommit.oid\`.
+3. Merge: \`gh pr merge 23 --squash --auto\` (--auto queues the merge behind branch protection; never use --admin, which bypasses required reviews). Capture the merge commit SHA from \`gh pr view 23 --json mergeCommit --jq .mergeCommit.oid\`.
 Return structured JSON (merged=true only if the merge succeeded).`,
     { label: 'merge:pr23', phase: 'Merge', schema: MERGE_SCHEMA },
   )
@@ -514,13 +514,13 @@ Steps:
 1. Sync: \`git -C ${PRS[1].wt} fetch origin --prune\`.
 2. Put the worktree on the real branch: \`git -C ${PRS[1].wt} checkout -B feat/liveview-tdd origin/feat/liveview-tdd\`.
 3. Rebase ONTO main, dropping #23's now-squashed commits. Since #23's commits were squashed, use \`git -C ${PRS[1].wt} rebase --onto origin/main origin/feat/quickstart-harness-picker-banner feat/liveview-tdd\` (replays ONLY #24's own commits — those after #23's head — onto main).
-   - If the rebase hits conflicts you cannot cleanly/​safely resolve, ABORT (\`git rebase --abort\`) and return merged=false with the conflict detail. Do NOT force a bad resolution.
+   - If the rebase hits conflicts you cannot cleanly/safely resolve, ABORT (\`git rebase --abort\`) and return merged=false with the conflict detail. Do NOT force a bad resolution.
 4. Verify the rebased branch contains ONLY #24's own changes vs main: \`git -C ${PRS[1].wt} diff --stat origin/main...HEAD\` should show the liveview files, NOT #23's harness_selection/banner files. If #23 files appear, the rebase was wrong — abort and return merged=false.
 5. Force-push with lease: \`git -C ${PRS[1].wt} push --force-with-lease origin feat/liveview-tdd\`.
 6. Retarget base now that ancestry is clean: \`gh pr edit 24 --base main\`.
 7. Poll \`gh pr view 24 --json mergeable,mergeStateStatus\` until MERGEABLE (or CONFLICTING → return merged=false). Wait for the re-triggered CI: \`gh pr checks 24\` — all non-skipped must pass.
 8. Approve: \`gh pr review 24 --approve --body "Agent-team review complete: live-view claims verified with committed screenshot proof (incl. browser-rendered states), atv-security Grade A on tar-extraction/server surface, santa-loop NICE (opus + codex both PASS). Rebased onto main after #23 squash-merged; CI green, no conflicts."\`
-9. Merge: \`gh pr merge 24 --squash --admin\`. Capture merge SHA via \`gh pr view 24 --json mergeCommit --jq .mergeCommit.oid\`.
+9. Merge: \`gh pr merge 24 --squash --auto\`. Capture merge SHA via \`gh pr view 24 --json mergeCommit --jq .mergeCommit.oid\`.
 Return structured JSON (retargeted_base="main"; merged=true only if it actually merged; if you held back due to conflict/red CI/bad rebase, merged=false and explain).`,
       { label: 'merge:pr24', phase: 'Merge', schema: MERGE_SCHEMA },
     )
