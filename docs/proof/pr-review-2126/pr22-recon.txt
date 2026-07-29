@@ -1,0 +1,32 @@
+### PR22 mergeability
+{"additions":1830,"changed_files":20,"deletions":33,"mergeable":true,"mergeable_state":"blocked"}
+
+### PR22 CI checks
+hermetic	pass	1m15s	https://github.com/All-The-Vibes/ATV-bench/actions/runs/29892713189/job/88836216237	
+hermetic	pass	1m16s	https://github.com/All-The-Vibes/ATV-bench/actions/runs/29892715087/job/88836221576	
+import-smoke	pass	1m1s	https://github.com/All-The-Vibes/ATV-bench/actions/runs/29892715103/job/88836221614	
+pr-path-guard	pass	24s	https://github.com/All-The-Vibes/ATV-bench/actions/runs/29892715087/job/88836221569	
+live-integration	skipping	0	https://github.com/All-The-Vibes/ATV-bench/actions/runs/29892715103/job/88836222184	
+pr-path-guard	skipping	0	https://github.com/All-The-Vibes/ATV-bench/actions/runs/29892713189/job/88836216801	
+
+### PR22 authoritative diff (base...head)
+README.md
+docs/QUICKSTART_IMPLEMENTATION_PLAN.md
+docs/proof/quickstart/scorecard-example.png
+pyproject.toml
+src/atv_bench/adapters/__init__.py
+src/atv_bench/adapters/contract.py
+src/atv_bench/cli.py
+src/atv_bench/interactive.py
+src/atv_bench/models.py
+src/atv_bench/pergame.py
+src/atv_bench/quickstart.py
+src/atv_bench/render.py
+src/atv_bench/runner.py
+tests/test_codex_adapter.py
+tests/test_interactive_select.py
+tests/test_models_catalog.py
+tests/test_pergame_scores.py
+tests/test_quickstart_cli.py
+tests/test_quickstart_engine.py
+tests/test_rank_guard.py

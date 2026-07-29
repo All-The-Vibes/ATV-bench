@@ -1,0 +1,10 @@
+=== atv-security scan — PR #21 (docs-only) ===
+Methodology: ATV unified security audit (atv-skill-atv-security SKILL.md) — config (33-rule), OWASP Top 10 2021, STRIDE.
+Authoritative changed files (gh api /pulls/21/files): CONTRIBUTING.md, README.md, docs/arenas.md — DOCUMENTATION ONLY.
+
+CONFIG (Phase 2/3): N/A — PR touches no .github/ agentic config, no .vscode, no MCP/hooks/agents/skills.
+OWASP (Phase 4):    N/A — no application source (.py) changed.
+STRIDE (Phase 5):   N/A — no code paths changed.
+
+Findings: NONE. Critical: 0  High: 0.
+GRADE: A (nothing to flag; pure Markdown documentation diff).

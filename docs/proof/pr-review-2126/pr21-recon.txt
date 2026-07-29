@@ -1,0 +1,13 @@
+### PR21 mergeability
+{"additions":66,"changed_files":3,"deletions":8,"mergeable":true,"mergeable_state":"blocked"}
+
+### PR21 CI checks
+hermetic	pass	57s	https://github.com/All-The-Vibes/ATV-bench/actions/runs/29887542656/job/88821095024	
+import-smoke	pass	58s	https://github.com/All-The-Vibes/ATV-bench/actions/runs/29887542672/job/88821095185	
+pr-path-guard	pass	17s	https://github.com/All-The-Vibes/ATV-bench/actions/runs/29887542656/job/88821095054	
+live-integration	skipping	0	https://github.com/All-The-Vibes/ATV-bench/actions/runs/29887542672/job/88821095811	
+
+### PR21 authoritative diff (base...head)
+CONTRIBUTING.md
+README.md
+docs/arenas.md
