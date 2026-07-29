@@ -1,0 +1,19 @@
+=== atv-security scan — PR #22 (quickstart feature) ===
+Methodology: ATV unified security audit — config (33-rule), OWASP Top 10 2021, STRIDE.
+Authoritative changed files (gh api /pulls/22/files, 20): README.md, docs/QUICKSTART_IMPLEMENTATION_PLAN.md,
+  docs/proof/quickstart/scorecard-example.png, pyproject.toml, src/atv_bench/{adapters/__init__,adapters/contract,
+  cli,interactive,models,pergame,quickstart,render,runner}.py, tests/test_*.py (7).
+
+CONFIG: No ATV agentic surfaces present (no copilot-instructions/mcp-config/agents/skills/hooks, no .vscode). N/A.
+OWASP Top 10 2021:
+  - Injection: subprocess uses list-arg form (no shell=True); no SQL. PASS.
+  - Insecure deserialization: yaml.safe_load used. PASS.
+  - Sensitive data exposure: no hardcoded secrets; live server binds 127.0.0.1. PASS.
+  - XSS (scorecard.html/live.html): dynamic values routed through esc()/safeHref allowlist (blocks javascript:);
+    live.html uses textContent. PASS.
+STRIDE:
+  - Untrusted bots confined by docker --network none --read-only --user 65534 --memory 512m --pids-limit 128;
+    no --privileged, no host mounts, no docker.sock. PASS.
+
+Findings: NONE. Critical: 0  High: 0.
+GRADE: A (hardened sandbox + safe input handling; no exploitable findings).
