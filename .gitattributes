@@ -1,0 +1,13 @@
+# Submitted league bots are hashed, not diffed (issue #32).
+#
+# `bot_sha256` is captured over the bot's ORIGINAL bytes at submit time and the provenance
+# token is signed against that hash. `store.py` re-hashes the COMMITTED bytes at load time.
+# If git rewrites line endings in transit the two disagree, store.py silently restamps
+# bot_sha256, the provenance token stops binding, and `load_submissions()` raises
+# ValueError -- failing the WHOLE league load, not just the offending row.
+#
+# A Windows contributor's default `core.autocrlf=true` performs exactly that rewrite at
+# commit time, which is after submit.py's byte-preserving copy has already put the correct
+# bytes on disk. Marking the path `-text` stops git translating newlines in either
+# direction, so the committed blob is byte-identical to what was hashed.
+league/submissions/**/main.py -text

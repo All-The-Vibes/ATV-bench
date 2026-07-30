@@ -136,11 +136,16 @@ class LeagueStore:
             raise ValueError(f"unsafe identity: {identity!r}")
         path = self._submission_path(identity)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(submission, indent=2, sort_keys=True))
+        # Pin utf-8 on both writes (issue #32): these are bare text writes, so on a
+        # non-UTF-8 host the locale codepage would mangle a non-ASCII record or bot. The
+        # sibling main.py bytes back the re-derived bot_sha256, so a codepage-mangled
+        # write diverges the published hash exactly as the CRLF defect did.
+        path.write_text(json.dumps(submission, indent=2, sort_keys=True), encoding="utf-8")
         # A publishable row requires committed bot bytes (santa round-6): co-write the
         # sibling main.py so a store-seeded submission has the same publishable shape as a
         # live-submitted / match-job one. Its bytes back the re-derived bot_sha256 on load.
-        (path.parent / "main.py").write_text(bot_source or "def move(state):\n    return 'up'\n")
+        (path.parent / "main.py").write_text(
+            bot_source or "def move(state):\n    return 'up'\n", encoding="utf-8")
 
     def load_submissions(self) -> dict[str, dict[str, Any]]:
         """Strict loader (validators): RAISE on the first malformed entrant.

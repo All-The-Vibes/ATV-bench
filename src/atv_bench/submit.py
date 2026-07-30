@@ -364,8 +364,16 @@ def open_submission_pr(*, record: dict[str, Any], bot_path: str, identity: str,
     # directly (the runner handles only gh/git), so tests observe a real materialized tree.
     dest = wt / "league" / "submissions" / ident
     dest.mkdir(parents=True, exist_ok=True)
-    (dest / "main.py").write_text(Path(bot_path).read_text())
-    (dest / "submission.json").write_text(json.dumps(record, indent=2, sort_keys=True))
+    # Byte-preserving copy (issue #32): the bot must be committed EXACTLY as captured.
+    # Text-mode read_text()/write_text() applies universal-newline translation (a CRLF bot
+    # is committed as LF) and decodes with the locale codepage (no encoding= here). Either
+    # one diverges the committed bytes from the bytes build_submission hashed, so store.py
+    # restamps bot_sha256, the provenance token stops binding, and load_submissions()
+    # raises ValueError -- taking the WHOLE league down, not just this row. Binary IO
+    # closes both halves.
+    (dest / "main.py").write_bytes(Path(bot_path).read_bytes())
+    (dest / "submission.json").write_text(
+        json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
 
     _run_or_raise(runner, ["git", "checkout", "-b", branch], cwd=str(wt))
     _run_or_raise(runner, ["git", "add", "league/submissions"], cwd=str(wt))
@@ -389,7 +397,8 @@ def open_submission_pr(*, record: dict[str, Any], bot_path: str, identity: str,
     if pr_url:
         try:
             updated = {**record, "pr_url": pr_url}
-            (dest / "submission.json").write_text(json.dumps(updated, indent=2, sort_keys=True))
+            (dest / "submission.json").write_text(
+                json.dumps(updated, indent=2, sort_keys=True), encoding="utf-8")
             _run_or_raise(runner, ["git", "add", "league/submissions"], cwd=str(wt))
             _run_or_raise(runner, ["git", "commit", "-m", f"league: backfill PR url for {ident}"], cwd=str(wt))
             _run_or_raise(runner, ["git", "push", "origin", branch], cwd=str(wt))
