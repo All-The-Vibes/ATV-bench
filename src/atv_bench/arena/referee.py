@@ -25,7 +25,6 @@ from __future__ import annotations
 import enum
 import json
 import subprocess
-import sys
 import threading
 from typing import Any, Protocol
 
