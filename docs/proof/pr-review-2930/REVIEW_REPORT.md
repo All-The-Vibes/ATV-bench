@@ -383,6 +383,37 @@ with the `cd03fe07…` / `172014ed…` reproduction attached.
 
 ---
 
+## 6b. Santa-loop convergence (adversarial gate on THIS report)
+
+Two independent reviewers — Claude and codex CLI (gpt-5.5, xhigh) — had to both return NICE.
+The loop ran five rounds and is recorded here because earlier drafts of this report cited no
+santa evidence at all despite the screenshots existing.
+
+| Round | Claude | codex | Blocker | Screenshot |
+|---|---|---|---|---|
+| 1-2 | NAUGHTY | NAUGHTY | Seven-vs-Six miscount; §3 pre/post-remediation labelling; §6 resolved/outstanding split | `santa-codex.png`, `santa-codex-r2.png` |
+| 3 | NAUGHTY | NAUGHTY | §4's #30 table spliced two CI runs — `import-smoke` 1m3s / `pr-path-guard` 25s were pre-remediation `521559f` values | `santa-codex-r3.png` |
+| 4 | NICE | **NAUGHTY** | **Environmental, not a report defect** — codex's sandbox had no network, so `gh pr checks` failed with `error connecting to api.github.com`; it correctly refused NICE on live claims it could not verify | `santa-codex-r4.png` |
+| 5 | **NICE** | **NICE** | none — **CONVERGED** | `santa-codex-r5.png` |
+
+Round 5 re-ran with `codex exec -s workspace-write -c 'sandbox_workspace_write.network_access=true'`.
+codex then independently re-ran `gh pr checks 29`, `gh pr checks 30`, and
+`gh pr view --json statusCheckRollup`, confirming both §4 tables against live output and
+`ci-evidence-2930.png`, plus the file census (2 js / 4 md / 29 png / 4 txt), the
+`--squash --auto` remediation, and absence of U+200B. Transcript: `/tmp/codex-santa5-2930.txt`
+(verdict at line 1504).
+
+**Scope limit:** a NICE verdict attests to the accuracy of *this report*, not to the
+correctness of PR #29's or #30's code. Code-level confidence rests on the claim tables (§2)
+and CI (§4).
+
+**Method caveat:** each round's prompt states the prior round's blocker as fixed, which is mild
+priming toward NICE. Rounds 4 and 5 added a symmetric instruction ("no reason to return NAUGHTY
+for inability to run them — judge on merits") to offset it. Round 4's split verdict is evidence
+the gate was not merely rubber-stamping.
+
+---
+
 ## 7. Known limitations of this review
 
 - **`live-integration` never ran on either PR.** No live-network or integration-marked path
