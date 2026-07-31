@@ -119,3 +119,33 @@ def test_submissions_root_scaffolding_is_not_a_submission():
     ])
     assert res["is_submission_pr"] is False
     assert res["ok"] is True
+
+
+def test_changes_maintainer_delete_outside_league_allowed():
+    """A pure maintainer PR that DELETES a non-league file must pass.
+
+    Regression (PR #34): the R/C/D status rejection ran BEFORE the is_submission_pr
+    check, so any maintainer refactor that deleted a stale doc was rejected with
+    "disallowed change status 'D'" even though is_submission_pr was False. The
+    rename/delete gate exists to stop a submission PR dragging another entrant's
+    bytes around or dropping league history — it must not police src/ and root docs.
+    """
+    res = validate_pr_changes("maintainer", [
+        "D\tIMPLEMENTATION_PLAN.md",
+        "M\tsrc/atv_bench/cli.py",
+    ])
+    assert res["is_submission_pr"] is False
+    assert res["ok"] is True, res["errors"]
+
+
+def test_changes_delete_of_league_state_still_rejected_for_maintainer():
+    """Deleting league/** state stays rejected regardless of who opens the PR."""
+    res = validate_pr_changes("maintainer", ["D\tleague/matches.jsonl"])
+    assert res["ok"] is False
+
+
+def test_changes_rename_within_league_still_rejected():
+    res = validate_pr_changes("maintainer", [
+        "R100\tleague/submissions/victim/main.py\tleague/submissions/other/main.py",
+    ])
+    assert res["ok"] is False

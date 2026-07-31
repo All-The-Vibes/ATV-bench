@@ -57,6 +57,8 @@ def validate_pr_paths(author: str, changed_paths: list[str]) -> dict[str, Any]:
 
 
 _SUBMISSIONS_PREFIX = "league/submissions/"
+# League state (submissions, matches.jsonl, …) — renames/deletes here are never allowed.
+_LEAGUE_PREFIX = "league/"
 
 
 def _is_submission_path(path: str) -> bool:
@@ -110,10 +112,14 @@ def validate_pr_changes(author: str, name_status_lines: list[str]) -> dict[str, 
         # own .github/** and src/** files.
         if any(_is_submission_path(p) for p in paths):
             is_submission_pr = True
-        # Rename/copy (R*/C*) and delete (D) are never allowed on a submission PR: a rename
-        # can pull another entrant's bytes into your dir; a delete can drop history/rows.
+        # Rename/copy (R*/C*) and delete (D) are never allowed against the LEAGUE tree: a
+        # rename can pull another entrant's bytes into your dir; a delete can drop
+        # history/rows. Scoped to league/** on purpose — a maintainer PR that deletes a
+        # stale doc or renames a src/ module is ordinary plumbing and is not policed here
+        # (it goes through normal review). Before this scoping, any PR deleting any file
+        # was rejected even when is_submission_pr was False.
         code = status[:1]
-        if code in ("R", "C", "D"):
+        if code in ("R", "C", "D") and any(p.startswith(_LEAGUE_PREFIX) for p in paths):
             errors.append(f"disallowed change status {status!r} for paths {paths}")
             continue
         changed_paths.extend(paths)
