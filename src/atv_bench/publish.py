@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -351,10 +352,7 @@ def _normalize_utc_z(ts: str) -> str:
     UTC runner). The leaderboard schema requires a `Z` suffix, so build_site must
     convert; otherwise validate_leaderboard raises on every real publish run.
     """
-    from datetime import datetime, timezone
     s = ts.strip()
-    if s.endswith("Z") and "+" not in s:
-        return s
     try:
         dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
         dt = dt.astimezone(timezone.utc)

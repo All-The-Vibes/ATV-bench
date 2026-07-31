@@ -13,10 +13,8 @@ Reuses the existing engine/referee/board machinery:
 """
 from __future__ import annotations
 
-import functools
 import http.server
 import json
-import socket
 import sys
 import threading
 import time

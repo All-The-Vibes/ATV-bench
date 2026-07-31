@@ -259,7 +259,7 @@ def parse_copilot_model(jsonl: str) -> str:
 
 
 class HarnessAdapter:
-    """Base adapter. Subclasses implement `_invoke` to drive their CLI headless."""
+    """Base adapter. Subclasses override `run` to drive their CLI headless."""
 
     name: str = "base"
 

@@ -877,19 +877,10 @@ def demo_match_cmd(
     from atv_bench.arena.referee import SubprocessMoveSource, run_match
     from atv_bench.arena.render import render_frame
 
-    default_a, default_b = _default_demo_bots()
-    a_path = str(a_bot) if a_bot is not None else default_a
-    b_path = str(b_bot) if b_bot is not None else default_b
-
     # Strategy label = the bot file's stem (e.g. "greedy_survivor"), so the board row
     # describes the bot that actually played rather than a fabricated harness identity.
     a_bot_label = Path(a_path).stem
     b_bot_label = Path(b_path).stem
-
-    for label, p in ((a_name, a_path), (b_name, b_path)):
-        if not Path(p).is_file():
-            typer.echo(f"Bot for {label} not found: {p}")
-            raise typer.Exit(2)
 
     board_w = board_h = 25
     # Deliberately ASYMMETRIC starts. A point-symmetric arena (corner vs opposite corner,

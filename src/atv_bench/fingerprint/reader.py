@@ -49,11 +49,16 @@ def _within_root(path: Path, root: Path) -> bool:
         rr = root.resolve()
     except OSError:
         return False
-    return rp == rr or rr in rp.parents
+    return rp.is_relative_to(rr)
 
 
-def read_json(path: Path, root: Path) -> ReadOutcome:
-    """Read + parse a JSON config file, confined to `root`."""
+def _read_parsed(path: Path, root: Path, parse, malformed_excs: tuple) -> ReadOutcome:
+    """Read a text config confined to `root`, then `parse` it.
+
+    Shared by read_json/read_toml: same confinement, same reason enums, same
+    text->parse flow. Text is read (never a binary handle) so a non-UTF8 file
+    becomes REASON_MALFORMED, never a crash.
+    """
     if not _within_root(path, root):
         return ReadOutcome(reason=REASON_SYMLINK_ESCAPE)
     try:
@@ -74,39 +79,19 @@ def read_json(path: Path, root: Path) -> ReadOutcome:
     if not raw.strip():
         return ReadOutcome(reason=REASON_EMPTY)
     try:
-        return ReadOutcome(value=json.loads(raw))
-    except (json.JSONDecodeError, ValueError):
+        return ReadOutcome(value=parse(raw))
+    except malformed_excs:
         return ReadOutcome(reason=REASON_MALFORMED)
+
+
+def read_json(path: Path, root: Path) -> ReadOutcome:
+    """Read + parse a JSON config file, confined to `root`."""
+    return _read_parsed(path, root, json.loads, (json.JSONDecodeError, ValueError))
 
 
 def read_toml(path: Path, root: Path) -> ReadOutcome:
-    """Read + parse a TOML config file, confined to `root`.
-
-    Mirrors `read_json`: same confinement, same reason enums, same text→parse flow.
-    We read text (like read_json) then `tomllib.loads`, NOT `tomllib.load` on a binary
-    handle — so a non-UTF8 file becomes REASON_MALFORMED here too, never a crash.
-    """
-    if not _within_root(path, root):
-        return ReadOutcome(reason=REASON_SYMLINK_ESCAPE)
-    try:
-        # A dangling symlink is present-but-unreadable, not genuinely absent → fail closed.
-        if path.is_symlink() and not path.exists():
-            return ReadOutcome(reason=REASON_NOT_READABLE)
-        if not path.exists():
-            return ReadOutcome(reason=REASON_ABSENT)
-        raw = path.read_text(encoding="utf-8")
-    except PermissionError:
-        return ReadOutcome(reason=REASON_PERMISSION)
-    except UnicodeDecodeError:
-        return ReadOutcome(reason=REASON_MALFORMED)
-    except OSError:
-        return ReadOutcome(reason=REASON_NOT_READABLE)
-    if not raw.strip():
-        return ReadOutcome(reason=REASON_EMPTY)
-    try:
-        return ReadOutcome(value=tomllib.loads(raw))
-    except tomllib.TOMLDecodeError:
-        return ReadOutcome(reason=REASON_MALFORMED)
+    """Read + parse a TOML config file, confined to `root`."""
+    return _read_parsed(path, root, tomllib.loads, (tomllib.TOMLDecodeError,))
 
 
 def list_child_dir_names(path: Path, root: Path) -> tuple[list[str], list[tuple[str, str]]]:
