@@ -1,0 +1,41 @@
+<html><body style="margin:0;background:#0d1117;font-family:ui-monospace,Menlo,monospace">
+<div style="padding:18px 24px;border-bottom:2px solid #ff6b6b;color:#ff6b6b;font-size:16px;font-weight:600">PR #34 — "behavior-neutral" is false: fractional seconds truncated</div>
+<pre style="padding:20px 24px;color:#c9d1d9;font-size:13px;line-height:1.6;white-space:pre-wrap"># PR #34 — &#x27;behavior-neutral&#x27; claim is false
+
+Removed from publish.py:_normalize_utc_z as dead weight:
+    if s.endswith(&quot;Z&quot;) and &quot;+&quot; not in s:
+        return s
+
+## Behavior difference (same input, two branches)
+
+input                          main                           PR34 head
+2026-07-15T15:36:06.123456Z    2026-07-15T15:36:06.123456Z    2026-07-15T15:36:06Z  &lt;-- TRUNCATED
+2026-07-15T15:36:06.500Z       2026-07-15T15:36:06.500Z       2026-07-15T15:36:06Z  &lt;-- TRUNCATED
+2026-07-15T15:36:06Z           2026-07-15T15:36:06Z           2026-07-15T15:36:06Z
+2026-07-15T15:36:06-05:00      2026-07-15T20:36:06Z           2026-07-15T20:36:06Z
+
+## Why it is reachable, not theoretical
+
+leaderboard.py:75 -- the schema EXPLICITLY admits fractional seconds:
+    ^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$
+publish.py:432   -- &quot;publish build --updated-at&quot; passes caller input straight through.
+So the truncated value is one the schema itself declares valid.
+
+## Why 1123 tests missed it
+
+Every existing timestamp test uses whole seconds, and the one normalization test
+asserts only  doc[&#x27;updated_at&#x27;].endswith(&#x27;Z&#x27;)  -- which a TRUNCATED value still
+satisfies. The assertion cannot distinguish the regression from correct behavior.
+
+## TDD
+
+RED (against PR34 head):
+  FAILED test_normalize_preserves_fractional_seconds_on_utc_input[...123456Z]
+  FAILED test_normalize_preserves_fractional_seconds_on_utc_input[...500Z]
+  2 failed, 4 passed
+
+GREEN (fast path restored):  42 passed
+Full hermetic suite:         1121 passed, 35 skipped
+(5 test_containment failures reproduce identically on clean origin/main -- local
+ userns unavailable; pre-existing and environmental, not from this change.)
+</pre></body></html>

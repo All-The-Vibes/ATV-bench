@@ -1,0 +1,38 @@
+# PR #29 — findings re-verified first-hand
+
+## 1. HIGH '--help is unhardened' -> DOWNGRADED to MEDIUM (pre-existing, out of scope)
+
+True that _harden_stream runs from the Typer group callback (cli.py:142), which
+Click SKIPS for --help and for the bare no_args_is_help invocation.
+
+But severity does not hold up:
+  PYTHONIOENCODING=cp1252  --help   -> exit 0   (cp1252 IS the PR's stated target;
+                                                 U+2014 em-dash encodes fine there)
+  PYTHONIOENCODING=ascii   --help   -> exit 1   UnicodeEncodeError U+2014
+  same on origin/main               -> exit 1   PRE-EXISTING, not introduced here
+
+So: real (LC_ALL=C yields an ascii console), but pre-existing and outside the
+codepage this PR set out to fix. Worth a follow-up, not a merge blocker.
+
+## 2. HIGH 'CRLF bot digest divergence at submit.py:378' -> CONFIRMED
+
+  :155  bot_sha256 = sha256(raw bytes)
+  :378  write_text(read_text(encoding=utf-8), encoding=utf-8)   <- text round-trip
+
+The codec is pinned but universal-newline translation still rewrites CRLF:
+  declared bot_sha256 : 15efcb67a96ff3fb
+  committed bytes hash: b2c9a2523d9a3c1d
+  MATCH               : False   <- issue #32 remains live on this branch
+
+This is the SAME line PR #33 rewrites to write_bytes(read_bytes()), which fixes
+both halves. Independently corroborated from the #33 side: merging #33 into #29
+gives exit=1 with BOTH lines present.
+
+=> MERGE ORDER: #29 first, then #33, resolving to write_bytes().
+   The reverse order silently reintroduces issue #32.
+
+## 3. MEDIUM 'no test covers layer 1' -> CONFIRMED
+
+Neutering _harden_stream leaves all 36 encoding tests green, so the body's
+'disabling either layer makes the suite fail' is false for layer 1.
+(The symmetric mutation on _marks() DOES fail 3 tests -- layer 2 is covered.)

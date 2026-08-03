@@ -1,0 +1,41 @@
+<html><body style="margin:0;background:#0d1117;font-family:ui-monospace,Menlo,monospace">
+<div style="padding:18px 24px;border-bottom:2px solid #58a6ff;color:#58a6ff;font-size:16px;font-weight:600">PR #33 — findings re-verified first-hand (1 refuted, 1 narrowed, 1 confirmed)</div>
+<pre style="padding:20px 24px;color:#c9d1d9;font-size:13px;line-height:1.6;white-space:pre-wrap"># PR #33 verification — findings re-tested first-hand
+
+## 1. HIGH &#x27;tautological tests&#x27; — PARTLY REFUTED, real blind spot confirmed
+
+Mutation test of the source-grep assertion in add_submission:
+  single-line write_text, encoding= removed  -&gt; FAILED (test catches it)
+  multi-line  write_text, encoding= removed  -&gt; 3 passed (BLIND SPOT)
+
+Cause: the test filters with  not ln.endswith(&#x27;(&#x27;)  which skips continuation lines.
+The skipped write is the one carrying the bot bytes backing bot_sha256:
+    (path.parent / &quot;main.py&quot;).write_text(     &lt;-- endswith &quot;(&quot; -&gt; skipped
+So &#x27;tautological&#x27; is too strong (it does catch one mutation), but the assertion
+does not cover the write this PR is actually about.
+
+## 2. HIGH &#x27;.gitattributes does not protect the contributor&#x27; — REFUTED
+
+Documented flow is fork -&gt; clone (docs/COMMUNITY_LEAGUE.md:13). A clone inherits
+.gitattributes, so -text applies. Empirically, clone + core.autocrlf=true:
+  committed blob: def move(s):\r\n    return &quot;up&quot;\r\n   &lt;- CRLF PRESERVED
+The failing scenario needs a checkout with no .gitattributes, which the real
+submission flow does not produce.
+
+## 3. MEDIUM merge-conflict with PR #29 — CONFIRMED (affects merge order)
+
+Same line, incompatible semantics:
+  main : write_text(read_text())                                  (both halves broken)
+  #29  : write_text(read_text(encoding=utf-8), encoding=utf-8)    (encoding fixed, CRLF STILL LOST)
+  #33  : write_bytes(read_bytes())                                (both halves fixed)
+
+CRLF bot through each:
+  original : b&#x27;def move(s):\r\n    return &quot;up&quot;\r\n&#x27;
+  via #29  : b&#x27;def move(s):\n    return &quot;up&quot;\n&#x27;      &lt;- issue #32 reintroduced
+  via #33  : b&#x27;def move(s):\r\n    return &quot;up&quot;\r\n&#x27;  &lt;- correct
+
+git merge #33 into #29 -&gt; exit=1, BOTH lines present in the conflict.
+No conflict is visible when each branch is tested against main alone.
+
+=&gt; #33 MUST merge after #29, resolving to write_bytes().
+</pre></body></html>
