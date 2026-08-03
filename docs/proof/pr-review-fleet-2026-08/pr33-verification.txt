@@ -1,0 +1,38 @@
+# PR #33 verification — findings re-tested first-hand
+
+## 1. HIGH 'tautological tests' — PARTLY REFUTED, real blind spot confirmed
+
+Mutation test of the source-grep assertion in add_submission:
+  single-line write_text, encoding= removed  -> FAILED (test catches it)
+  multi-line  write_text, encoding= removed  -> 3 passed (BLIND SPOT)
+
+Cause: the test filters with  not ln.endswith('(')  which skips continuation lines.
+The skipped write is the one carrying the bot bytes backing bot_sha256:
+    (path.parent / "main.py").write_text(     <-- endswith "(" -> skipped
+So 'tautological' is too strong (it does catch one mutation), but the assertion
+does not cover the write this PR is actually about.
+
+## 2. HIGH '.gitattributes does not protect the contributor' — REFUTED
+
+Documented flow is fork -> clone (docs/COMMUNITY_LEAGUE.md:13). A clone inherits
+.gitattributes, so -text applies. Empirically, clone + core.autocrlf=true:
+  committed blob: def move(s):\r\n    return "up"\r\n   <- CRLF PRESERVED
+The failing scenario needs a checkout with no .gitattributes, which the real
+submission flow does not produce.
+
+## 3. MEDIUM merge-conflict with PR #29 — CONFIRMED (affects merge order)
+
+Same line, incompatible semantics:
+  main : write_text(read_text())                                  (both halves broken)
+  #29  : write_text(read_text(encoding=utf-8), encoding=utf-8)    (encoding fixed, CRLF STILL LOST)
+  #33  : write_bytes(read_bytes())                                (both halves fixed)
+
+CRLF bot through each:
+  original : b'def move(s):\r\n    return "up"\r\n'
+  via #29  : b'def move(s):\n    return "up"\n'      <- issue #32 reintroduced
+  via #33  : b'def move(s):\r\n    return "up"\r\n'  <- correct
+
+git merge #33 into #29 -> exit=1, BOTH lines present in the conflict.
+No conflict is visible when each branch is tested against main alone.
+
+=> #33 MUST merge after #29, resolving to write_bytes().

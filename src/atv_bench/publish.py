@@ -353,6 +353,12 @@ def _normalize_utc_z(ts: str) -> str:
     convert; otherwise validate_leaderboard raises on every real publish run.
     """
     s = ts.strip()
+    # Fast path: an already-UTC `...Z` value is returned verbatim. This is not a
+    # micro-optimization — it is load-bearing. The schema admits fractional seconds
+    # (`(\.\d+)?Z`), and the strftime below emits whole seconds only, so routing an
+    # already-conformant value through it silently truncates sub-second precision.
+    if s.endswith("Z") and "+" not in s:
+        return s
     try:
         dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
         dt = dt.astimezone(timezone.utc)

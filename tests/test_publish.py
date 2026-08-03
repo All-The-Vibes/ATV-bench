@@ -11,7 +11,13 @@ import json
 
 import pytest
 
-from atv_bench.publish import build_site, validate_artifact, ingest_result
+from atv_bench.publish import (
+    build_site,
+    validate_artifact,
+    ingest_result,
+    _normalize_utc_z,
+    _EPOCH,
+)
 from atv_bench.store import LeagueStore, build_leaderboard_from_store
 
 
@@ -214,6 +220,32 @@ def test_build_site_normalizes_git_timestamp_to_schema(tmp_path, git_ts):
                      updated_at=git_ts)  # must NOT raise
     doc = json.loads((out / "leaderboard.json").read_text())
     assert doc["updated_at"].endswith("Z")
+
+
+@pytest.mark.parametrize("ts", [
+    "2026-07-15T15:36:06.123456Z",
+    "2026-07-15T15:36:06.500Z",
+])
+def test_normalize_preserves_fractional_seconds_on_utc_input(ts):
+    """An already-UTC `...Z` timestamp must pass through byte-for-byte.
+
+    The leaderboard schema explicitly admits fractional seconds
+    (`^\\d{4}-...T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$`), and `publish build --updated-at`
+    takes the value straight from the caller. Routing such a value through
+    `strftime("%Y-%m-%dT%H:%M:%SZ")` silently truncates the sub-second precision — a
+    behavior change, on a value the schema declares valid.
+
+    The `endswith("Z")` assertion in the test above cannot catch this: the truncated
+    output still ends in Z. That is why removing the fast path passed a 1123-test suite.
+    """
+    assert _normalize_utc_z(ts) == ts
+
+
+def test_normalize_still_converts_offsets_to_z():
+    """The fast path must not shadow the conversion it sits in front of."""
+    assert _normalize_utc_z("2026-07-15T15:36:06-05:00") == "2026-07-15T20:36:06Z"
+    assert _normalize_utc_z("2026-07-15T20:36:06+00:00") == "2026-07-15T20:36:06Z"
+    assert _normalize_utc_z("not-a-timestamp") == _EPOCH
 
 
 def test_ingest_ok_result_appends(tmp_path):
