@@ -94,14 +94,22 @@ def _is_league_path(path: str) -> bool:
 def _is_submission_path(path: str) -> bool:
     """True only for a per-entrant submission file league/submissions/<identity>/<file>.
 
+    Operates on the NORMALIZED path (see `_normalize_status_path`). Normalizing here is
+    not optional: if this check used raw strings while the rename/delete gate used
+    normalized ones, the two would disagree about what counts as the league tree — and a
+    submission PR spelled `League/submissions/x/main.py` would escape classification
+    entirely (`is_submission_pr=False`), taking its confinement with it and freeing it to
+    edit `.github/workflows/**`. Both checks must fold identically.
+
     Requires at least two path segments after the prefix (an identity directory AND a file
     within it). Scaffolding placed directly at the submissions root — most notably
     league/submissions/.gitkeep, committed by the foundational PR to materialize the empty
     tree — has only one trailing segment and is deliberately NOT treated as a submission.
     """
-    if not isinstance(path, str) or not path.startswith(_SUBMISSIONS_PREFIX):
+    norm = _normalize_status_path(path)
+    if not norm.startswith(_SUBMISSIONS_PREFIX):
         return False
-    remainder = path[len(_SUBMISSIONS_PREFIX):]
+    remainder = norm[len(_SUBMISSIONS_PREFIX):]
     return "/" in remainder.strip("/") and remainder.split("/", 1)[0] != ""
 
 
