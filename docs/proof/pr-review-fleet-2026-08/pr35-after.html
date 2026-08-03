@@ -1,0 +1,19 @@
+<html><body style="margin:0;background:#0d1117;font-family:ui-monospace,SFMono-Regular,Menlo,monospace">
+<div style="padding:18px 24px;border-bottom:2px solid #51cf66;color:#51cf66;font-size:16px;font-weight:600">PR #35 + 6db5b90 — AFTER: all blocked, intent preserved</div>
+<pre style="padding:20px 24px;color:#c9d1d9;font-size:13.5px;line-height:1.65;white-space:pre-wrap">$ # AFTER fix 6db5b90 — same vectors
+
+vector                                   ok=   blocked?
+D league/matches.jsonl                   False yes
+D ./league/matches.jsonl                 False yes
+D &quot;league/submissions/caf\303\251/main.py&quot; False yes
+D League/matches.jsonl                   False yes
+
+PR #35 intent preserved:
+  maintainer deletes stale doc  ok = True
+  maintainer renames src module ok = True
+
+$ pytest tests/test_pr_path_guard.py
+....................                                                     [100%]
+20 passed in 0.03s
+</pre>
+</body></html>

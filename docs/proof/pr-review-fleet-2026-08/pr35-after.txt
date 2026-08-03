@@ -1,0 +1,15 @@
+$ # AFTER fix 6db5b90 — same vectors
+
+vector                                   ok=   blocked?
+D league/matches.jsonl                   False yes
+D ./league/matches.jsonl                 False yes
+D "league/submissions/caf\303\251/main.py" False yes
+D League/matches.jsonl                   False yes
+
+PR #35 intent preserved:
+  maintainer deletes stale doc  ok = True
+  maintainer renames src module ok = True
+
+$ pytest tests/test_pr_path_guard.py
+....................                                                     [100%]
+20 passed in 0.03s

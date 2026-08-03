@@ -1,0 +1,11 @@
+<html><body style="margin:0;background:#0d1117;font-family:ui-monospace,SFMono-Regular,Menlo,monospace">
+<div style="padding:18px 24px;border-bottom:2px solid #ff6b6b;color:#ff6b6b;font-size:16px;font-weight:600">PR #35 @ 8fe1485 — BEFORE: 3 bypass vectors</div>
+<pre style="padding:20px 24px;color:#c9d1d9;font-size:13.5px;line-height:1.65;white-space:pre-wrap">$ # PR #35 head 8fe1485 — BEFORE fix: bypass vectors
+
+vector                                   ok=   blocked?
+D league/matches.jsonl                   False yes
+D ./league/matches.jsonl                 True  NO -- BYPASS
+D &quot;league/submissions/caf\303\251/main.py&quot; True  NO -- BYPASS
+D League/matches.jsonl                   True  NO -- BYPASS
+</pre>
+</body></html>
