@@ -1,0 +1,7 @@
+$ # PR #35 head 8fe1485 — BEFORE fix: bypass vectors
+
+vector                                   ok=   blocked?
+D league/matches.jsonl                   False yes
+D ./league/matches.jsonl                 True  NO -- BYPASS
+D "league/submissions/caf\303\251/main.py" True  NO -- BYPASS
+D League/matches.jsonl                   True  NO -- BYPASS
