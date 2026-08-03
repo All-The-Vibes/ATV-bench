@@ -149,3 +149,40 @@ def test_changes_rename_within_league_still_rejected():
         "R100\tleague/submissions/victim/main.py\tleague/submissions/other/main.py",
     ])
     assert res["ok"] is False
+
+
+# --- league/ prefix normalization -------------------------------------------------
+#
+# Scoping the R/C/D gate to league/** made the guard depend on a raw-string prefix test
+# against unnormalized `git diff --name-status` output. Three spellings of a league path
+# therefore slipped the gate that main rejected. Each vector below is a REGRESSION guard:
+# all three return ok=False on origin/main, and returned ok=True on the unfixed scoping
+# commit 8fe1485.
+
+
+def test_changes_c_quoted_league_delete_rejected():
+    """git C-quotes any non-ASCII path by default (core.quotepath), so the literal
+    name-status line CI feeds the guard is `D\t"league/submissions/caf\\303\\251/main.py"`.
+
+    The leading double quote defeats a raw p.startswith("league/") test, so deleting a
+    non-ASCII entrant's bot passed the gate. Verified against real git output, not a
+    hand-built string: an entrant whose login contains an accent is enough to trigger it.
+    """
+    res = validate_pr_changes(
+        "attacker", ['D\t"league/submissions/caf\\303\\251/main.py"']
+    )
+    assert res["ok"] is False, res
+
+
+def test_changes_dot_slash_prefixed_league_delete_rejected():
+    """A './' prefix defeats the raw league/ prefix test, allowing deletion of the
+    durable league store while the guard reports ok."""
+    res = validate_pr_changes("attacker", ["D\t./league/matches.jsonl"])
+    assert res["ok"] is False, res
+
+
+def test_changes_case_variant_league_delete_rejected():
+    """The league/ comparison must not be case-sensitive on a case-insensitive
+    checkout: 'League/matches.jsonl' resolves to the same file on macOS/Windows."""
+    res = validate_pr_changes("attacker", ["D\tLeague/matches.jsonl"])
+    assert res["ok"] is False, res

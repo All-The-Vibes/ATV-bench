@@ -61,6 +61,36 @@ _SUBMISSIONS_PREFIX = "league/submissions/"
 _LEAGUE_PREFIX = "league/"
 
 
+def _normalize_status_path(path: str) -> str:
+    """Fold a raw `git diff --name-status` path to a comparable form.
+
+    git emits paths that do not compare equal to a plain string prefix even when they
+    name the same file, so a raw startswith() test is not a safe gate:
+
+    - C-quoting: with core.quotepath at its DEFAULT (on), any non-ASCII path is emitted
+      wrapped in double quotes with octal escapes —
+      `"league/submissions/caf\\303\\251/main.py"`. The leading quote defeats the prefix.
+    - A leading `./`.
+    - Case: on a case-insensitive checkout `League/` and `league/` are one file.
+
+    Casefolding here is deliberately conservative — it can only ever make the gate
+    reject MORE, never less, which is the correct direction for a fail-closed guard.
+    """
+    if not isinstance(path, str):
+        return ""
+    p = path.strip()
+    if len(p) >= 2 and p.startswith('"') and p.endswith('"'):
+        p = p[1:-1]
+    while p.startswith("./"):
+        p = p[2:]
+    return p.casefold()
+
+
+def _is_league_path(path: str) -> bool:
+    """True if the path names anything under the league tree, spelling-insensitively."""
+    return _normalize_status_path(path).startswith(_LEAGUE_PREFIX)
+
+
 def _is_submission_path(path: str) -> bool:
     """True only for a per-entrant submission file league/submissions/<identity>/<file>.
 
@@ -119,7 +149,7 @@ def validate_pr_changes(author: str, name_status_lines: list[str]) -> dict[str, 
         # (it goes through normal review). Before this scoping, any PR deleting any file
         # was rejected even when is_submission_pr was False.
         code = status[:1]
-        if code in ("R", "C", "D") and any(p.startswith(_LEAGUE_PREFIX) for p in paths):
+        if code in ("R", "C", "D") and any(_is_league_path(p) for p in paths):
             errors.append(f"disallowed change status {status!r} for paths {paths}")
             continue
         changed_paths.extend(paths)
