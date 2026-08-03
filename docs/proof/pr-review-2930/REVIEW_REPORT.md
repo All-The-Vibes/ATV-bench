@@ -214,10 +214,13 @@ which is the outcome the adversarial setup exists to produce.
   **Fix: drop `--admin`, use `gh pr merge --auto --squash` so branch protection stays
   authoritative.**
 - **[MEDIUM] AGENT-01** — U+200B ZERO WIDTH SPACE embedded in an LLM-executed prompt
-  string at `wf_pr_review_2324.js:517` ("cleanly/⁠safely resolve"). Almost certainly a
+  string at `wf_pr_review_2324.js:517` ("cleanly/safely resolve"). Almost certainly a
   benign copy-paste artefact (mid-word, not a hidden instruction), but reported because
   invisible codepoints in agent prompt text are exactly the injection carrier AGENT-01
-  exists to catch. Fix: strip it; add a CI grep for U+200B/C/D/FEFF.
+  exists to catch. Fix: strip it; add a CI grep for U+200B/C/D, U+2060, U+00AD, U+FEFF.
+  (Note: an earlier revision of this line prescribed a class of U+200B/C/D/FEFF only —
+  which would not have matched the U+2060 that was present in this very file. The class
+  above is the corrected one.)
 - **[MEDIUM] Identity verification fails OPEN** (`.github/workflows/league-publish.yml:129-131`,
   **pre-existing**, surfaced by the repo-wide pass). When the independent `gh api`
   PR-author lookup fails, the code warns and proceeds on the untrusted artifact-supplied
