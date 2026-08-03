@@ -1,0 +1,41 @@
+<html><body style="margin:0;background:#0d1117;font-family:ui-monospace,Menlo,monospace">
+<div style="padding:18px 24px;border-bottom:2px solid #58a6ff;color:#58a6ff;font-size:16px;font-weight:600">PR #29 — re-verified: 1 downgraded, 2 confirmed</div>
+<pre style="padding:20px 24px;color:#c9d1d9;font-size:13px;line-height:1.6;white-space:pre-wrap"># PR #29 — findings re-verified first-hand
+
+## 1. HIGH &#x27;--help is unhardened&#x27; -&gt; DOWNGRADED to MEDIUM (pre-existing, out of scope)
+
+True that _harden_stream runs from the Typer group callback (cli.py:142), which
+Click SKIPS for --help and for the bare no_args_is_help invocation.
+
+But severity does not hold up:
+  PYTHONIOENCODING=cp1252  --help   -&gt; exit 0   (cp1252 IS the PR&#x27;s stated target;
+                                                 U+2014 em-dash encodes fine there)
+  PYTHONIOENCODING=ascii   --help   -&gt; exit 1   UnicodeEncodeError U+2014
+  same on origin/main               -&gt; exit 1   PRE-EXISTING, not introduced here
+
+So: real (LC_ALL=C yields an ascii console), but pre-existing and outside the
+codepage this PR set out to fix. Worth a follow-up, not a merge blocker.
+
+## 2. HIGH &#x27;CRLF bot digest divergence at submit.py:378&#x27; -&gt; CONFIRMED
+
+  :155  bot_sha256 = sha256(raw bytes)
+  :378  write_text(read_text(encoding=utf-8), encoding=utf-8)   &lt;- text round-trip
+
+The codec is pinned but universal-newline translation still rewrites CRLF:
+  declared bot_sha256 : 15efcb67a96ff3fb
+  committed bytes hash: b2c9a2523d9a3c1d
+  MATCH               : False   &lt;- issue #32 remains live on this branch
+
+This is the SAME line PR #33 rewrites to write_bytes(read_bytes()), which fixes
+both halves. Independently corroborated from the #33 side: merging #33 into #29
+gives exit=1 with BOTH lines present.
+
+=&gt; MERGE ORDER: #29 first, then #33, resolving to write_bytes().
+   The reverse order silently reintroduces issue #32.
+
+## 3. MEDIUM &#x27;no test covers layer 1&#x27; -&gt; CONFIRMED
+
+Neutering _harden_stream leaves all 36 encoding tests green, so the body&#x27;s
+&#x27;disabling either layer makes the suite fail&#x27; is false for layer 1.
+(The symmetric mutation on _marks() DOES fail 3 tests -- layer 2 is covered.)
+</pre></body></html>
