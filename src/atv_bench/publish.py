@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from dataclasses import dataclass
@@ -32,6 +33,9 @@ _FORFEIT_OUTCOMES = {Outcome.FORFEIT_A.value, Outcome.FORFEIT_B.value}
 _OK_REQUIRED_KEYS = {"player_a", "player_b", "outcome", "match_id"}
 _CRASH_REQUIRED_KEYS = {"loser", "opponent", "match_id"}
 _EPOCH = "1970-01-01T00:00:00Z"
+# The leaderboard schema's own updated_at pattern (leaderboard.py). Single source of
+# truth: the fast path below admits exactly what the schema admits, nothing wider.
+_UTC_Z_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$")
 _DEFAULT_STORE = "league"
 
 
@@ -353,11 +357,24 @@ def _normalize_utc_z(ts: str) -> str:
     convert; otherwise validate_leaderboard raises on every real publish run.
     """
     s = ts.strip()
-    # Fast path: an already-UTC `...Z` value is returned verbatim. This is not a
+    # Fast path: an already-conformant UTC value is returned verbatim. This is not a
     # micro-optimization — it is load-bearing. The schema admits fractional seconds
     # (`(\.\d+)?Z`), and the strftime below emits whole seconds only, so routing an
     # already-conformant value through it silently truncates sub-second precision.
-    if s.endswith("Z") and "+" not in s:
+    #
+    # The shape is checked against the SCHEMA'S OWN pattern rather than a bare
+    # `endswith("Z")`. A suffix test would return junk verbatim — "not-a-timestampZ",
+    # "2026-13-45T99:99:99Z", or "2026-07-15T15:36:06-05:00Z" (a negative offset that
+    # carries no "+") all skip parsing and land in published leaderboard.json unvalidated.
+    # Anything failing this match falls through to fromisoformat and then to _EPOCH, so
+    # the function stays fail-closed.
+    if _UTC_Z_RE.match(s):
+        try:
+            datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except ValueError:
+            # Digit-shaped but not a real date (e.g. month 13, day 45): the schema regex
+            # would accept it, so reject here rather than publish an impossible date.
+            return _EPOCH
         return s
     try:
         dt = datetime.fromisoformat(s.replace("Z", "+00:00"))

@@ -423,3 +423,36 @@ def test_store_publishes_keyed_submission_on_keyless_board(tmp_path, monkeypatch
     store.add_submission(rec, bot_source=src)
     subs = store.load_submissions()               # must not raise
     assert "keyed" in subs
+
+
+# --- fast-path must not be a validation bypass (santa-loop round 1, both reviewers) ---
+
+
+@pytest.mark.parametrize("junk", [
+    "not-a-timestampZ",              # arbitrary string with a Z suffix
+    "2026-13-45T99:99:99Z",          # digit-SHAPED but impossible: the schema regex
+                                     # accepts this, so only a real parse rejects it
+    "2026-07-15T15:36:06-05:00Z",    # negative offset AND trailing Z — carries no "+",
+                                     # so a `"+" not in s` test let it through
+    "Z",
+    "2026-07-15T15:36:06z",          # lowercase z is not the schema's Z
+])
+def test_malformed_z_suffixed_input_falls_back_to_epoch(junk):
+    """A bare endswith("Z") fast path returned these VERBATIM, skipping all validation.
+
+    `publish build --updated-at` passes caller input straight through, and the value
+    lands in published leaderboard.json. `2026-13-45T99:99:99Z` is the sharp case: it
+    matches the schema's digit-shape pattern, so the schema would publish an impossible
+    date. The fast path must admit exactly what the schema admits AND parse.
+    """
+    assert _normalize_utc_z(junk) == _EPOCH
+
+
+def test_fast_path_admits_exactly_the_schema_shape():
+    """The fast path's regex must stay tied to the schema's own pattern."""
+    from atv_bench.leaderboard import LEADERBOARD_SCHEMA
+    schema_pattern = LEADERBOARD_SCHEMA["properties"]["updated_at"]["pattern"]
+    from atv_bench.publish import _UTC_Z_RE
+    assert _UTC_Z_RE.pattern == schema_pattern, (
+        "fast path and schema must accept the same shape; divergence reopens the bypass"
+    )
