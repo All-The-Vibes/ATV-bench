@@ -217,10 +217,16 @@ which is the outcome the adversarial setup exists to produce.
   string at `wf_pr_review_2324.js:517` ("cleanly/safely resolve"). Almost certainly a
   benign copy-paste artefact (mid-word, not a hidden instruction), but reported because
   invisible codepoints in agent prompt text are exactly the injection carrier AGENT-01
-  exists to catch. Fix: strip it; add a CI grep for U+200B/C/D, U+2060, U+00AD, U+FEFF.
-  (Note: an earlier revision of this line prescribed a class of U+200B/C/D/FEFF only —
-  which would not have matched the U+2060 that was present in this very file. The class
-  above is the corrected one.)
+  exists to catch. Fix: strip it; enforce a scan in CI.
+  (Note: an earlier revision of this line prescribed a hand-curated class of
+  U+200B/C/D/FEFF. That class did not include U+2060, which was present in this very
+  file — the prescribed remediation could not have caught the defect sitting inside the
+  document prescribing it. The lesson is not "add U+2060 to the list" but *stop curating
+  a list*: `tests/test_proof_docs_invisible_codepoints.py` now classifies by Unicode
+  category — `Cf` (format) plus a small justified set of non-Cf blank-rendering
+  codepoints, minus a documented allowlist — over **every tracked text file**, not just
+  `.md`. That scope matters: this finding's own carrier lives in a `.js` file, which an
+  `.md`-only scan would never have seen.)
 - **[MEDIUM] Identity verification fails OPEN** (`.github/workflows/league-publish.yml:129-131`,
   **pre-existing**, surfaced by the repo-wide pass). When the independent `gh api`
   PR-author lookup fails, the code warns and proceeds on the untrusted artifact-supplied
