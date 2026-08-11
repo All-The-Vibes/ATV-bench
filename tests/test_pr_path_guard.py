@@ -584,3 +584,30 @@ def test_case_insensitive_league_match_is_a_deliberate_tradeoff():
     # ...while genuinely unrelated trees are untouched.
     assert validate_pr_changes("maintainer", ["D\tleagues/readme.md"])["ok"] is True
     assert validate_pr_changes("maintainer", ["D\tdocs/league.md"])["ok"] is True
+
+
+def test_legacy_name_only_whitespace_only_path_not_dropped(tmp_path):
+    """A whitespace-only line IS a legal POSIX pathname. Filtering on ln.strip() dropped
+    it before the validator saw it, hiding an outside-tree path and reporting ok."""
+    typer_testing = pytest.importorskip("typer.testing")
+    from atv_bench.cli import app
+    f = tmp_path / "paths.txt"
+    f.write_text("league/submissions/attacker/main.py\n   \n")
+    res = typer_testing.CliRunner().invoke(
+        app, ["validate-pr-paths", "--author", "attacker", "--paths-file", str(f)]
+    )
+    assert res.exit_code != 0, res.output
+
+
+def test_legacy_name_only_blank_lines_are_still_ignored(tmp_path):
+    """A truly empty line carries no path and is just formatting — it must not turn a
+    valid submission into a rejection."""
+    typer_testing = pytest.importorskip("typer.testing")
+    from atv_bench.cli import app
+    f = tmp_path / "paths.txt"
+    f.write_text("league/submissions/entrant/main.py\n\n"
+                 "league/submissions/entrant/submission.json\n")
+    res = typer_testing.CliRunner().invoke(
+        app, ["validate-pr-paths", "--author", "entrant", "--paths-file", str(f)]
+    )
+    assert res.exit_code == 0, res.output

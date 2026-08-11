@@ -487,9 +487,15 @@ def validate_pr_paths_cmd(
     else:
         raw_bytes = sys.stdin.buffer.read()
     text = raw_bytes.decode("utf-8", "surrogateescape")
-    # rstrip the record TERMINATOR only (splitlines already removed \n; \r survives a
-    # CRLF file). The path itself is never stripped — see the call sites below.
-    lines = [ln.rstrip("\r\n") for ln in text.splitlines() if ln.strip()]
+    # Keep EVERY record; drop only the terminator (splitlines removed \n; \r survives a
+    # CRLF file). Filtering on `ln.strip()` would silently discard a whitespace-only
+    # pathname — legal on POSIX — hiding an outside-tree path from the guard entirely.
+    # The path itself is never stripped; see the call sites below.
+    lines = [ln.rstrip("\r\n") for ln in text.splitlines()]
+    if not name_status:
+        # Legacy --name-only: a truly empty line carries no path and is just formatting;
+        # a whitespace-only line IS a path and must reach the validator to be rejected.
+        lines = [ln for ln in lines if ln != ""]
     if name_status:
         if "\0" in text:
             # `git diff -z --name-status` emits NUL-TERMINATED FIELDS (not records):
