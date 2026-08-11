@@ -502,3 +502,45 @@ def test_cli_z_stream_missing_terminator_fails_closed(tmp_path):
 def test_cli_z_stream_doubled_nul_fails_closed(tmp_path):
     res = _run_z("maintainer", b"A\0\0docs/stale.md\0", tmp_path)
     assert res.exit_code != 0, res.output
+
+
+# --- empty-field arity + legacy name-only strip (santa round 3 final) ---------------
+
+
+@pytest.mark.parametrize("record", [
+    ("D", "docs/stale.md", ""),
+    "D\tdocs/stale.md\t",
+    "D\t\tdocs/stale.md",
+])
+def test_changes_empty_extra_field_fails_closed(record):
+    """Filtering empty fields BEFORE the arity check let a malformed record collapse
+    into a well-formed one-path record and pass."""
+    res = validate_pr_changes("maintainer", [record])
+    assert res["ok"] is False, res
+
+
+def test_legacy_name_only_cli_does_not_strip_path(tmp_path):
+    """The legacy --name-only interface stripped each line, so `main.py ` — a different
+    file — satisfied the {main.py, submission.json} allowlist."""
+    typer_testing = pytest.importorskip("typer.testing")
+    from atv_bench.cli import app
+    f = tmp_path / "paths.txt"
+    f.write_text("league/submissions/attacker/main.py \n")
+    res = typer_testing.CliRunner().invoke(
+        app, ["validate-pr-paths", "--author", "attacker", "--paths-file", str(f)]
+    )
+    assert res.exit_code != 0, res.output
+
+
+def test_legacy_name_only_cli_still_accepts_own_files(tmp_path):
+    """Positive control: dropping the strip must not break the ordinary case, including
+    a CRLF-terminated file."""
+    typer_testing = pytest.importorskip("typer.testing")
+    from atv_bench.cli import app
+    f = tmp_path / "paths.txt"
+    f.write_bytes(b"league/submissions/entrant/main.py\r\n"
+                  b"league/submissions/entrant/submission.json\r\n")
+    res = typer_testing.CliRunner().invoke(
+        app, ["validate-pr-paths", "--author", "entrant", "--paths-file", str(f)]
+    )
+    assert res.exit_code == 0, res.output

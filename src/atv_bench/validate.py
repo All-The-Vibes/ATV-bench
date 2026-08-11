@@ -226,7 +226,7 @@ def validate_pr_changes(author: str, name_status_lines: list[str]) -> dict[str, 
                 # turn a malformed record into a well-formed-looking one.
                 errors.append(f"malformed change record: {raw!r}")
                 continue
-            status, paths = raw[0].strip(), [p for p in raw[1:] if p != ""]
+            status, paths = raw[0].strip(), list(raw[1:])
         elif isinstance(raw, str):
             if not raw.strip():
                 continue
@@ -234,10 +234,16 @@ def validate_pr_changes(author: str, name_status_lines: list[str]) -> dict[str, 
             status = parts[0].strip()
             # Paths are NOT stripped: a leading/trailing space is a legal filename byte
             # git emits verbatim, and trimming it would let `main.py ` — a different
-            # file — satisfy the {main.py, submission.json} allowlist. Empty fields are
-            # dropped so the arity check below can catch a malformed record.
-            paths = [p for p in parts[1:] if p != ""]
+            # file — satisfy the {main.py, submission.json} allowlist.
+            paths = parts[1:]
         else:
+            continue
+        # Empty fields are NOT silently dropped. Filtering them first would defeat the
+        # arity check below: `D\tdocs/stale.md\t` and ('D','docs/stale.md','') would each
+        # collapse to a well-formed one-path record instead of being rejected as
+        # malformed. An empty path field is never something a gate should interpret.
+        if any(p == "" for p in paths):
+            errors.append(f"malformed record for status {status!r}: empty path field")
             continue
         # A path is a *submission* only if it lives in a per-entrant subdirectory:
         # league/submissions/<identity>/<file> (>=2 segments after the prefix). Directory

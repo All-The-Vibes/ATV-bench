@@ -487,7 +487,9 @@ def validate_pr_paths_cmd(
     else:
         raw_bytes = sys.stdin.buffer.read()
     text = raw_bytes.decode("utf-8", "surrogateescape")
-    lines = [ln.rstrip("\n") for ln in text.splitlines() if ln.strip()]
+    # rstrip the record TERMINATOR only (splitlines already removed \n; \r survives a
+    # CRLF file). The path itself is never stripped — see the call sites below.
+    lines = [ln.rstrip("\r\n") for ln in text.splitlines() if ln.strip()]
     if name_status:
         if "\0" in text:
             # `git diff -z --name-status` emits NUL-TERMINATED FIELDS (not records):
@@ -536,7 +538,11 @@ def validate_pr_paths_cmd(
                 typer.echo(f"  - {e}")
             raise typer.Exit(1)
         return
-    report = validate_pr_paths(author, [ln.strip() for ln in lines])
+    # Do NOT strip the path here: a leading/trailing space is a legal filename byte, and
+    # trimming it let `league/submissions/<author>/main.py ` — a different file — satisfy
+    # the {main.py, submission.json} allowlist on this legacy interface. Only the record
+    # terminator is removed (already done when `lines` was built).
+    report = validate_pr_paths(author, lines)
     if report["ok"]:
         typer.echo(f"✓ PR by {author} touches only its own submission files")
     else:
