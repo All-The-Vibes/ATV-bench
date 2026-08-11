@@ -230,7 +230,11 @@ which is the outcome the adversarial setup exists to produce.
   (`Mn`), and the whole TAG block `U+E0000-E007F` — 31 of whose codepoints are category
   `Cn`, unassigned, and so are missed by any category rule.
 
-  **There is no allowlist and no per-file exception.** An earlier draft of this note
+  **There is no allowlist and no per-file exception** — not emptied, but absent: neither
+  `_ALLOWLIST` nor `_FILE_EXCEPTIONS` nor a self-exclusion exists as a symbol, and
+  `test_no_exemption_mechanism_exists` asserts that absence rather than an empty value.
+  (An allowlist pinned empty still leaves a live bypass branch one token from a reopened
+  hole.) An earlier draft of this note
   prescribed "minus a documented allowlist", and the implementation briefly had one; it
   was a covert channel (ZWJ/ZWNJ encode one bit per position, so a run of them carries
   arbitrary text — a 336-character payload passed with zero findings). The per-file

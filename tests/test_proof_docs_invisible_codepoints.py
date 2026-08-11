@@ -52,7 +52,7 @@ _ALLOWED_WHITESPACE = frozenset({0x20, 0x09, 0x0A, 0x0D})
 # Codepoints that terminate a line for numbering purposes (what splitlines() eats).
 _LINE_ADVANCE = frozenset({0x0A, 0x0B, 0x0C, 0x85, 0x2028, 0x2029})
 
-# NO ALLOWLIST.
+# NO ALLOWLIST -- the symbol does not exist, not merely an empty frozenset.
 #
 # A previous revision allowed U+200C/U+200D/U+FE0F globally, justified as "required for
 # Indic/Arabic/emoji rendering" and "the weakest carriers". Both claims were false:
@@ -65,9 +65,10 @@ _LINE_ADVANCE = frozenset({0x0A, 0x0B, 0x0C, 0x85, 0x2028, 0x2029})
 #      and decoded back byte-exact. "Cannot reorder text" is not the same as "cannot
 #      hide text".
 #
-# If a file ever genuinely needs one for rendering, add a narrow per-file exception with
-# the specific justification — not a global hole. See test_zwj_run_is_flagged.
-_ALLOWLIST: frozenset[int] = frozenset()
+# Keeping the mechanism "pinned empty" would leave a one-token edit between here and a
+# reopened hole, and keeps a live bypass branch in the hottest function in this module.
+# So the name and its `cp in _ALLOWLIST` branch are both deleted outright, and
+# test_no_exemption_mechanism_exists asserts the symbol's absence rather than its value.
 
 # Extensions that are text and can carry agent-facing content, plus extensionless files
 # an agent reads and acts on (Dockerfile, CODEOWNERS). Both lists are hand-curated, which
@@ -115,7 +116,7 @@ def _is_invisible(ch: str) -> bool:
     controls; `_EXTRA_INVISIBLE` adds blank-rendering codepoints outside all of those.
     """
     cp = ord(ch)
-    if cp in _ALLOWLIST or cp in _ALLOWED_WHITESPACE:
+    if cp in _ALLOWED_WHITESPACE:  # space/tab/LF/CR -- the only sanctioned blanks
         return False
     return unicodedata.category(ch) in _INVISIBLE_CATEGORIES or cp in _EXTRA_INVISIBLE
 
@@ -258,17 +259,20 @@ def test_zwj_run_is_flagged() -> None:
     )
 
 
-def test_allowlist_is_empty_or_justified() -> None:
-    """The allowlist branch is the most security-relevant line here; test it directly.
+def test_no_codepoint_is_exempt_from_the_detector() -> None:
+    """The detector must have no per-codepoint bypass except real whitespace.
 
-    Previously NO test exercised it, so the branch could be widened or inverted and only
-    unrelated tests would notice. Any future entry must be narrow and deliberate.
+    This previously asserted `_ALLOWLIST == frozenset()`, which passed happily while the
+    bypass branch itself still existed -- an empty allowlist is one token away from a
+    reopened hole. The branch is gone, so this drives the detector directly instead:
+    every codepoint the rule identifies must actually report invisible, with no escape
+    hatch in between.
     """
-    assert _ALLOWLIST == frozenset(), (
-        f"allowlist is non-empty: {sorted(hex(c) for c in _ALLOWLIST)} — every entry is a "
-        "hole in a prompt-injection guard and needs a per-file justification, not a "
-        "global exemption"
-    )
+    known_carriers = [0x200B, 0x200C, 0x200D, 0x2060, 0x202E, 0xFEFF, 0x00AD]
+    for cp in list(_EXTRA_INVISIBLE) + known_carriers:
+        assert _is_invisible(chr(cp)), f"U+{cp:04X} is exempt from the detector"
+    for cp in (0x20, 0x09, 0x0A, 0x0D):
+        assert not _is_invisible(chr(cp)), f"U+{cp:04X} must stay allowed"
 
 
 def test_scanner_scans_itself() -> None:
@@ -286,17 +290,21 @@ def test_scanner_scans_itself() -> None:
 
 
 def test_no_exemption_mechanism_exists() -> None:
-    """Neither a global allowlist nor a per-file exception table may exist.
+    """No exemption symbol may exist at all -- not even defined-and-empty.
 
     Round 1 closed the global allowlist and reopened the same hole one file at a time via
-    `_FILE_EXCEPTIONS`. Both are now absent, and this pins that: an exemption dict is a
-    standing invitation to add "just one more" unscanned file.
+    `_FILE_EXCEPTIONS`. A later revision emptied `_ALLOWLIST` but left the name and its
+    bypass branch in place, so the code still contradicted the claim that no mechanism
+    existed. This asserts the symbols are absent, which an empty-value check cannot do.
     """
-    assert _ALLOWLIST == frozenset()
-    assert not hasattr(sys.modules[__name__], "_FILE_EXCEPTIONS"), (
-        "_FILE_EXCEPTIONS is back -- per-file exemptions are the global allowlist again, "
-        "granted retail instead of wholesale"
-    )
+    module = sys.modules[__name__]
+    for name in ("_ALLOWLIST", "_FILE_EXCEPTIONS", "_SELF"):
+        assert not hasattr(module, name), (
+            f"{name} is back. An empty allowlist is still a bypass branch and one token "
+            "away from a reopened hole; a per-file exception dict is the same global hole "
+            "granted retail instead of wholesale. Rewrite the offending file to avoid the "
+            "literal instead -- escapes and chr() always suffice."
+        )
 
 
 @pytest.mark.parametrize("suffix", [".svg", ".lock"])
@@ -344,3 +352,16 @@ def test_scan_would_flag_a_planted_payload(tmp_path: pathlib.Path) -> None:
         assert _is_text_candidate(path), f"{name} is not even a scan candidate"
         hits = [ch for ch in path.read_text(encoding="utf-8") if _is_invisible(ch)]
         assert hits, f"planted payload in {name} was not flagged"
+
+
+def test_real_tracked_files_reach_the_walk() -> None:
+    """Assert actual tracked files land in `_FILES`, not just that their suffix classifies.
+
+    `test_previously_skipped_suffixes_are_in_scope` only exercises `_is_text_candidate`,
+    so a walk-level exclusion applied *after* classification would still pass it green.
+    `uv.lock` is a real tracked file that the binary skip list previously excluded, so it
+    pins the whole path from `git ls-files` through to the parametrized scan.
+    """
+    covered = {str(p.relative_to(_REPO_ROOT)) for p in _FILES}
+    assert "uv.lock" in covered, "uv.lock is tracked text but never reaches the scan"
+    assert str(pathlib.Path(__file__).resolve().relative_to(_REPO_ROOT)) in covered
