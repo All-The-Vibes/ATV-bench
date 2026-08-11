@@ -611,3 +611,34 @@ def test_legacy_name_only_blank_lines_are_still_ignored(tmp_path):
         app, ["validate-pr-paths", "--author", "entrant", "--paths-file", str(f)]
     )
     assert res.exit_code == 0, res.output
+
+
+def test_copy_into_own_dir_is_confinement_not_status_dependent():
+    """Reviewer B (final round) argued CI must enable `-C` so the C* ban catches a PR
+    byte-copying another entrant's bot. Verified against real git and REJECTED as a
+    change, because it inverts into a worse failure:
+
+    - Without `-C` (CI today) git reports the copy as `A league/submissions/<you>/main.py`
+      — an add of YOUR OWN file. That is precisely what a submission IS, and submissions
+      are public files in this repo, so there is nothing confidential to exfiltrate.
+    - Copying into ANOTHER entrant's directory is already blocked by path confinement,
+      independent of status (asserted below).
+    - Enabling `-C --find-copies-harder` makes git report a legitimate newcomer who
+      starts from the documented example bot as `C100 docs/example_bot.py ->
+      league/submissions/<them>/main.py`. Since C* is banned against league/**, that
+      would reject the primary onboarding path for every new entrant.
+
+    The C* ban still matters for the spelling it CAN see (an explicit copy record from a
+    client or config that emits one); it is simply not the control that stops content
+    reuse. Attribution is a scoring/provenance concern, not a path-guard one.
+    """
+    # A copy into your own dir arrives as a plain add of your own file — allowed.
+    assert validate_pr_changes(
+        "attacker", [("A", "league/submissions/attacker/main.py")]
+    )["ok"] is True
+    # ...but landing it in someone else's dir is blocked no matter the status.
+    for record in [("A", "league/submissions/victim/main.py"),
+                   ("M", "league/submissions/victim/main.py"),
+                   ("C100", "league/submissions/victim/main.py",
+                    "league/submissions/attacker/main.py")]:
+        assert validate_pr_changes("attacker", [record])["ok"] is False, record
