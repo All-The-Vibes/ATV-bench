@@ -462,3 +462,43 @@ def test_cli_invalid_utf8_z_payload_does_not_crash(tmp_path):
     res = _run_z("attacker", b"D\0league/submissions/\xff\xfe/main.py\0", tmp_path)
     assert res.exit_code != 0, res.output
     assert not isinstance(res.exception, UnicodeDecodeError), res.exception
+
+
+# --- record arity + strict -z framing (santa round 3, reviewer B) -------------------
+#
+# Arity was enforced only in the CLI's -z framing, so validate_pr_changes — a PUBLIC
+# function that also consumes raw --name-status text — still accepted malformed records.
+
+
+def test_changes_rename_missing_destination_fails_closed():
+    """`R100\tdocs/old.md` is a rename with no destination. It was accepted as ok."""
+    res = validate_pr_changes("maintainer", ["R100\tdocs/old.md"])
+    assert res["ok"] is False, res
+
+
+def test_changes_extra_path_field_fails_closed():
+    res = validate_pr_changes("maintainer", [("D", "docs/stale.md", "EXTRA")])
+    assert res["ok"] is False, res
+
+
+def test_changes_non_string_field_rejected_not_filtered():
+    """Filtering a non-string field would silently turn a malformed record into a
+    well-formed-looking one."""
+    res = validate_pr_changes("maintainer", [("D", None)])
+    assert res["ok"] is False, res
+
+
+def test_changes_copy_missing_destination_fails_closed():
+    res = validate_pr_changes("maintainer", ["C100\tdocs/old.md"])
+    assert res["ok"] is False, res
+
+
+def test_cli_z_stream_missing_terminator_fails_closed(tmp_path):
+    """A truncated -z stream (no final NUL) must not be normalized into a valid one."""
+    res = _run_z("maintainer", b"A\0docs/stale.md", tmp_path)
+    assert res.exit_code != 0, res.output
+
+
+def test_cli_z_stream_doubled_nul_fails_closed(tmp_path):
+    res = _run_z("maintainer", b"A\0\0docs/stale.md\0", tmp_path)
+    assert res.exit_code != 0, res.output

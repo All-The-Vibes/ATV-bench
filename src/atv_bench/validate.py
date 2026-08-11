@@ -221,10 +221,12 @@ def validate_pr_changes(author: str, name_status_lines: list[str]) -> dict[str, 
         # git's -z output exists precisely to carry it, so re-joining with tabs would
         # either corrupt that path or force rejecting a legitimate maintainer PR.
         if isinstance(raw, (list, tuple)):
-            fields = [f for f in raw if isinstance(f, str)]
-            if not fields:
+            if not raw or not all(isinstance(f, str) for f in raw):
+                # Reject rather than filter: dropping a non-string field would silently
+                # turn a malformed record into a well-formed-looking one.
+                errors.append(f"malformed change record: {raw!r}")
                 continue
-            status, paths = fields[0].strip(), [p for p in fields[1:] if p != ""]
+            status, paths = raw[0].strip(), [p for p in raw[1:] if p != ""]
         elif isinstance(raw, str):
             if not raw.strip():
                 continue
@@ -243,6 +245,26 @@ def validate_pr_changes(author: str, name_status_lines: list[str]) -> dict[str, 
         # is NOT a submission — otherwise the foundational maintainer PR that creates the
         # tree would be misclassified and confined to submission-only paths, rejecting its
         # own .github/** and src/** files.
+        code = status[:1]
+        # Fail CLOSED on anything we do not positively recognize, BEFORE any other test.
+        # Scoping the gate to R/C/D had left every other code (U unmerged, X "bug in
+        # git", B broken pairing) falling through to ALLOW, where main rejected them.
+        if code not in _ALLOWED_STATUS_CODES and code not in _BLOCKED_STATUS_CODES:
+            errors.append(f"unrecognized change status {status!r} for paths {paths}")
+            continue
+        # Enforce exact ARITY for the status. R/C carry two paths (old, new); every other
+        # status carries exactly one. A record with the wrong count is malformed and must
+        # fail closed here rather than only in the -z framing — this function is public
+        # and also consumes raw `--name-status` text, where `R100\tdocs/old.md` (a rename
+        # missing its destination) was previously accepted.
+        want = 2 if code in ("R", "C") else 1
+        if len(paths) != want:
+            errors.append(
+                f"malformed record for status {status!r}: expected {want} path "
+                f"field(s), got {len(paths)}"
+            )
+            continue
+        # A path is a *submission* only if it lives in a per-entrant subdirectory.
         if any(_is_submission_path(p) for p in paths):
             is_submission_pr = True
         # Rename/copy (R*/C*) and delete (D) are never allowed against the LEAGUE tree: a
@@ -251,18 +273,8 @@ def validate_pr_changes(author: str, name_status_lines: list[str]) -> dict[str, 
         # stale doc or renames a src/ module is ordinary plumbing and is not policed here
         # (it goes through normal review). Before this scoping, any PR deleting any file
         # was rejected even when is_submission_pr was False.
-        code = status[:1]
         if code in _BLOCKED_STATUS_CODES and any(_is_league_path(p) for p in paths):
             errors.append(f"disallowed change status {status!r} for paths {paths}")
-            continue
-        # Fail CLOSED on anything we do not positively recognize. Scoping the R/C/D gate
-        # left every other code (U unmerged, X "bug in git", B broken pairing, a malformed
-        # record with no path field at all) falling through to ALLOW, where main had
-        # rejected them. An unrecognized status is exactly the case a gate must not guess
-        # about, so reject rather than pass it to the confinement check.
-        if (code not in _ALLOWED_STATUS_CODES and code not in _BLOCKED_STATUS_CODES) \
-                or not paths:
-            errors.append(f"unrecognized change status {status!r} for paths {paths}")
             continue
         changed_paths.extend(_decode_status_path(p) for p in paths)
     # Only confine a PR that actually touches the submissions tree; plumbing PRs pass.

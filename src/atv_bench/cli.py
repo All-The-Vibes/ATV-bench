@@ -490,12 +490,22 @@ def validate_pr_paths_cmd(
     lines = [ln.rstrip("\n") for ln in text.splitlines() if ln.strip()]
     if name_status:
         if "\0" in text:
-            # `git diff -z --name-status` emits NUL-separated FIELDS (not records):
+            # `git diff -z --name-status` emits NUL-TERMINATED FIELDS (not records):
             #   A\0path\0  M\0path\0  R100\0old\0new\0
             # There is no quoting in this form at all, so no quoted-text format can be
-            # mis-parsed. Re-frame the flat field stream into the tab-joined records
-            # validate_pr_changes already consumes.
-            fields = [f for f in text.split("\0") if f != ""]
+            # mis-parsed. Frame it strictly: the stream MUST end with a NUL, and no field
+            # may be empty. Using split() + dropping empties would erase exactly the
+            # framing evidence that distinguishes a truncated stream (`A\0docs/x.md`,
+            # missing its terminator) from a complete one.
+            if not text.endswith("\0"):
+                typer.echo("✗ PR is not confined to its own submission tree:")
+                typer.echo("  - malformed -z stream: not NUL-terminated (truncated?)")
+                raise typer.Exit(1)
+            fields = text.split("\0")[:-1]  # trailing "" after the final NUL
+            if any(f == "" for f in fields):
+                typer.echo("✗ PR is not confined to its own submission tree:")
+                typer.echo("  - malformed -z stream: empty field (doubled NUL?)")
+                raise typer.Exit(1)
             lines, i = [], 0
             while i < len(fields):
                 status = fields[i]
