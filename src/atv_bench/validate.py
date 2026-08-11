@@ -61,6 +61,106 @@ _SUBMISSIONS_PREFIX = "league/submissions/"
 _LEAGUE_PREFIX = "league/"
 
 
+# `git diff --name-status` statuses that a PR may carry without tripping the R/C/D gate.
+# Anything not in this set and not in _BLOCKED_STATUS_CODES is UNRECOGNIZED and fails
+# closed (U=unmerged, X="bug in git", B=broken pairing all land here). Letting an unknown
+# code fall through to ALLOW would mean any future/odd status silently skips the gate.
+_ALLOWED_STATUS_CODES = frozenset({"A", "M", "T"})
+_BLOCKED_STATUS_CODES = frozenset({"R", "C", "D"})
+
+# Escapes git emits inside a C-quoted path, per quote_c_style() in quote.c.
+_C_ESCAPES = {"a": 7, "b": 8, "f": 12, "n": 10, "r": 13, "t": 9, "v": 11,
+              "\\": 92, '"': 34}
+
+
+def _decode_status_path(path: str) -> str:
+    """Decode one raw `git diff --name-status` path field to the real path it names.
+
+    With core.quotepath at its DEFAULT (on), git wraps any path containing non-ASCII or
+    control bytes in double quotes and octal-escapes those bytes:
+
+        D\t"league/submissions/caf\\303\\251/main.py"
+
+    That literal string is what ci.yml pipes into this guard, and it compares equal to
+    NOTHING: the leading quote defeats the league/ prefix test AND `_is_submission_path`,
+    so the PR was not even classified as a submission PR and the normalizing validator
+    never ran. A GitHub *login* cannot carry an accent (_AUTHOR_RE is ASCII-only), but a
+    *path* can — it is created by the filesystem, and any ASCII attacker can name one.
+
+    Decoding (rather than merely stripping the quotes, which would leave the literal
+    text `caf\\303\\251`) restores the true path, so every downstream check — the gate,
+    the submission classifier, and validate_pr_paths — sees the same bytes git does.
+    """
+    if not isinstance(path, str):
+        return ""
+    # Only the C-quoted wrapper is unwrapped here — the path itself is NOT stripped.
+    # A leading/trailing space is a legal filename character that git emits verbatim, so
+    # trimming it would let `main.py ` (a DIFFERENT file) satisfy the {main.py,
+    # submission.json} allowlist. Framing whitespace is handled by the record splitter.
+    p = path
+    if not (len(p) >= 2 and p.startswith('"') and p.endswith('"')):
+        return p
+    body, out, i = p[1:-1], bytearray(), 0
+    while i < len(body):
+        ch = body[i]
+        if ch != "\\":
+            out.extend(ch.encode("utf-8", "surrogateescape"))
+            i += 1
+            continue
+        nxt = body[i + 1] if i + 1 < len(body) else ""
+        oct3 = body[i + 1:i + 4]
+        if nxt in _C_ESCAPES:
+            out.append(_C_ESCAPES[nxt])
+            i += 2
+        elif len(oct3) == 3 and all(c in "01234567" for c in oct3):
+            # Octal only — `int(oct3, 8)` would raise on a digit 8/9, and a crashing
+            # guard is a worse failure mode than a conservatively-decoded path.
+            out.append(int(oct3, 8) & 0xFF)
+            i += 4
+        else:
+            # Not a git-emitted escape; keep the backslash literally rather than
+            # silently dropping bytes out of a path a security gate is about to judge.
+            out.extend(ch.encode("utf-8", "surrogateescape"))
+            i += 1
+    return out.decode("utf-8", "surrogateescape")
+
+
+def _normalize_status_path(path: str) -> str:
+    """Decode + fold ONE raw name-status path into the form every check compares against.
+
+    This is the single normalization boundary, and BOTH the league/** gate and the
+    submission-PR classifier must go through it. Normalizing only the gate leaves the
+    classifier fail-open, which is a pwn-request hole: a PR spelled
+    `A\tLeague/submissions/me/main.py` + `M\t.github/workflows/ci.yml` was not classified
+    as a submission PR at all, so confinement never ran and it could rewrite the very
+    workflow that scores it.
+
+    Collapsing is done with posixpath.normpath, not by peeling a literal `./` prefix:
+    peeling handles `./league/…` but NOT `.//league/…`, `././league/…`, or `/league/…`,
+    each of which names the same tree. Leading slashes are then dropped so an absolute
+    spelling is still recognized as league. Recognizing MORE paths as league/submission
+    is the fail-closed direction — it can only pull a PR INTO the gate, never out of it.
+    """
+    if not isinstance(path, str):
+        return ""
+    p = _decode_status_path(path)
+    if not p:
+        return ""
+    p = posixpath.normpath(p).lstrip("/")
+    return p.casefold()
+
+
+def _is_league_path(path: str) -> bool:
+    """True if a path names anything under the league tree, spelling-insensitively.
+
+    Beyond decoding, two more spellings resolve to the same file yet defeat a raw
+    prefix test: a leading `./`, and a case variant (`League/`) which is literally the
+    same file on a case-insensitive checkout. Casefolding here is deliberately
+    conservative — it can only ever make a fail-closed gate reject MORE, never less.
+    """
+    return _normalize_status_path(path).startswith(_LEAGUE_PREFIX)
+
+
 def _is_submission_path(path: str) -> bool:
     """True only for a per-entrant submission file league/submissions/<identity>/<file>.
 
@@ -68,8 +168,15 @@ def _is_submission_path(path: str) -> bool:
     within it). Scaffolding placed directly at the submissions root — most notably
     league/submissions/.gitkeep, committed by the foundational PR to materialize the empty
     tree — has only one trailing segment and is deliberately NOT treated as a submission.
+
+    Classification is done on the NORMALIZED path so that `League/submissions/…` and
+    `./league/submissions/…` are recognized as submissions too. Recognizing MORE paths as
+    submissions is the fail-closed direction: it can only ever pull a PR INTO confinement.
     """
-    if not isinstance(path, str) or not path.startswith(_SUBMISSIONS_PREFIX):
+    if not isinstance(path, str):
+        return False
+    path = _normalize_status_path(path)
+    if not path.startswith(_SUBMISSIONS_PREFIX):
         return False
     remainder = path[len(_SUBMISSIONS_PREFIX):]
     return "/" in remainder.strip("/") and remainder.split("/", 1)[0] != ""
@@ -82,15 +189,24 @@ def validate_pr_changes(author: str, name_status_lines: list[str]) -> dict[str, 
     - Detects a "submission PR" = one that touches league/submissions/** at all. Only such
       PRs are confined here; a pure maintainer/plumbing PR (no submissions/**) is passed
       through (is_submission_pr=False) for normal review.
-    - Rejects RENAMES and DELETES (R*/C*/D status) outright: a rename can drag another
-      entrant's bot into your directory, and a delete can remove history/other rows. A
-      submission PR may only ADD or MODIFY its own two files.
+    - Rejects RENAMES, COPIES and DELETES (R*/C*/D status) against the LEAGUE tree: a
+      rename or copy can drag another entrant's bot into your directory, and a delete can
+      remove history/other rows. A submission PR may only ADD or MODIFY its own two files.
+      Scoped to league/** on purpose — a maintainer PR deleting a stale doc or renaming a
+      src/ module is ordinary plumbing and goes through normal review instead. That scope
+      test is applied to a NORMALIZED path (see _normalize_status_path), never to git's
+      raw output, and the same normalization decides submission-PR classification.
+    - Fails CLOSED on any status it does not positively recognize. Only A (add), M
+      (modify) and T (typechange) pass; a submission PR's own files are then confined by
+      validate_pr_paths to {main.py, submission.json}, so T cannot widen what it may touch.
     - Rejects a submission PR that ALSO edits anything outside its own submission files —
       crucially .github/workflows/** (the pwn-request vector where a PR rewrites the very
       workflow that scores it) or league/matches.jsonl.
 
     Each line is a tab-separated `git diff --name-status` record: `<STATUS>\t<path>` for
-    add/modify/delete, or `<STATUS>\t<old>\t<new>` for rename/copy.
+    add/modify/delete, or `<STATUS>\t<old>\t<new>` for rename/copy. Paths may arrive
+    C-quoted (git's default for non-ASCII); they are decoded before any check. CI feeds
+    the `-z` form, which is not quoted at all.
     """
     errors: list[str] = []
     if not isinstance(author, str) or not _AUTHOR_RE.fullmatch(author):
@@ -101,9 +217,14 @@ def validate_pr_changes(author: str, name_status_lines: list[str]) -> dict[str, 
     for raw in name_status_lines:
         if not isinstance(raw, str) or not raw.strip():
             continue
-        parts = raw.split("\t")
+        parts = raw.rstrip("\r\n").split("\t")
         status = parts[0].strip()
-        paths = [p.strip() for p in parts[1:] if p.strip()]
+        # Paths are NOT stripped: a leading/trailing space is a legal filename byte git
+        # emits verbatim, and trimming it would let `main.py ` — a different file —
+        # satisfy the {main.py, submission.json} allowlist. Only a line terminator is
+        # removed above. Empty fields are dropped so the arity check below can catch a
+        # malformed record.
+        paths = [p for p in parts[1:] if p != ""]
         # A path is a *submission* only if it lives in a per-entrant subdirectory:
         # league/submissions/<identity>/<file> (>=2 segments after the prefix). Directory
         # scaffolding at the submissions ROOT itself (e.g. league/submissions/.gitkeep)
@@ -119,10 +240,19 @@ def validate_pr_changes(author: str, name_status_lines: list[str]) -> dict[str, 
         # (it goes through normal review). Before this scoping, any PR deleting any file
         # was rejected even when is_submission_pr was False.
         code = status[:1]
-        if code in ("R", "C", "D") and any(p.startswith(_LEAGUE_PREFIX) for p in paths):
+        if code in _BLOCKED_STATUS_CODES and any(_is_league_path(p) for p in paths):
             errors.append(f"disallowed change status {status!r} for paths {paths}")
             continue
-        changed_paths.extend(paths)
+        # Fail CLOSED on anything we do not positively recognize. Scoping the R/C/D gate
+        # left every other code (U unmerged, X "bug in git", B broken pairing, a malformed
+        # record with no path field at all) falling through to ALLOW, where main had
+        # rejected them. An unrecognized status is exactly the case a gate must not guess
+        # about, so reject rather than pass it to the confinement check.
+        if (code not in _ALLOWED_STATUS_CODES and code not in _BLOCKED_STATUS_CODES) \
+                or not paths:
+            errors.append(f"unrecognized change status {status!r} for paths {paths}")
+            continue
+        changed_paths.extend(_decode_status_path(p) for p in paths)
     # Only confine a PR that actually touches the submissions tree; plumbing PRs pass.
     if is_submission_pr:
         inner = validate_pr_paths(author, changed_paths)

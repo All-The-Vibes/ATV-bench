@@ -478,12 +478,46 @@ def validate_pr_paths_cmd(
     Legacy --name-only mode (no flag) confines against a plain path list.
     """
     from atv_bench.validate import validate_pr_paths, validate_pr_changes
+    # Read BYTES and decode with surrogateescape. git pathnames are arbitrary bytes, so a
+    # strict-UTF-8 read raises UnicodeDecodeError on a legal filename — a traceback, not a
+    # controlled verdict. surrogateescape keeps such bytes round-trippable so the gate
+    # returns a deterministic allow/reject instead of crashing.
     if paths_file is not None:
-        text = paths_file.read_text()
+        raw_bytes = paths_file.read_bytes()
     else:
-        text = sys.stdin.read()
+        raw_bytes = sys.stdin.buffer.read()
+    text = raw_bytes.decode("utf-8", "surrogateescape")
     lines = [ln.rstrip("\n") for ln in text.splitlines() if ln.strip()]
     if name_status:
+        if "\0" in text:
+            # `git diff -z --name-status` emits NUL-separated FIELDS (not records):
+            #   A\0path\0  M\0path\0  R100\0old\0new\0
+            # There is no quoting in this form at all, so no quoted-text format can be
+            # mis-parsed. Re-frame the flat field stream into the tab-joined records
+            # validate_pr_changes already consumes.
+            fields = [f for f in text.split("\0") if f != ""]
+            lines, i = [], 0
+            while i < len(fields):
+                status = fields[i]
+                # Exact arity: R/C carry TWO paths, everything else ONE. A truncated
+                # record must FAIL CLOSED — without this, `R100\0docs/stale.md\0` framed
+                # as a one-path rename outside league/** was accepted with ok=True.
+                want = 2 if status[:1] in ("R", "C") else 1
+                got = fields[i + 1:i + 1 + want]
+                if len(got) != want:
+                    typer.echo("✗ PR is not confined to its own submission tree:")
+                    typer.echo(f"  - malformed -z record {status!r}: expected {want} "
+                               f"path field(s), got {len(got)}")
+                    raise typer.Exit(1)
+                if any("\t" in f for f in got):
+                    # -z exists precisely to carry paths a tab-delimited format cannot.
+                    # Rather than silently corrupt one, reject it.
+                    typer.echo("✗ PR is not confined to its own submission tree:")
+                    typer.echo(f"  - path contains a tab, which this gate cannot "
+                               f"unambiguously judge: {got!r}")
+                    raise typer.Exit(1)
+                lines.append("\t".join([status, *got]))
+                i += 1 + want
         report = validate_pr_changes(author, lines)
         if report["ok"]:
             kind = "submission PR (confined to own files)" if report["is_submission_pr"] \
