@@ -463,8 +463,9 @@ def validate_pr_paths_cmd(
     ),
     name_status: bool = typer.Option(
         False, "--name-status",
-        help="Input is `git diff --name-status` output (rejects renames/deletes and "
-             "confines only submission PRs). Preferred for the always-on CI gate.",
+        help="Input is `git diff --name-status` output (rejects renames, copies and "
+             "deletes against league/**, and confines submission PRs to their own "
+             "files). Preferred for the always-on CI gate; use with -z.",
     ),
 ) -> None:
     """Fail closed if a community submission PR touches anything outside its own tree.
@@ -478,12 +479,61 @@ def validate_pr_paths_cmd(
     Legacy --name-only mode (no flag) confines against a plain path list.
     """
     from atv_bench.validate import validate_pr_paths, validate_pr_changes
+    # Read BYTES and decode with surrogateescape. git pathnames are arbitrary bytes, so a
+    # strict-UTF-8 read raises UnicodeDecodeError on a legal filename — a traceback, not a
+    # controlled verdict. surrogateescape keeps such bytes round-trippable so the gate
+    # returns a deterministic allow/reject instead of crashing.
     if paths_file is not None:
-        text = paths_file.read_text()
+        raw_bytes = paths_file.read_bytes()
     else:
-        text = sys.stdin.read()
-    lines = [ln.rstrip("\n") for ln in text.splitlines() if ln.strip()]
+        raw_bytes = sys.stdin.buffer.read()
+    text = raw_bytes.decode("utf-8", "surrogateescape")
+    # Keep EVERY record; drop only the terminator (splitlines removed \n; \r survives a
+    # CRLF file). Filtering on `ln.strip()` would silently discard a whitespace-only
+    # pathname — legal on POSIX — hiding an outside-tree path from the guard entirely.
+    # The path itself is never stripped; see the call sites below.
+    lines = [ln.rstrip("\r\n") for ln in text.splitlines()]
+    if not name_status:
+        # Legacy --name-only: a truly empty line carries no path and is just formatting;
+        # a whitespace-only line IS a path and must reach the validator to be rejected.
+        lines = [ln for ln in lines if ln != ""]
     if name_status:
+        if "\0" in text:
+            # `git diff -z --name-status` emits NUL-TERMINATED FIELDS (not records):
+            #   A\0path\0  M\0path\0  R100\0old\0new\0
+            # There is no quoting in this form at all, so no quoted-text format can be
+            # mis-parsed. Frame it strictly: the stream MUST end with a NUL, and no field
+            # may be empty. Using split() + dropping empties would erase exactly the
+            # framing evidence that distinguishes a truncated stream (`A\0docs/x.md`,
+            # missing its terminator) from a complete one.
+            if not text.endswith("\0"):
+                typer.echo("✗ PR is not confined to its own submission tree:")
+                typer.echo("  - malformed -z stream: not NUL-terminated (truncated?)")
+                raise typer.Exit(1)
+            fields = text.split("\0")[:-1]  # trailing "" after the final NUL
+            if any(f == "" for f in fields):
+                typer.echo("✗ PR is not confined to its own submission tree:")
+                typer.echo("  - malformed -z stream: empty field (doubled NUL?)")
+                raise typer.Exit(1)
+            lines, i = [], 0
+            while i < len(fields):
+                status = fields[i]
+                # Exact arity: R/C carry TWO paths, everything else ONE. A truncated
+                # record must FAIL CLOSED — without this, `R100\0docs/stale.md\0` framed
+                # as a one-path rename outside league/** was accepted with ok=True.
+                want = 2 if status[:1] in ("R", "C") else 1
+                got = fields[i + 1:i + 1 + want]
+                if len(got) != want:
+                    typer.echo("✗ PR is not confined to its own submission tree:")
+                    typer.echo(f"  - malformed -z record {status!r}: expected {want} "
+                               f"path field(s), got {len(got)}")
+                    raise typer.Exit(1)
+                # Keep the record STRUCTURED — never re-join with tabs. A pathname may
+                # legally contain a tab, and -z exists precisely to carry it
+                # unambiguously; re-joining would either corrupt that path or force
+                # rejecting a legitimate maintainer PR that touches a tab-named file.
+                lines.append((status, *got))
+                i += 1 + want
         report = validate_pr_changes(author, lines)
         if report["ok"]:
             kind = "submission PR (confined to own files)" if report["is_submission_pr"] \
@@ -495,7 +545,11 @@ def validate_pr_paths_cmd(
                 typer.echo(f"  - {e}")
             raise typer.Exit(1)
         return
-    report = validate_pr_paths(author, [ln.strip() for ln in lines])
+    # Do NOT strip the path here: a leading/trailing space is a legal filename byte, and
+    # trimming it let `league/submissions/<author>/main.py ` — a different file — satisfy
+    # the {main.py, submission.json} allowlist on this legacy interface. Only the record
+    # terminator is removed (already done when `lines` was built).
+    report = validate_pr_paths(author, lines)
     if report["ok"]:
         typer.echo(f"✓ PR by {author} touches only its own submission files")
     else:

@@ -76,7 +76,10 @@ jobs:
           # Three-dot: files the PR changed since it diverged from base (not every path
           # where the branches differ). name-status surfaces rename/copy/delete so the
           # gate can reject them and see both sides of a rename.
-          git diff --name-status "$BASE_SHA"..."$HEAD_SHA" > changes.txt
-          echo "PR name-status:"; cat changes.txt
+          # -z: NUL-separated fields with NO C-quoting. Without it git quotes any
+          # non-ASCII path (core.quotepath defaults on) as "league/…caf\303\251/main.py",
+          # a spelling that slipped the league/ prefix gate entirely.
+          git diff -z --name-status "$BASE_SHA"..."$HEAD_SHA" > changes.txt
+          echo "PR name-status:"; tr '\0' '\t' < changes.txt
           python -m atv_bench.cli validate-pr-paths --author "$AUTHOR" \
             --name-status --paths-file changes.txt

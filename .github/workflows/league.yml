@@ -80,11 +80,17 @@ jobs:
           git -C pr-src fetch --no-tags --depth=1 origin "$BASE_SHA" || true
           # Changed paths of the PR head vs its merge base, computed from untrusted tree
           # metadata only (names, never contents). The validator confines them.
-          git -C pr-src diff --name-only "$BASE_SHA"...HEAD > changed-paths.txt || \
-            git -C pr-src diff --name-only "$BASE_SHA" HEAD > changed-paths.txt
-          echo "PR changed paths:"; cat changed-paths.txt
+          # -z --name-status, matching ci.yml: name-status surfaces renames/copies/deletes
+          # so the gate can reject them, and -z emits NUL-separated fields with NO
+          # C-quoting — git otherwise quotes any non-ASCII path (core.quotepath defaults
+          # on) as "league/…caf\303\251/main.py", a spelling that slipped the gate.
+          # This is the workflow that actually EXECUTES the untrusted bot, so it must not
+          # run a weaker check than the always-on PR gate.
+          git -C pr-src diff -z --name-status "$BASE_SHA"...HEAD > changed-paths.txt || \
+            git -C pr-src diff -z --name-status "$BASE_SHA" HEAD > changed-paths.txt
+          echo "PR changed paths:"; tr '\0' '\t' < changed-paths.txt
           python -m atv_bench.cli validate-pr-paths --author "$AUTHOR" \
-            --paths-file changed-paths.txt
+            --name-status --paths-file changed-paths.txt
 
       - name: Extract the bot file into the sandbox mount dir
         id: extract
