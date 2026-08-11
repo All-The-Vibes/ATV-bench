@@ -127,7 +127,9 @@ class LeagueStore:
     def _submission_path(self, identity: str) -> Path:
         return self.submissions_dir / identity / self._RECORD_FILENAME
 
-    def add_submission(self, submission: dict[str, Any], *, bot_source: str | None = None) -> None:
+    def add_submission(
+        self, submission: dict[str, Any], *, bot_source: str | bytes | None = None
+    ) -> None:
         missing = _SUBMISSION_KEYS - set(submission)
         if missing:
             raise ValueError(f"submission missing keys: {sorted(missing)}")
@@ -136,16 +138,28 @@ class LeagueStore:
             raise ValueError(f"unsafe identity: {identity!r}")
         path = self._submission_path(identity)
         path.parent.mkdir(parents=True, exist_ok=True)
-        # Pin utf-8 on both writes (issue #32): these are bare text writes, so on a
-        # non-UTF-8 host the locale codepage would mangle a non-ASCII record or bot. The
-        # sibling main.py bytes back the re-derived bot_sha256, so a codepage-mangled
-        # write diverges the published hash exactly as the CRLF defect did.
-        path.write_text(json.dumps(submission, indent=2, sort_keys=True), encoding="utf-8")
+        # Byte-exact writes on both paths (issue #32, santa round-2). `write_text` opens
+        # with newline=None, which translates "\n" -> os.linesep ON WRITE, and with no
+        # encoding= it also picks up the locale codepage. Pinning encoding= alone fixes
+        # only the codec half -- the same half-fix this PR faults #29 for. The sibling
+        # main.py bytes back the re-derived bot_sha256, so either half diverges the
+        # published hash on a Windows host. Encode explicitly and write bytes.
+        path.write_bytes(json.dumps(submission, indent=2, sort_keys=True).encode("utf-8"))
         # A publishable row requires committed bot bytes (santa round-6): co-write the
         # sibling main.py so a store-seeded submission has the same publishable shape as a
         # live-submitted / match-job one. Its bytes back the re-derived bot_sha256 on load.
-        (path.parent / "main.py").write_text(
-            bot_source or "def move(state):\n    return 'up'\n", encoding="utf-8")
+        # Byte-exact contract: only an ABSENT bot_source falls back to the canned default.
+        # An explicit empty payload is written as-is -- a falsy guard here would silently
+        # substitute the default bot for b"" while the caller's bot_sha256 hashed the
+        # empty file, desynchronizing the published hash from the committed bytes.
+        default_bot = b"def move(state):\n    return 'up'\n"
+        if bot_source is None:
+            bot_bytes = default_bot
+        elif isinstance(bot_source, bytes):
+            bot_bytes = bot_source
+        else:
+            bot_bytes = bot_source.encode("utf-8")
+        (path.parent / "main.py").write_bytes(bot_bytes)
 
     def load_submissions(self) -> dict[str, dict[str, Any]]:
         """Strict loader (validators): RAISE on the first malformed entrant.

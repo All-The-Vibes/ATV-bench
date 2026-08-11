@@ -19,6 +19,7 @@ import json
 import os
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -205,46 +206,144 @@ def test_git_preserves_crlf_bot_through_commit_under_autocrlf(tmp_path):
     assert hashlib.sha256(blob.stdout).hexdigest() == hashlib.sha256(_CRLF_BOT).hexdigest()
 
 
-def test_store_add_submission_pins_utf8_when_writing_bot_and_record(tmp_path):
+def test_store_add_submission_writes_bot_and_record_byte_exactly(tmp_path):
     """`LeagueStore.add_submission` writes submission.json and the sibling main.py whose
-    bytes back the re-derived `bot_sha256` (store.py:139,143). Both are bare `write_text()`
-    with no `encoding=`, so on a non-UTF-8 host a non-ASCII bot or record is mangled or
-    raises -- the same locale-codepage defect class as submit.py:367.
+    bytes back the re-derived `bot_sha256` (store.py). Both must be byte-exact.
 
-    Newline translation is NOT the risk on this path (write_text preserves an explicit
-    \\r\\n); the encoding is. Assert the source pins it rather than asserting behaviour
-    that is already correct on a UTF-8 host and would pass green-on-arrival.
+    `write_text` opens with newline=None, so "\\n" becomes os.linesep ON WRITE, and with
+    no encoding= the locale codepage applies. Pinning encoding= alone fixes only the
+    codec half -- the same half-fix this PR faults #29 for. Assert the bytes on disk,
+    not the source text, so the test goes red on a mangled write regardless of how the
+    call is formatted. The companion test below covers the newline half, which this one
+    cannot observe on a Linux host where os.linesep is already "\\n".
     """
+    from atv_bench.store import LeagueStore
+
+    crlf_bot = "def move(s):\r\n    return 'up'\r\n"
+    rec = {
+        "identity": "octocat", "game": "snake",
+        "bot_sha256": hashlib.sha256(crlf_bot.encode("utf-8")).hexdigest(),
+        "fingerprint": "fp", "pr_url": "https://example.com/pr/1",
+        "logs_url": "https://example.com/logs/1",
+    }
+    store = LeagueStore(str(tmp_path))
+    store.add_submission(rec, bot_source=crlf_bot)
+
+    bot_path = tmp_path / "submissions" / "octocat" / "main.py"
+    assert bot_path.read_bytes() == crlf_bot.encode("utf-8"), (
+        "add_submission mangled the bot bytes that back bot_sha256"
+    )
+    assert (
+        hashlib.sha256(bot_path.read_bytes()).hexdigest() == rec["bot_sha256"]
+    ), "committed bot bytes no longer hash to the published bot_sha256"
+
+    record_path = tmp_path / "submissions" / "octocat" / "submission.json"
+    assert record_path.read_bytes() == json.dumps(
+        rec, indent=2, sort_keys=True
+    ).encode("utf-8"), "add_submission did not write the record byte-exactly"
+
+
+def test_store_add_submission_writes_an_explicit_empty_bot_verbatim(tmp_path):
+    """Only an ABSENT bot_source falls back to the canned default bot.
+
+    A falsy guard (`if not bot_source`) would substitute the default for an explicit
+    b"" / "" while the caller's bot_sha256 hashed the empty file -- silently
+    desynchronizing the published hash from the committed bytes, which is the exact
+    class of defect this PR exists to close.
+    """
+    from atv_bench.store import LeagueStore
+
+    for i, empty in enumerate((b"", "")):
+        ident = f"octocat{i}"
+        rec = {
+            "identity": ident, "game": "snake",
+            "bot_sha256": hashlib.sha256(b"").hexdigest(),
+            "fingerprint": "fp", "pr_url": "https://example.com/pr/1",
+            "logs_url": "https://example.com/logs/1",
+        }
+        LeagueStore(str(tmp_path)).add_submission(rec, bot_source=empty)
+        written = (tmp_path / "submissions" / ident / "main.py").read_bytes()
+        assert written == b"", (
+            f"explicit empty bot_source={empty!r} was replaced by the default bot; "
+            "committed bytes no longer match the published bot_sha256"
+        )
+        assert hashlib.sha256(written).hexdigest() == rec["bot_sha256"]
+
+
+def test_store_add_submission_defaults_only_when_bot_source_is_absent(tmp_path):
+    """The default-bot fallback still applies when bot_source is omitted entirely."""
+    from atv_bench.store import LeagueStore
+
+    rec = {
+        "identity": "octocat", "game": "snake",
+        "bot_sha256": "0" * 64, "fingerprint": "fp",
+        "pr_url": "https://example.com/pr/1", "logs_url": "https://example.com/logs/1",
+    }
+    LeagueStore(str(tmp_path)).add_submission(rec)
+    written = (tmp_path / "submissions" / "octocat" / "main.py").read_bytes()
+    assert written == b"def move(state):\n    return 'up'\n"
+
+
+def test_store_add_submission_is_byte_exact_on_a_crlf_host():
+    """Platform-independent proof of the newline half.
+
+    On Linux os.linesep is "\\n", so a text-mode write is accidentally byte-exact and the
+    behavioural test above cannot distinguish write_text from write_bytes here. Monkey-
+    patching os.linesep does not help either -- the io module captures it below the Python
+    level, so a patched write_text still emits "\\n" and such a test would itself be
+    vacuous. Assert the call form instead, via AST so that reformatting the call (the
+    exact hole that made the previous source-grep tests green-on-arrival) cannot hide it.
+    """
+    import ast
     import inspect
 
     from atv_bench.store import LeagueStore
 
-    src = inspect.getsource(LeagueStore.add_submission)
-    writes = [ln.strip() for ln in src.splitlines() if ".write_text(" in ln]
-    assert writes, "expected write_text calls in add_submission"
-    unpinned = [ln for ln in writes if "encoding=" not in ln and not ln.endswith("(")]
-    assert not unpinned, (
-        "add_submission must pin encoding=utf-8 when writing the record and the bot "
-        f"bytes that back bot_sha256; unpinned: {unpinned}"
+    tree = ast.parse(textwrap.dedent(inspect.getsource(LeagueStore.add_submission)))
+    text_writes = [
+        ast.unparse(node) for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "write_text"
+    ]
+    assert not text_writes, (
+        "add_submission must use write_bytes for the record and the bot bytes that back "
+        f"bot_sha256 -- write_text translates newlines on Windows: {text_writes}"
     )
 
 
-def test_backfill_rewrite_of_record_is_utf8(tmp_path):
-    """The PR-url backfill rewrites submission.json (submit.py:400) with a bare
-    `write_text()`. On a non-UTF-8 host a record carrying non-ASCII (e.g. a model or skill
-    name) raises UnicodeEncodeError there. That path is inside a try/except AtvError, so
-    the error escapes uncaught AFTER the PR is already open."""
+def test_backfill_rewrite_of_record_is_byte_exact():
+    """The PR-url backfill rewrites submission.json (submit.py). json.dumps defaults to
+    ensure_ascii=True, so the codepage risk this test previously claimed is NOT reachable
+    on this path -- but indent=2 emits "\\n", and a text-mode write translates those to
+    os.linesep on Windows. Assert the reachable half: the record write must be binary.
+
+    Source-level assertion (not behavioural) because the backfill sits inside
+    open_submission_pr's gh/git orchestration; the surrounding path is covered by the
+    live-submit tests. The continuation-line exemption that made the previous version
+    vacuous is gone: the source is parsed with `ast`, so the call is matched as a node
+    rather than a text line and reformatting it cannot hide an unpinned write.
+    """
+    import ast
     import inspect
 
     from atv_bench import submit as submit_mod
 
     src = inspect.getsource(submit_mod.open_submission_pr)
-    backfill_writes = [
-        ln.strip() for ln in src.splitlines()
-        if "write_text" in ln and "submission.json" in ln
+    tree = ast.parse(textwrap.dedent(src))
+
+    record_writes = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"write_text", "write_bytes"}
+        and "submission.json" in ast.unparse(node.func.value)
     ]
-    assert backfill_writes, "expected a submission.json write in the backfill path"
-    for ln in backfill_writes:
-        assert "encoding=" in ln or ln.endswith("("), (
-            f"submission.json write must pin encoding=utf-8: {ln}"
-        )
+    assert record_writes, "expected a submission.json write in open_submission_pr"
+    text_writes = [
+        ast.unparse(n) for n in record_writes if n.func.attr == "write_text"
+    ]
+    assert not text_writes, (
+        "submission.json must be written with write_bytes -- write_text translates "
+        f"json.dumps(indent=2) newlines to os.linesep on Windows: {text_writes}"
+    )

@@ -372,8 +372,12 @@ def open_submission_pr(*, record: dict[str, Any], bot_path: str, identity: str,
     # raises ValueError -- taking the WHOLE league down, not just this row. Binary IO
     # closes both halves.
     (dest / "main.py").write_bytes(Path(bot_path).read_bytes())
-    (dest / "submission.json").write_text(
-        json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
+    # The record is written byte-exactly too. json.dumps is ensure_ascii=True, so the
+    # codepage half is genuinely unreachable here -- but indent=2 emits "\n", and
+    # write_text (newline=None) translates those to os.linesep on a Windows host. That
+    # is the reachable half: the committed record bytes differ from what was written.
+    (dest / "submission.json").write_bytes(
+        json.dumps(record, indent=2, sort_keys=True).encode("utf-8"))
 
     _run_or_raise(runner, ["git", "checkout", "-b", branch], cwd=str(wt))
     _run_or_raise(runner, ["git", "add", "league/submissions"], cwd=str(wt))
@@ -397,8 +401,8 @@ def open_submission_pr(*, record: dict[str, Any], bot_path: str, identity: str,
     if pr_url:
         try:
             updated = {**record, "pr_url": pr_url}
-            (dest / "submission.json").write_text(
-                json.dumps(updated, indent=2, sort_keys=True), encoding="utf-8")
+            (dest / "submission.json").write_bytes(
+                json.dumps(updated, indent=2, sort_keys=True).encode("utf-8"))
             _run_or_raise(runner, ["git", "add", "league/submissions"], cwd=str(wt))
             _run_or_raise(runner, ["git", "commit", "-m", f"league: backfill PR url for {ident}"], cwd=str(wt))
             _run_or_raise(runner, ["git", "push", "origin", branch], cwd=str(wt))
