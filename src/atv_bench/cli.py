@@ -509,14 +509,11 @@ def validate_pr_paths_cmd(
                     typer.echo(f"  - malformed -z record {status!r}: expected {want} "
                                f"path field(s), got {len(got)}")
                     raise typer.Exit(1)
-                if any("\t" in f for f in got):
-                    # -z exists precisely to carry paths a tab-delimited format cannot.
-                    # Rather than silently corrupt one, reject it.
-                    typer.echo("✗ PR is not confined to its own submission tree:")
-                    typer.echo(f"  - path contains a tab, which this gate cannot "
-                               f"unambiguously judge: {got!r}")
-                    raise typer.Exit(1)
-                lines.append("\t".join([status, *got]))
+                # Keep the record STRUCTURED — never re-join with tabs. A pathname may
+                # legally contain a tab, and -z exists precisely to carry it
+                # unambiguously; re-joining would either corrupt that path or force
+                # rejecting a legitimate maintainer PR that touches a tab-named file.
+                lines.append((status, *got))
                 i += 1 + want
         report = validate_pr_changes(author, lines)
         if report["ok"]:

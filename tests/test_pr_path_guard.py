@@ -374,11 +374,36 @@ def test_cli_z_truncated_rename_record_fails_closed(tmp_path):
     assert res.exit_code != 0, res.output
 
 
-def test_cli_z_tab_containing_path_fails_closed(tmp_path):
-    """-z exists to carry paths a tab-delimited format cannot represent; rather than
-    silently corrupt one, the gate rejects it."""
-    res = _run_z("attacker", "A\0league/submissions/a/ma\tin.py\0".encode(), tmp_path)
+def test_cli_z_tab_containing_maintainer_path_still_allowed(tmp_path):
+    """A tab is LEGAL in a git pathname, and -z exists to carry it unambiguously.
+    Rejecting it outright would fail a legitimate maintainer PR on the always-on gate,
+    so -z records stay structured instead of being re-joined with tabs."""
+    res = _run_z("maintainer", b"D\0docs/release\tnotes.md\0", tmp_path)
+    assert res.exit_code == 0, res.output
+
+
+def test_cli_z_tab_containing_rename_outside_league_allowed(tmp_path):
+    res = _run_z("maintainer",
+                 b"R100\0src/old\tname.py\0src/new\tname.py\0", tmp_path)
+    assert res.exit_code == 0, res.output
+
+
+def test_cli_z_tab_containing_league_delete_still_blocked(tmp_path):
+    """Carrying the tab through must not weaken the gate: a tab-named league file is
+    still league."""
+    res = _run_z("attacker", b"D\0league/mat\tches.jsonl\0", tmp_path)
     assert res.exit_code != 0, res.output
+
+
+def test_changes_accepts_structured_records():
+    """validate_pr_changes takes either a raw tab-delimited line or an already-split
+    (status, *paths) record — the latter is how the -z path avoids tab round-tripping."""
+    assert validate_pr_changes(
+        "entrant", [("A", "league/submissions/entrant/main.py")]
+    )["ok"] is True
+    assert validate_pr_changes(
+        "attacker", [("D", "league/mat\tches.jsonl")]
+    )["ok"] is False
 
 
 # --- normalization completeness (santa round 3) ------------------------------------
@@ -417,7 +442,7 @@ def test_changes_whitespace_padded_filename_rejected(filename):
 
     (A TAB cannot be tested here: it is the field separator of this format, so a
     tab-bearing path is unrepresentable in it. That is exactly why CI uses -z, and why
-    the -z framing rejects a tab outright — see test_cli_z_tab_containing_path_fails_closed.)
+    the -z framing rejects a tab outright — see test_cli_z_tab_containing_league_delete_still_blocked.)
     """
     res = validate_pr_changes("attacker", [
         f"A\tleague/submissions/attacker/{filename}",

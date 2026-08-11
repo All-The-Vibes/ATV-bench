@@ -215,16 +215,28 @@ def validate_pr_changes(author: str, name_status_lines: list[str]) -> dict[str, 
     changed_paths: list[str] = []
     is_submission_pr = False
     for raw in name_status_lines:
-        if not isinstance(raw, str) or not raw.strip():
+        # A record arrives either as a raw tab-delimited LINE (legacy/text input) or, from
+        # the -z path, as an already-split (status, *paths) SEQUENCE. Accepting the split
+        # form keeps -z end-to-end structured: a pathname may legally contain a tab, and
+        # git's -z output exists precisely to carry it, so re-joining with tabs would
+        # either corrupt that path or force rejecting a legitimate maintainer PR.
+        if isinstance(raw, (list, tuple)):
+            fields = [f for f in raw if isinstance(f, str)]
+            if not fields:
+                continue
+            status, paths = fields[0].strip(), [p for p in fields[1:] if p != ""]
+        elif isinstance(raw, str):
+            if not raw.strip():
+                continue
+            parts = raw.rstrip("\r\n").split("\t")
+            status = parts[0].strip()
+            # Paths are NOT stripped: a leading/trailing space is a legal filename byte
+            # git emits verbatim, and trimming it would let `main.py ` — a different
+            # file — satisfy the {main.py, submission.json} allowlist. Empty fields are
+            # dropped so the arity check below can catch a malformed record.
+            paths = [p for p in parts[1:] if p != ""]
+        else:
             continue
-        parts = raw.rstrip("\r\n").split("\t")
-        status = parts[0].strip()
-        # Paths are NOT stripped: a leading/trailing space is a legal filename byte git
-        # emits verbatim, and trimming it would let `main.py ` — a different file —
-        # satisfy the {main.py, submission.json} allowlist. Only a line terminator is
-        # removed above. Empty fields are dropped so the arity check below can catch a
-        # malformed record.
-        paths = [p for p in parts[1:] if p != ""]
         # A path is a *submission* only if it lives in a per-entrant subdirectory:
         # league/submissions/<identity>/<file> (>=2 segments after the prefix). Directory
         # scaffolding at the submissions ROOT itself (e.g. league/submissions/.gitkeep)
