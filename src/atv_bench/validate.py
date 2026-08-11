@@ -70,8 +70,9 @@ _BLOCKED_STATUS_CODES = frozenset({"R", "C", "D"})
 # Statuses are matched as EXACT tokens, never by first character. `status[:1]` treats
 # `MALFORMED` as a plain modify, so `MALFORMED\tleague/submissions/x/main.py` sailed
 # through a fail-closed gate. A/M/T/D/U/X/B stand alone; only rename/copy carry a
-# similarity score (R100, C75) — and git writes nothing else.
-_STATUS_RE = re.compile(r"(?:[AMTD]|[RC][0-9]{0,3})\Z")
+# similarity score, which git writes as 0-100 (R100, C75) — never R999. Padding is not
+# accepted either: git emits no surrounding whitespace, so `A ` is not a status git wrote.
+_STATUS_RE = re.compile(r"(?:[AMTD]|[RC](?:100|[0-9]{1,2})?)\Z")
 
 # Escapes git emits inside a C-quoted path, per quote_c_style() in quote.c.
 _C_ESCAPES = {"a": 7, "b": 8, "f": 12, "n": 10, "r": 13, "t": 9, "v": 11,
@@ -240,12 +241,14 @@ def validate_pr_changes(author: str, name_status_lines: list[str]) -> dict[str, 
                 # turn a malformed record into a well-formed-looking one.
                 errors.append(f"malformed change record: {raw!r}")
                 continue
-            status, paths = raw[0].strip(), list(raw[1:])
+            status, paths = raw[0], list(raw[1:])
         elif isinstance(raw, str):
             if not raw.strip():
                 continue
             parts = raw.rstrip("\r\n").split("\t")
-            status = parts[0].strip()
+            # Status is NOT stripped: git emits no padding, so `A ` is not a
+            # token git wrote and must not be normalized into one.
+            status = parts[0]
             # Paths are NOT stripped: a leading/trailing space is a legal filename byte
             # git emits verbatim, and trimming it would let `main.py ` — a different
             # file — satisfy the {main.py, submission.json} allowlist.

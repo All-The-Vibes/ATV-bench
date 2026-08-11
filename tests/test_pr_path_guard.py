@@ -642,3 +642,13 @@ def test_copy_into_own_dir_is_confinement_not_status_dependent():
                    ("C100", "league/submissions/victim/main.py",
                     "league/submissions/attacker/main.py")]:
         assert validate_pr_changes("attacker", [record])["ok"] is False, record
+
+
+@pytest.mark.parametrize("status", ["A ", " A", "R999", "C999", "M "])
+def test_changes_padded_or_impossible_status_rejected(status):
+    """git emits no padding and writes a similarity score of 0-100, so `A ` and `R999`
+    are not tokens git wrote. Stripping the status normalized padding into a valid
+    token; the score bound rejects the impossible ones."""
+    paths = "src/a.py\tsrc/b.py" if status.strip()[:1] in ("R", "C") else "src/a.py"
+    res = validate_pr_changes("maintainer", [f"{status}\t{paths}"])
+    assert res["ok"] is False, res

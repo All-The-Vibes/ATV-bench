@@ -463,8 +463,9 @@ def validate_pr_paths_cmd(
     ),
     name_status: bool = typer.Option(
         False, "--name-status",
-        help="Input is `git diff --name-status` output (rejects renames/deletes and "
-             "confines only submission PRs). Preferred for the always-on CI gate.",
+        help="Input is `git diff --name-status` output (rejects renames, copies and "
+             "deletes against league/**, and confines submission PRs to their own "
+             "files). Preferred for the always-on CI gate; use with -z.",
     ),
 ) -> None:
     """Fail closed if a community submission PR touches anything outside its own tree.
