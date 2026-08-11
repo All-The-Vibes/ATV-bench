@@ -1,0 +1,21 @@
+<html><body style="margin:0;background:#0d1117;font-family:ui-monospace,Menlo,monospace">
+<div style="padding:18px 24px;border-bottom:2px solid #d29922;color:#d29922;font-size:16px;font-weight:600">PR #31 — U+2060 WORD JOINER: detected, fixed, regression-tested</div>
+<pre style="padding:20px 24px;color:#c9d1d9;font-size:13.5px;line-height:1.65;white-space:pre-wrap">$ # PR #31 — U+2060 WORD JOINER on line 217 (the line reporting the ZW-char finding)
+
+$ git show origin/docs/pr-review-2930-report:.../REVIEW_REPORT.md | scan
+  line 217: U+2060 WORD JOINER  &lt;-- BEFORE
+
+$ pytest tests/test_proof_docs_invisible_codepoints.py   # against unfixed report
+  FAILED ...[docs/proof/pr-review-2930/REVIEW_REPORT.md]
+  1 failed, 9 passed
+
+--------------------------------------------------------
+
+$ # AFTER fix
+$ scan again
+  remaining invisible codepoints: 0
+
+$ pytest tests/test_proof_docs_invisible_codepoints.py
+..........                                                               [100%]
+10 passed in 0.03s
+</pre></body></html>

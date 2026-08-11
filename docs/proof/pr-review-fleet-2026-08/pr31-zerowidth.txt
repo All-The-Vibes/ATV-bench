@@ -1,0 +1,18 @@
+$ # PR #31 — U+2060 WORD JOINER on line 217 (the line reporting the ZW-char finding)
+
+$ git show origin/docs/pr-review-2930-report:.../REVIEW_REPORT.md | scan
+  line 217: U+2060 WORD JOINER  <-- BEFORE
+
+$ pytest tests/test_proof_docs_invisible_codepoints.py   # against unfixed report
+  FAILED ...[docs/proof/pr-review-2930/REVIEW_REPORT.md]
+  1 failed, 9 passed
+
+--------------------------------------------------------
+
+$ # AFTER fix
+$ scan again
+  remaining invisible codepoints: 0
+
+$ pytest tests/test_proof_docs_invisible_codepoints.py
+..........                                                               [100%]
+10 passed in 0.03s

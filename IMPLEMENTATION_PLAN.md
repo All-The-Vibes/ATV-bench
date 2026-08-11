@@ -1,6 +1,6 @@
 <!-- /autoplan restore point: ~/.gstack/projects/atv-bench/master-autoplan-restore-20260715-103015.md -->
 
-> ## ⚠️ SUPERSEDED — re-scoped to Community League (Approach A)
+> ## ⚠ SUPERSEDED — re-scoped to Community League (Approach A)
 > This document describes the **v1 local-harness benchmark** (adapters, containerized
 > Portkey runner, local ELO/leaderboard). A later 4-phase dual-voice review (2026-07-15,
 > confidence 9) **re-scoped the shipping v1 to the Community League, Approach A**:

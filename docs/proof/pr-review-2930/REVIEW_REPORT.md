@@ -214,10 +214,37 @@ which is the outcome the adversarial setup exists to produce.
   **Fix: drop `--admin`, use `gh pr merge --auto --squash` so branch protection stays
   authoritative.**
 - **[MEDIUM] AGENT-01** — U+200B ZERO WIDTH SPACE embedded in an LLM-executed prompt
-  string at `wf_pr_review_2324.js:517` ("cleanly/⁠safely resolve"). Almost certainly a
+  string at `wf_pr_review_2324.js:517` ("cleanly/safely resolve"). Almost certainly a
   benign copy-paste artefact (mid-word, not a hidden instruction), but reported because
   invisible codepoints in agent prompt text are exactly the injection carrier AGENT-01
-  exists to catch. Fix: strip it; add a CI grep for U+200B/C/D/FEFF.
+  exists to catch. Fix: strip it; enforce a scan in CI.
+  (Note: an earlier revision of this line prescribed a hand-curated class of
+  U+200B/C/D/FEFF. That class did not include U+2060, which was present in this very
+  file — the prescribed remediation could not have caught the defect sitting inside the
+  document prescribing it. The lesson is not "add U+2060 to the list" but *stop curating
+  a list*: `tests/test_proof_docs_invisible_codepoints.py` now classifies by Unicode
+  category — `Cf` (format), `Zs` (spaces), `Zl`/`Zp` (line/paragraph separators) and `Cc`
+  (controls), minus the four whitespace characters every text file legitimately contains
+  (space, tab, LF, CR), plus `_EXTRA_INVISIBLE` for blank-rendering codepoints outside
+  every one of those categories: the Hangul fillers, Braille blank, variation selectors
+  (`Mn`), and the whole TAG block `U+E0000-E007F` — 31 of whose codepoints are category
+  `Cn`, unassigned, and so are missed by any category rule.
+
+  **There is no allowlist and no per-file exception** — not emptied, but absent: neither
+  `_ALLOWLIST` nor `_FILE_EXCEPTIONS` nor a self-exclusion exists as a symbol, and
+  `test_no_exemption_mechanism_exists` asserts that absence rather than an empty value.
+  (An allowlist pinned empty still leaves a live bypass branch one token from a reopened
+  hole.) An earlier draft of this note
+  prescribed "minus a documented allowlist", and the implementation briefly had one; it
+  was a covert channel (ZWJ/ZWNJ encode one bit per position, so a run of them carries
+  arbitrary text — a 336-character payload passed with zero findings). The per-file
+  exception table that replaced it was the same hole granted retail instead of wholesale.
+  Both are gone: an exception is only needed when a file stores an invisible character
+  *literally*, and a literal is never the only way to write one — the three real cases
+  became `\u200d` escapes and a bare `U+26A0`. The scan covers **every tracked text
+  file**, including `.svg`, `.lock`, and the scanner's own source. That scope matters:
+  this finding's own carrier lives in a `.js` file, which an `.md`-only scan would never
+  have seen.)
 - **[MEDIUM] Identity verification fails OPEN** (`.github/workflows/league-publish.yml:129-131`,
   **pre-existing**, surfaced by the repo-wide pass). When the independent `gh api`
   PR-author lookup fails, the code warns and proceeds on the untrusted artifact-supplied

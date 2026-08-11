@@ -9,7 +9,7 @@
 | Act | Status | Gap |
 |-----|--------|-----|
 | 1. Select two harnesses | ✅ works | `atv-bench harnesses`/`games` list them |
-| 2. Head-to-head Tron | ⚠️ engine supports it, no CLI | `run_match(source_a, source_b)` + `TronEngine` already play two arbitrary bots; arena entrypoint only plays bot-vs-anchor. No command to pit two selected harnesses. |
+| 2. Head-to-head Tron | ⚠ engine supports it, no CLI | `run_match(source_a, source_b)` + `TronEngine` already play two arbitrary bots; arena entrypoint only plays bot-vs-anchor. No command to pit two selected harnesses. |
 | 3. Live game feed | ❌ missing | `run_match` returns one final JSON line; no turn-by-turn rendering. |
 | 4. Leaderboard | ✅ renders | `board --demo` shows ranked rows + fingerprint chips. |
 | 4b. Insights | ❌ missing | No insights panel tying fingerprint tags → ranking. |
