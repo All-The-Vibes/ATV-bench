@@ -70,9 +70,11 @@ _BLOCKED_STATUS_CODES = frozenset({"R", "C", "D"})
 # Statuses are matched as EXACT tokens, never by first character. `status[:1]` treats
 # `MALFORMED` as a plain modify, so `MALFORMED\tleague/submissions/x/main.py` sailed
 # through a fail-closed gate. A/M/T/D/U/X/B stand alone; only rename/copy carry a
-# similarity score, which git writes as 0-100 (R100, C75) — never R999. Padding is not
-# accepted either: git emits no surrounding whitespace, so `A ` is not a status git wrote.
-_STATUS_RE = re.compile(r"(?:[AMTD]|[RC](?:100|[0-9]{1,2})?)\Z")
+# similarity score. git writes that score ZERO-PADDED to three digits (`R075`, `C068`) —
+# confirmed against this repo's own history — and 100 is its maximum, so `R999` is not a
+# token git can emit. Padding is not accepted either: git emits no surrounding
+# whitespace, so `A ` is not a status git wrote.
+_STATUS_RE = re.compile(r"(?:[AMTD]|[RC](?:100|0[0-9]{2}|[0-9]{1,2})?)\Z")
 
 # Escapes git emits inside a C-quoted path, per quote_c_style() in quote.c.
 _C_ESCAPES = {"a": 7, "b": 8, "f": 12, "n": 10, "r": 13, "t": 9, "v": 11,

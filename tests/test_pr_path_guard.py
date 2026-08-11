@@ -559,7 +559,8 @@ def test_changes_status_matched_as_exact_token_not_first_char(status):
     assert res["ok"] is False, res
 
 
-@pytest.mark.parametrize("status", ["A", "M", "T", "D", "R100", "C75", "R", "C"])
+@pytest.mark.parametrize("status", ["A", "M", "T", "D", "R100", "C75", "R", "C",
+                                    "R075", "C068", "R001"])
 def test_changes_real_git_status_tokens_accepted(status):
     """Positive control: every token git actually emits must still parse."""
     paths = "src/a.py\tsrc/b.py" if status[:1] in ("R", "C") else "src/a.py"
@@ -652,3 +653,40 @@ def test_changes_padded_or_impossible_status_rejected(status):
     paths = "src/a.py\tsrc/b.py" if status.strip()[:1] in ("R", "C") else "src/a.py"
     res = validate_pr_changes("maintainer", [f"{status}\t{paths}"])
     assert res["ok"] is False, res
+
+
+def test_status_regex_accepts_every_token_real_git_emits(tmp_path):
+    """Regression (santa round 3): the score bound was written as 1-2 digits or exactly
+    `100`, which rejected `R075` — and git ZERO-PADS the similarity score to three
+    digits. This repo's own history contains R075, so a legitimate maintainer rename
+    would have failed the enforced CI path.
+
+    Rather than hand-pick forms, drive the assertion from real `git diff --name-status`
+    output produced here.
+    """
+    import subprocess
+    from atv_bench.validate import _STATUS_RE
+    repo = tmp_path / "r"
+    repo.mkdir()
+    run = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True,
+                                    capture_output=True, text=True)
+    run("init", "-q")
+    run("config", "user.email", "a@b.c")
+    run("config", "user.name", "t")
+    # A partially-modified rename yields a fractional, zero-padded score.
+    (repo / "old.py").write_text("\n".join(f"line {i}" for i in range(40)))
+    run("add", "-A")
+    run("commit", "-qm", "base")
+    base = run("rev-parse", "HEAD").stdout.strip()
+    (repo / "old.py").unlink()
+    (repo / "new.py").write_text("\n".join(f"line {i}" for i in range(30)) + "\nextra\n")
+    run("add", "-A")
+    run("commit", "-qm", "rename")
+    out = run("diff", "-M", "--name-status", f"{base}...HEAD").stdout
+    tokens = [ln.split("\t")[0] for ln in out.splitlines() if ln.strip()]
+    assert tokens, out
+    for tok in tokens:
+        assert _STATUS_RE.match(tok), f"real git token {tok!r} rejected by _STATUS_RE"
+        if tok[:1] in ("R", "C"):
+            res = validate_pr_changes("maintainer", [f"{tok}\tsrc/old.py\tsrc/new.py"])
+            assert res["ok"] is True, (tok, res)
