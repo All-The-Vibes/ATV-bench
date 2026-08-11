@@ -544,3 +544,43 @@ def test_legacy_name_only_cli_still_accepts_own_files(tmp_path):
         app, ["validate-pr-paths", "--author", "entrant", "--paths-file", str(f)]
     )
     assert res.exit_code == 0, res.output
+
+
+# --- exact status tokens + documented casefold trade-off (santa round 3 final) ------
+
+
+@pytest.mark.parametrize("status", ["MALFORMED", "MOVE", "AX", "DROP", "Rx", "R1000"])
+def test_changes_status_matched_as_exact_token_not_first_char(status):
+    """`status[:1]` read `MALFORMED` as a plain modify, so a malformed record naming a
+    league path sailed through a fail-closed gate."""
+    res = validate_pr_changes(
+        "attacker", [f"{status}\tleague/submissions/attacker/main.py"]
+    )
+    assert res["ok"] is False, res
+
+
+@pytest.mark.parametrize("status", ["A", "M", "T", "D", "R100", "C75", "R", "C"])
+def test_changes_real_git_status_tokens_accepted(status):
+    """Positive control: every token git actually emits must still parse."""
+    paths = "src/a.py\tsrc/b.py" if status[:1] in ("R", "C") else "src/a.py"
+    res = validate_pr_changes("maintainer", [f"{status}\t{paths}"])
+    assert res["ok"] is True, res
+
+
+def test_changes_non_string_record_fails_closed():
+    """A non-string record was silently skipped by a bare `continue`."""
+    assert validate_pr_changes("maintainer", [None])["ok"] is False
+    assert validate_pr_changes("maintainer", [42])["ok"] is False
+
+
+def test_case_insensitive_league_match_is_a_deliberate_tradeoff():
+    """`LEAGUE/**` is gated even on a case-sensitive checkout. This is intentional: on a
+    case-insensitive checkout `League/matches.jsonl` IS `league/matches.jsonl`, so a
+    case-sensitive compare is a confirmed bypass (round-1 CRITICAL). The repo has only
+    one `league/` tree, and the cost of this choice is a maintainer PR needing review
+    rather than forged league history being silently admitted.
+    """
+    assert validate_pr_changes("maintainer", ["D\tLEAGUE/readme.md"])["ok"] is False
+    # ...while genuinely unrelated trees are untouched.
+    assert validate_pr_changes("maintainer", ["D\tleagues/readme.md"])["ok"] is True
+    assert validate_pr_changes("maintainer", ["D\tdocs/league.md"])["ok"] is True

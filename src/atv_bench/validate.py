@@ -67,6 +67,11 @@ _LEAGUE_PREFIX = "league/"
 # code fall through to ALLOW would mean any future/odd status silently skips the gate.
 _ALLOWED_STATUS_CODES = frozenset({"A", "M", "T"})
 _BLOCKED_STATUS_CODES = frozenset({"R", "C", "D"})
+# Statuses are matched as EXACT tokens, never by first character. `status[:1]` treats
+# `MALFORMED` as a plain modify, so `MALFORMED\tleague/submissions/x/main.py` sailed
+# through a fail-closed gate. A/M/T/D/U/X/B stand alone; only rename/copy carry a
+# similarity score (R100, C75) — and git writes nothing else.
+_STATUS_RE = re.compile(r"(?:[AMTD]|[RC][0-9]{0,3})\Z")
 
 # Escapes git emits inside a C-quoted path, per quote_c_style() in quote.c.
 _C_ESCAPES = {"a": 7, "b": 8, "f": 12, "n": 10, "r": 13, "t": 9, "v": 11,
@@ -140,6 +145,15 @@ def _normalize_status_path(path: str) -> str:
     each of which names the same tree. Leading slashes are then dropped so an absolute
     spelling is still recognized as league. Recognizing MORE paths as league/submission
     is the fail-closed direction — it can only pull a PR INTO the gate, never out of it.
+
+    Casefolding is a DELIBERATE trade-off, not an oversight. On a case-insensitive
+    checkout (macOS/Windows) `League/matches.jsonl` and `league/matches.jsonl` are one
+    file, so a case-sensitive compare is a confirmed bypass of this gate. The cost is
+    that a genuinely distinct `LEAGUE/` tree on a case-sensitive runner would also be
+    gated. No such tree exists in this repo (`league/` is the only one), and the
+    consequence of a false positive here is a maintainer PR needing review, versus a
+    false negative silently admitting forged league history. If a distinct `LEAGUE/`
+    tree is ever added, revisit this — but the correct fix then is to not create it.
     """
     if not isinstance(path, str):
         return ""
@@ -237,6 +251,7 @@ def validate_pr_changes(author: str, name_status_lines: list[str]) -> dict[str, 
             # file — satisfy the {main.py, submission.json} allowlist.
             paths = parts[1:]
         else:
+            errors.append(f"malformed change record: {raw!r}")
             continue
         # Empty fields are NOT silently dropped. Filtering them first would defeat the
         # arity check below: `D\tdocs/stale.md\t` and ('D','docs/stale.md','') would each
@@ -255,7 +270,10 @@ def validate_pr_changes(author: str, name_status_lines: list[str]) -> dict[str, 
         # Fail CLOSED on anything we do not positively recognize, BEFORE any other test.
         # Scoping the gate to R/C/D had left every other code (U unmerged, X "bug in
         # git", B broken pairing) falling through to ALLOW, where main rejected them.
-        if code not in _ALLOWED_STATUS_CODES and code not in _BLOCKED_STATUS_CODES:
+        # The token must match EXACTLY: a first-character test read `MALFORMED` as a
+        # modify and let it through.
+        if not _STATUS_RE.match(status) or (
+                code not in _ALLOWED_STATUS_CODES and code not in _BLOCKED_STATUS_CODES):
             errors.append(f"unrecognized change status {status!r} for paths {paths}")
             continue
         # Enforce exact ARITY for the status. R/C carry two paths (old, new); every other
