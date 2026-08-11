@@ -18,6 +18,7 @@ so this walks every tracked text file.
 from __future__ import annotations
 
 import pathlib
+import sys
 import subprocess
 import unicodedata
 
@@ -37,6 +38,11 @@ _EXTRA_INVISIBLE = {
 # Variation selectors: U+FE00-FE0F and the U+E0100-E01EF supplement (category Mn, so
 # category alone misses them). Documented smuggling carriers.
 _EXTRA_INVISIBLE |= set(range(0xFE00, 0xFE10)) | set(range(0xE0100, 0xE01F0))
+# TAG block U+E0000-E007F. The 95 assigned tags U+E0020-E007F are Cf and the category rule
+# already catches them, but U+E0000 and U+E0002-E001F are category Cn (UNASSIGNED) — the
+# category test misses all 31. They render as nothing today and a future Unicode revision
+# could assign them, so cover the whole block by range rather than by category.
+_EXTRA_INVISIBLE |= set(range(0xE0000, 0xE0080))
 
 # Blank-rendering separator/control categories. Zs (spaces) minus the ordinary space,
 # Zl/Zp (line/paragraph separators), and Cc (controls) minus the three whitespace
@@ -69,29 +75,33 @@ _ALLOWLIST: frozenset[int] = frozenset()
 # pins the scope against reality instead of trusting the lists to stay complete.
 _TEXT_SUFFIXES = {
     ".md", ".mdx", ".rst", ".py", ".js", ".ts", ".yml", ".yaml", ".json", ".toml",
-    ".txt", ".sh", ".cfg", ".ini", ".html", ".j2", ".cff",
+    ".txt", ".sh", ".cfg", ".ini", ".html", ".j2", ".cff", ".svg", ".lock",
 }
 _TEXT_NAMES = {
     "Dockerfile", "Makefile", "LICENSE", "NOTICE", "CODEOWNERS",
     ".gitignore", ".gitattributes", ".gitmodules", ".gitkeep",
 }
 
-# Narrow, per-file exceptions. This is the ONLY sanctioned way to permit an invisible
-# codepoint — a global allowlist is what reopened the covert channel (see
-# test_zwj_run_is_flagged). Each entry names the file, the exact codepoints, and why.
-_FILE_EXCEPTIONS: dict[str, frozenset[int]] = {
-    # A deliberate zero-width leak canary: the test asserts the fingerprint scanner does
-    # NOT emit these characters. The fixture must contain them to be a real probe.
-    "tests/test_fingerprint_leak.py": frozenset({0x200D}),
-    # U+FE0F is the emoji presentation selector: these files render a literal warning
-    # sign as U+26A0 + U+FE0F in prose headings. Not agent-instruction text.
-    "DEMO_FIX_PLAN.md": frozenset({0xFE0F}),
-    "IMPLEMENTATION_PLAN.md": frozenset({0xFE0F}),
-}
+# NO PER-FILE EXCEPTIONS EITHER.
+#
+# Round 1 replaced a global allowlist with three per-file exceptions (a U+200D leak canary
+# in tests/test_fingerprint_leak.py, U+FE0F emoji selectors in two plan docs). Every one of
+# them was unnecessary: an exception is only ever needed when a file stores an invisible
+# character *literally*, and a literal is never the only way to write one.
+#
+#   - The leak canary now uses "\\u200d" escapes. The test builds the identical string at
+#     runtime, so the probe is exactly as real -- only the bytes on disk changed.
+#   - The plan docs used U+26A0 + U+FE0F; the bare U+26A0 renders the same warning sign.
+#
+# An exception dictionary is a standing invitation to add "just one more" file, and each
+# entry is an unscanned region of a prompt-injection guard. There is no mechanism to grant
+# one, by design. See test_no_exemption_mechanism_exists.
 
-# This file necessarily contains literal invisible characters (the probe fixtures below),
-# so it excludes itself. Nothing else may.
-_SELF = pathlib.Path(__file__).resolve()
+# NO SELF-EXCLUSION. This file used to exempt itself on the grounds that its probe
+# fixtures "necessarily" contain literal invisible characters. They do not: every fixture
+# is built with chr()/escapes at runtime, so the scanner is scanned by itself like any
+# other file. A scanner that skips its own source is the one file an attacker most wants
+# to edit. See test_scanner_scans_itself.
 
 
 def _is_invisible(ch: str) -> bool:
@@ -130,7 +140,7 @@ def _tracked_text_files() -> list[pathlib.Path]:
     files = []
     for rel in _all_tracked():
         p = _REPO_ROOT / rel
-        if _is_text_candidate(p) and p.is_file() and p.resolve() != _SELF:
+        if _is_text_candidate(p) and p.is_file():
             files.append(p)
     return sorted(files)
 
@@ -161,7 +171,7 @@ def test_scan_scope_covers_tracked_text() -> None:
     """
     binary_ext = {
         ".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".zip", ".gz", ".whl",
-        ".woff", ".woff2", ".ttf", ".mp4", ".webm", ".svg", ".lock", ".pyc", ".so",
+        ".woff", ".woff2", ".ttf", ".mp4", ".webm", ".pyc", ".so",
     }
     covered = {str(p.relative_to(_REPO_ROOT)) for p in _FILES}
     missed = [
@@ -186,16 +196,14 @@ def test_file_has_no_invisible_codepoints(doc: pathlib.Path) -> None:
         # discard the very bytes under investigation.
         pytest.fail(f"{doc.relative_to(_REPO_ROOT)}: not valid UTF-8, cannot scan ({exc})")
     # Scan the raw text, not splitlines(): str.splitlines() itself consumes U+2028/U+2029/
-    # U+0085/U+000B/U+000C (verified: "a b".splitlines() == ["a", "b"]), so a
+    # U+0085/U+000B/U+000C (verified: chr(0x2028).join("ab").splitlines() == ["a", "b"]), so a
     # line-based scan could never report them. They ARE detected here (Zl/Zp/Cc), so this
     # is a real benefit, not a theoretical one. The line counter advances on every
     # separator for the same reason — counting only "\n" would drift on such a file.
-    rel = str(doc.relative_to(_REPO_ROOT))
-    permitted = _FILE_EXCEPTIONS.get(rel, frozenset())
     hits = []
     line = 1
     for ch in text:
-        if _is_invisible(ch) and ord(ch) not in permitted:
+        if _is_invisible(ch):
             name = unicodedata.name(ch, "UNNAMED")
             hits.append(f"{doc.relative_to(_REPO_ROOT)}:{line}: U+{ord(ch):04X} {name}")
         if ch == "\n" or ord(ch) in _LINE_ADVANCE:
@@ -261,3 +269,78 @@ def test_allowlist_is_empty_or_justified() -> None:
         "hole in a prompt-injection guard and needs a per-file justification, not a "
         "global exemption"
     )
+
+
+def test_scanner_scans_itself() -> None:
+    """The scanner's own file must be in scope.
+
+    It previously excluded itself via `_SELF`, which made the one file an attacker most
+    wants to edit -- the detector -- the one file the detector never read. Injected
+    instructions in this module's docstrings would have been invisible to a reviewer *and*
+    unscanned by CI. The exemption was justified by "necessarily contains literal invisible
+    characters"; it does not. Every fixture below is built with chr() or escapes.
+    """
+    assert pathlib.Path(__file__).resolve() in {p.resolve() for p in _FILES}, (
+        "the invisible-codepoint scanner excludes its own source file"
+    )
+
+
+def test_no_exemption_mechanism_exists() -> None:
+    """Neither a global allowlist nor a per-file exception table may exist.
+
+    Round 1 closed the global allowlist and reopened the same hole one file at a time via
+    `_FILE_EXCEPTIONS`. Both are now absent, and this pins that: an exemption dict is a
+    standing invitation to add "just one more" unscanned file.
+    """
+    assert _ALLOWLIST == frozenset()
+    assert not hasattr(sys.modules[__name__], "_FILE_EXCEPTIONS"), (
+        "_FILE_EXCEPTIONS is back -- per-file exemptions are the global allowlist again, "
+        "granted retail instead of wholesale"
+    )
+
+
+@pytest.mark.parametrize("suffix", [".svg", ".lock"])
+def test_previously_skipped_suffixes_are_in_scope(suffix: str) -> None:
+    """`.svg` and `.lock` were on the binary skip list; neither is binary.
+
+    An `.svg` is XML that agents read and that renders in a browser, and `uv.lock` is TOML
+    an agent parses. Both were exempt from the scan while being perfectly capable of
+    carrying an invisible payload.
+    """
+    assert _is_text_candidate(pathlib.Path(f"x{suffix}")), (
+        f"{suffix} is text an agent reads, but the scan skips it as binary"
+    )
+
+
+def test_tag_block_is_fully_covered() -> None:
+    """U+E0000 and U+E0002-E001F are category Cn, so the `Cf` rule alone misses all 31.
+
+    The assigned tags U+E0020-E007F are Cf and were already caught, which is why exposure
+    was low -- but a detector covering the canonical hidden-instruction block should not
+    depend on which codepoints Unicode happened to assign.
+    """
+    uncovered = [cp for cp in range(0xE0000, 0xE0080) if not _is_invisible(chr(cp))]
+    assert not uncovered, f"TAG block gaps: {[hex(c) for c in uncovered]}"
+    assert unicodedata.category(chr(0xE0002)) == "Cn"  # the gap is real, not theoretical
+
+
+def test_scan_would_flag_a_planted_payload(tmp_path: pathlib.Path) -> None:
+    """End-to-end: run the real read-and-scan path over files in the shapes that were exempt.
+
+    Asserting `_is_invisible` alone would not catch a scoping bug -- the detector can be
+    perfect while the walk skips the file. This drives the same path used by
+    `test_file_has_no_invisible_codepoints` over an `.svg`, a `.lock`, a file named like
+    the scanner itself, and a plan doc, each carrying a different carrier class.
+    """
+    cases = {
+        "logo.svg": f"<svg><title>ok{chr(0x200B)}</title></svg>",
+        "uv.lock": f"name = 'pkg{chr(0x2060)}'",
+        "test_proof_docs_invisible_codepoints.py": f"# note{chr(0xE0002)}",
+        "plan.md": f"warning {chr(0xFE0F)} here",
+    }
+    for name, body in cases.items():
+        path = tmp_path / name
+        path.write_text(body, encoding="utf-8")
+        assert _is_text_candidate(path), f"{name} is not even a scan candidate"
+        hits = [ch for ch in path.read_text(encoding="utf-8") if _is_invisible(ch)]
+        assert hits, f"planted payload in {name} was not flagged"

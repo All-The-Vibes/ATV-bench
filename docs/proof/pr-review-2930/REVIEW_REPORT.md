@@ -223,10 +223,24 @@ which is the outcome the adversarial setup exists to produce.
   file — the prescribed remediation could not have caught the defect sitting inside the
   document prescribing it. The lesson is not "add U+2060 to the list" but *stop curating
   a list*: `tests/test_proof_docs_invisible_codepoints.py` now classifies by Unicode
-  category — `Cf` (format) plus a small justified set of non-Cf blank-rendering
-  codepoints, minus a documented allowlist — over **every tracked text file**, not just
-  `.md`. That scope matters: this finding's own carrier lives in a `.js` file, which an
-  `.md`-only scan would never have seen.)
+  category — `Cf` (format), `Zs` (spaces), `Zl`/`Zp` (line/paragraph separators) and `Cc`
+  (controls), minus the four whitespace characters every text file legitimately contains
+  (space, tab, LF, CR), plus `_EXTRA_INVISIBLE` for blank-rendering codepoints outside
+  every one of those categories: the Hangul fillers, Braille blank, variation selectors
+  (`Mn`), and the whole TAG block `U+E0000-E007F` — 31 of whose codepoints are category
+  `Cn`, unassigned, and so are missed by any category rule.
+
+  **There is no allowlist and no per-file exception.** An earlier draft of this note
+  prescribed "minus a documented allowlist", and the implementation briefly had one; it
+  was a covert channel (ZWJ/ZWNJ encode one bit per position, so a run of them carries
+  arbitrary text — a 336-character payload passed with zero findings). The per-file
+  exception table that replaced it was the same hole granted retail instead of wholesale.
+  Both are gone: an exception is only needed when a file stores an invisible character
+  *literally*, and a literal is never the only way to write one — the three real cases
+  became `\u200d` escapes and a bare `U+26A0`. The scan covers **every tracked text
+  file**, including `.svg`, `.lock`, and the scanner's own source. That scope matters:
+  this finding's own carrier lives in a `.js` file, which an `.md`-only scan would never
+  have seen.)
 - **[MEDIUM] Identity verification fails OPEN** (`.github/workflows/league-publish.yml:129-131`,
   **pre-existing**, surfaced by the repo-wide pass). When the independent `gh api`
   PR-author lookup fails, the code warns and proceeds on the untrusted artifact-supplied

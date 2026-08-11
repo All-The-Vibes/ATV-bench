@@ -434,12 +434,12 @@ def test_redteam_unicode_zero_width_name(tmp_path):
     """Red-team 'unicode-homoglyph': U+200D chars bypassed all checks."""
     home = tmp_path / ".claude"
     (home / "skills").mkdir(parents=True)
-    canary = "sk‍-‍12345"
+    canary = "sk\u200d-\u200d12345"
     (home / "skills" / canary).mkdir()
     (home / "settings.json").write_text(json.dumps({"model": "claude-opus-4-8"}))
     result = fp.probe_claude_code(home)
     blob = json.dumps(result.manifest, ensure_ascii=False) + result.log
-    assert "‍" not in blob, "zero-width char leaked"
+    assert "\u200d" not in blob, "zero-width char leaked"
     assert canary not in blob
 
 
