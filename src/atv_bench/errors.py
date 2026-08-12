@@ -96,9 +96,6 @@ class AtvError(Exception):
         lines.append(f"Docs: {self.docs_url}")
         return "\n".join(lines)
 
-    def __str__(self) -> str:  # noqa: D401
-        return self._render()
-
 
 def render_error(err: object) -> str:
     """One shared render shape for AtvError and RunError (DX-3).

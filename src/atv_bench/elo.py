@@ -27,10 +27,6 @@ ANCHOR_IDENTITY = "byok-anchor"
 MIN_RATED_MATCHES = 10     # below this many matches: insufficient signal -> low confidence
 MAX_CI_WIDTH = 200         # wider ELO CI than this: too noisy to rank as stable
 MIN_PUBLISH_SPREAD = 100   # identical-ish players must exceed this spread to be publishable
-# backwards-compatible private aliases (used within this module)
-_MIN_MATCHES = MIN_RATED_MATCHES
-_MAX_CI_WIDTH = MAX_CI_WIDTH
-_MIN_PUBLISH_SPREAD = MIN_PUBLISH_SPREAD
 
 
 class Outcome(str, enum.Enum):
@@ -103,7 +99,7 @@ def _ci_width(match_count: int) -> float:
     single match doesn't imply infinite uncertainty in the JSON.
     """
     if match_count <= 0:
-        return float(_MAX_CI_WIDTH * 2)
+        return float(MAX_CI_WIDTH * 2)
     return round(350.0 / math.sqrt(match_count), 2)
 
 
@@ -182,8 +178,8 @@ def variance_gate(
 ) -> dict[str, Any]:
     """A/A control: is the ELO delta between two players publishable, or noise?
 
-    Numeric teeth: require >= _MIN_MATCHES between the pair, CI width under
-    _MAX_CI_WIDTH, and (for near-identical players) spread over _MIN_PUBLISH_SPREAD.
+    Numeric teeth: require >= MIN_RATED_MATCHES between the pair, CI width under
+    MAX_CI_WIDTH, and (for near-identical players) spread over MIN_PUBLISH_SPREAD.
     Identical bots split ~50/50 -> spread stays small -> not publishable.
 
     This is the pairwise A/A gate used in the variance-control workflow. The published
@@ -209,17 +205,17 @@ def variance_gate(
         "n_matches": n,
         "elo_spread": round(spread, 2),
         "ci_width": round(ci_width, 2),
-        "threshold": _MIN_PUBLISH_SPREAD,
+        "threshold": MIN_PUBLISH_SPREAD,
         "publishable": False,
         "reason": "",
     }
-    if n < _MIN_MATCHES:
+    if n < MIN_RATED_MATCHES:
         result["reason"] = "insufficient_matches"
         return result
-    if ci_width > _MAX_CI_WIDTH:
+    if ci_width > MAX_CI_WIDTH:
         result["reason"] = "ci_too_wide"
         return result
-    if spread < _MIN_PUBLISH_SPREAD:
+    if spread < MIN_PUBLISH_SPREAD:
         result["reason"] = "insufficient_signal"
         return result
     result["publishable"] = True

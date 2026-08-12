@@ -272,11 +272,6 @@ def _safe_str_field(fp: dict[str, Any], key: str, default: str = "unknown") -> s
     return value
 
 
-def _safe_harness_name(fp: dict[str, Any]) -> str:
-    """Harness is copied to a top-level row field; a secret-shaped value must not publish."""
-    return _safe_str_field(fp, "harness", "unknown")
-
-
 def build_leaderboard_doc(
     matches: list[MatchResult],
     submissions: dict[str, dict[str, Any]],
@@ -350,7 +345,7 @@ def build_leaderboard_doc(
             "forfeits": b["forfeits"],
             "ci": b["ci"],
             "identity": sub["identity"],
-            "harness_name": _safe_harness_name(fp),
+            "harness_name": _safe_str_field(fp, "harness", "unknown"),
             "fingerprint_summary": _summary_from_details(fp, details),
             "details": details,
             "bot_sha256": sub["bot_sha256"],

@@ -182,6 +182,32 @@ def _tool_entries(b: "_Builder", raw_tools: list[tuple[str, str, bool]]) -> list
     return out
 
 
+def _read_model(cfg: dict, b: "_Builder", current: str | None) -> str | None:
+    """Parse cfg["model"] under the consent boundary; note + keep `current` on reject.
+
+    Unsafe string -> REASON_NAME_UNSAFE (scrub). Wrong TYPE -> REASON_MALFORMED.
+    """
+    raw = cfg.get("model")
+    if isinstance(raw, str) and is_safe_name(raw):
+        return raw
+    if isinstance(raw, str):
+        b.note_unknown("model", reader.REASON_NAME_UNSAFE)
+    elif raw is not None:
+        b.note_unknown("model", reader.REASON_MALFORMED)
+    return current
+
+
+def _read_enabled_plugins(cfg: dict, b: "_Builder", current: dict | None) -> dict | None:
+    """Parse cfg["enabledPlugins"]; a present-but-non-dict shape flags plugins malformed
+    rather than silently emitting plugins:[]."""
+    ep = cfg.get("enabledPlugins")
+    if isinstance(ep, dict):
+        return ep
+    if ep is not None:
+        b.note_unknown("plugins", reader.REASON_MALFORMED)
+    return current
+
+
 def probe_claude_code(home: Path) -> ProbeResult:
     """Probe a claude-code config root (normally ~/.claude) → leak-safe manifest.
 
@@ -212,22 +238,8 @@ def probe_claude_code(home: Path) -> ProbeResult:
     raw_tools: list[tuple[str, str, bool]] = []
     settings = reader.read_json(home / "settings.json", home)
     if settings.ok and isinstance(settings.value, dict):
-        raw_model = settings.value.get("model")
-        if isinstance(raw_model, str) and is_safe_name(raw_model):
-            model = raw_model
-        elif isinstance(raw_model, str):
-            # a real string that fails the safety scan → scrub (consent boundary).
-            b.note_unknown("model", reader.REASON_NAME_UNSAFE)
-        elif raw_model is not None:
-            # wrong TYPE (number/bool/list/dict) → structurally malformed config field.
-            b.note_unknown("model", reader.REASON_MALFORMED)
-        ep = settings.value.get("enabledPlugins")
-        if isinstance(ep, dict):
-            enabled_plugins_raw = ep
-        elif ep is not None:
-            # present but wrong-shaped enabledPlugins (list/scalar, not a dict) → flag
-            # plugins malformed, don't silently emit plugins:[].
-            b.note_unknown("plugins", reader.REASON_MALFORMED)
+        model = _read_model(settings.value, b, model)
+        enabled_plugins_raw = _read_enabled_plugins(settings.value, b, enabled_plugins_raw)
         # --- tools from permissions (allow => enabled, deny => disabled) ---
         perms = settings.value.get("permissions")
         if isinstance(perms, dict):
@@ -394,21 +406,8 @@ def probe_copilot_cli(home: Path) -> ProbeResult:
     disabled_mcps: set[str] = set()
     settings = reader.read_json(home / "settings.json", home)
     if settings.ok and isinstance(settings.value, dict):
-        raw_model = settings.value.get("model")
-        if isinstance(raw_model, str) and is_safe_name(raw_model):
-            model = raw_model
-        elif isinstance(raw_model, str):
-            # a real string that fails the safety scan → scrub (consent boundary).
-            b.note_unknown("model", reader.REASON_NAME_UNSAFE)
-        elif raw_model is not None:
-            # wrong TYPE (number/bool/list/dict) → structurally malformed config field.
-            b.note_unknown("model", reader.REASON_MALFORMED)
-        ep = settings.value.get("enabledPlugins")
-        if isinstance(ep, dict):
-            enabled_plugins_raw = ep
-        elif ep is not None:
-            # present but wrong-shaped enabledPlugins → flag plugins malformed.
-            b.note_unknown("plugins", reader.REASON_MALFORMED)
+        model = _read_model(settings.value, b, model)
+        enabled_plugins_raw = _read_enabled_plugins(settings.value, b, enabled_plugins_raw)
         ds = settings.value.get("disabledSkills")
         if isinstance(ds, list):
             disabled_skills = {s for s in ds if isinstance(s, str)}
@@ -545,15 +544,7 @@ def probe_codex(home: Path) -> ProbeResult:
     mcp_candidates: list[str] = []
     config = reader.read_toml(home / "config.toml", home)
     if config.ok and isinstance(config.value, dict):
-        raw_model = config.value.get("model")
-        if isinstance(raw_model, str) and is_safe_name(raw_model):
-            model = raw_model
-        elif isinstance(raw_model, str):
-            # a real string that fails the safety scan → scrub (consent boundary).
-            b.note_unknown("model", reader.REASON_NAME_UNSAFE)
-        elif raw_model is not None:
-            # wrong TYPE (number/bool/list/dict) → structurally malformed config field.
-            b.note_unknown("model", reader.REASON_MALFORMED)
+        model = _read_model(config.value, b, model)
         # NB: we touch ONLY config.value["model"]. model_provider / model_providers /
         # http_headers (base_urls + api keys) are never read — allowlist by construction.
         servers = config.value.get("mcp_servers")

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from atv_bench.elo import ANCHOR_IDENTITY
 
 # Synthetic entrants: (identity, harness, model, gstack, skills, mcps, plugins, agents).
 # Deliberately fictional logins so no real person is implied on a demo board.
@@ -41,8 +40,6 @@ _ENTRANTS: list[dict[str, Any]] = [
 
 # Fixed head-to-head results, enough matches per entrant to clear the rated gate and
 # produce a spread. player_a beats player_b unless noted.
-_MATCHES: list[tuple[str, str, str]] = []
-
 
 def _round_robin() -> list[tuple[str, str, str]]:
     """Deterministic results: ada > grace > linus, with a few upsets for realism."""

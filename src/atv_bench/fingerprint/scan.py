@@ -10,6 +10,7 @@ pattern-free name) or it does not enter the manifest at all.
 """
 from __future__ import annotations
 
+from collections import Counter
 import math
 import re
 import unicodedata
@@ -51,11 +52,8 @@ _ENTROPY_MIN_LEN = 12
 def _shannon_entropy(s: str) -> float:
     if not s:
         return 0.0
-    counts: dict[str, int] = {}
-    for ch in s:
-        counts[ch] = counts.get(ch, 0) + 1
     n = len(s)
-    return -sum((c / n) * math.log2(c / n) for c in counts.values())
+    return -sum((c / n) * math.log2(c / n) for c in Counter(s).values())
 
 
 # Separator characters that break a slug into segments. A legitimate name is short
@@ -93,7 +91,7 @@ _SECRET_KEYWORDS = (
     "credential", "private-key", "privatekey", "access-key", "accesskey",
     "auth-token", "bearer", "session-key",
     # round-2: shorter credential stems (a name containing these is suspicious)
-    "passphrase", "-pass", "pass-", "_pass", "pass_", "-pwd", "pwd-", "passwd",
+    "passphrase", "-pass", "pass-", "_pass", "pass_", "-pwd", "pwd-",
 )
 
 
